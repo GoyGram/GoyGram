@@ -1,0 +1,19 @@
+# Copyleft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "goygram"
+version = "0.1.0"
+description = "Goygram: unified Telegram runtime on Python and Rust"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["aiohttp>=3.9,<4.0", "pydantic>=2.7,<3.0"]
+
+[tool.maturin]
+manifest-path = "ext_rust/Cargo.toml"
+python-source = "."
+module-name = "ext_rust._ext"
+bindings = "pyo3"
+
