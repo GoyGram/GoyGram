@@ -19,6 +19,7 @@ from goygram.types.poll import PollObj
 from goygram.logging import get_logger
 from goygram.security import bootstrap_session
 from goygram.filters import Filter
+from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
 from goygram.utils import print_methods
 
 Fn = Callable[[MsgObj], Awaitable[Any]]
@@ -483,7 +484,22 @@ class GoyGram:
         bus_max: int = 0,
     ) -> None:
         bot = BotCfg(token=bot_token, timeout=bot_timeout, base=bot_base) if bot_token is not None else None
-        mt = MtCfg(host=mt_host, port=mt_port, key=mt_key, iv=mt_iv) if mt_host is not None and mt_port is not None else None
+        log = get_logger("goygram.dc")
+        resolved_host = mt_host
+        resolved_port = mt_port
+
+        if bot is None and resolved_host is None:
+            try:
+                dc_map = get_dynamic_dc_config()
+                selected = pick_dc_endpoint(dc_map, preferred_dc=2)
+                resolved_host, resolved_port = selected.host, selected.port
+                log.info("Dynamic DC routing selected dc%s %s:%s", selected.dc_id, selected.host, selected.port)
+            except Exception as e:
+                log.error("Dynamic DC routing failed: %r", e)
+                resolved_host, resolved_port = "149.154.167.50", 443
+                log.warning("Using fallback MT endpoint %s:%s", resolved_host, resolved_port)
+
+        mt = MtCfg(host=resolved_host, port=resolved_port, key=mt_key, iv=mt_iv) if resolved_host is not None and resolved_port is not None else None
         self.core = AppCore(AppCfg(bot=bot, mt=mt, bus_max=bus_max))
 
     def on_msg(self, fn: Fn | None = None, filt: Filter | None = None):

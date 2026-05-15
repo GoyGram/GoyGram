@@ -15,6 +15,7 @@ Ultimate split-brain Telegram framework (Python + Rust core) built for productio
 - **TUI auth flow**: terminal-first authorization workflow.
 - **Proxy support**: route traffic through your required network topology.
 - **Dual transport**: Bot API + MTProto in one app runtime.
+- **Dynamic DC Routing**: MTProto nodes are fetched at startup from Telegram public config (no baked-in DC IP list).
 
 ## Installation
 ```bash
@@ -42,7 +43,7 @@ asyncio.run(app.run())
 import asyncio
 from goygram import GoyGram
 
-app = GoyGram(mt_host="149.154.167.50", mt_port=443)
+app = GoyGram()  # auto-fetches Telegram DC endpoint at startup
 
 @app.on_cmd("ping")
 async def ping(msg):
@@ -98,4 +99,4 @@ async def handler(msg):
 ```
 
 ## License
-# CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
+See [LICENSE](./LICENSE).
