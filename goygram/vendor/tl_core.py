@@ -55,7 +55,14 @@ class MTCodec:
     AUTH_SEND_CODE=0xa677244f
 
     AUTH_SIGN_IN=0x8d52a951
+    AUTH_CHECK_PASSWORD=0xd18b4d16
 
+
+
+    def auth_check_password(self, password:str)->bytes:
+        req=u32(self.AUTH_CHECK_PASSWORD)+tl_str(password)
+        init=u32(self.INIT_CONNECTION)+i32(0)+tl_str('goygram')+tl_str('0.4.1')+tl_str('linux')+tl_str('en')+tl_str('en')+req
+        return u32(self.INVOKE_WITH_LAYER)+i32(self.LAYER)+init
     def auth_sign_in(self, phone:str, phone_code_hash:str, code:str)->bytes:
         req=u32(self.AUTH_SIGN_IN)+tl_str(phone)+tl_str(phone_code_hash)+tl_str(code)
         init=u32(self.INIT_CONNECTION)+i32(0)+tl_str('goygram')+tl_str('0.4.1')+tl_str('linux')+tl_str('en')+tl_str('en')+req

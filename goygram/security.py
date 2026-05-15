@@ -225,8 +225,24 @@ async def _mt_auth_flow(app: Any, vault: Path, api_id: int | str | None = None, 
 async def bootstrap_session(app: Any | None = None, api_id: int | str | None = None, api_hash: str | None = None) -> dict[str, str] | None:
     vault = Path("vault.bin")
     if vault.exists() and vault.stat().st_size > 0:
-        log.info("Vault detected. Session bootstrap completed.")
-        return {"source": "vault"}
+        if app is None or getattr(app, "mt", None) is None:
+            log.info("Vault detected. Session bootstrap completed without MT context.")
+            return {"source": "vault"}
+        try:
+            data = json.loads(vault.read_text())
+            auth_key = data.get("auth_key")
+            if isinstance(auth_key, str) and auth_key:
+                app.mt.auth_key = auth_key.encode("utf-8")
+            dc = data.get("dc")
+            if dc is not None:
+                dc_map = get_dynamic_dc_config()
+                endpoint = pick_dc_endpoint(dc_map, preferred_dc=int(dc))
+                app.mt.host = endpoint.host
+                app.mt.port = endpoint.port
+            log.info("Vault detected. Session restored from vault into MT runtime.")
+            return {"source": "vault"}
+        except Exception as e:
+            log.warning("Vault restore failed (%r), fallback to interactive auth.", e)
     for sess in Path.cwd().glob("*.session"):
         log.info("Third-party session detected: %s", sess.name)
         _zeroize_and_remove(sess)

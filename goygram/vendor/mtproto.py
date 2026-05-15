@@ -251,6 +251,8 @@ class MTNet:
                 str(obj.get('phone_code_hash')),
                 str(obj.get('phone_code') or obj.get('code'))
             )
+        elif act in {'auth.checkPassword', 'auth_check_password'}:
+            body=self.codec.auth_check_password(str(obj.get('password') or ''))
         else:
             raise NotImplementedError(act)
         msg_id=req_msg_id if req_msg_id is not None else self.msg_ids.next()
@@ -273,10 +275,12 @@ class MTNet:
             self.wr=None; self.rd=None
 
     async def send_msg(self, chat_id:int|str, text:str, **kw:Any)->dict[str,Any]:
-        raise NotImplementedError('send_msg over MT not mapped yet')
+        payload={"chat_id": chat_id, "text": text}
+        payload.update({k:v for k,v in kw.items() if v is not None})
+        return await self.call('send_msg', **payload)
 
     async def del_msg(self, chat_id:int|str, msg_id:int)->dict[str,Any]:
-        raise NotImplementedError('del_msg over MT not mapped yet')
+        return await self.call('del_msg', chat_id=chat_id, msg_id=msg_id)
 
     async def call(self, act:str, **kw:Any)->dict[str,Any]:
         loop = asyncio.get_running_loop()
