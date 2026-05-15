@@ -103,6 +103,16 @@ fn aes_ige_dec(data: &[u8], key: &[u8], iv: &[u8]) -> PyResult<Vec<u8>> {
 }
 
 #[pyfunction]
+fn aes_ige_enc_raw(data: &[u8], key: &[u8], iv: &[u8]) -> PyResult<Vec<u8>> {
+    enc_raw(key, iv, data)
+}
+
+#[pyfunction]
+fn aes_ige_dec_raw(data: &[u8], key: &[u8], iv: &[u8]) -> PyResult<Vec<u8>> {
+    dec_raw(key, iv, data)
+}
+
+#[pyfunction]
 fn cut(py: Python<'_>, buf: &[u8]) -> PyResult<(Vec<Py<PyBytes>>, Py<PyBytes>)> {
     let mut i = 0usize;
     let mut out = Vec::new();
@@ -132,6 +142,8 @@ fn pack(data: &[u8]) -> Vec<u8> {
 fn _ext(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(aes_ige_enc, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_dec, m)?)?;
+    m.add_function(wrap_pyfunction!(aes_ige_enc_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(aes_ige_dec_raw, m)?)?;
     m.add_function(wrap_pyfunction!(cut, m)?)?;
     m.add_function(wrap_pyfunction!(pack, m)?)?;
     Ok(())
