@@ -242,8 +242,17 @@ class MTNet:
     async def send(self, obj:dict[str,Any], req_msg_id:int|None=None)->int:
         await self.ensure_auth_key()
         if rx is None: raise RuntimeError('rx (goygram.ext._ext) is not available; cannot encrypt')
-        if obj.get('act') not in {'auth.sendCode','auth_send_code'}: raise NotImplementedError(obj.get('act'))
-        body=self.codec.auth_send_code(str(obj.get('phone_number') or obj.get('phone')), int(obj['api_id']), str(obj['api_hash']))
+        act = obj.get('act')
+        if act in {'auth.sendCode', 'auth_send_code'}:
+            body=self.codec.auth_send_code(str(obj.get('phone_number') or obj.get('phone')), int(obj['api_id']), str(obj['api_hash']))
+        elif act in {'auth.signIn', 'auth_sign_in'}:
+            body=self.codec.auth_sign_in(
+                str(obj.get('phone_number') or obj.get('phone')),
+                str(obj.get('phone_code_hash')),
+                str(obj.get('phone_code') or obj.get('code'))
+            )
+        else:
+            raise NotImplementedError(act)
         msg_id=req_msg_id if req_msg_id is not None else self.msg_ids.next()
         self.seq += 1; seq_no = self.seq * 2 - 1
         m=b''
@@ -275,8 +284,8 @@ class MTNet:
         req_msg_id = self.msg_ids.next()
         self.pending[req_msg_id] = fut
         obj={'act':act}; obj.update({k:v for k,v in kw.items() if v is not None})
-        await self.send(obj, req_msg_id=req_msg_id)
         try:
+            await self.send(obj, req_msg_id=req_msg_id)
             return await asyncio.wait_for(fut, timeout=30.0)
         except asyncio.TimeoutError:
             self.pending.pop(req_msg_id, None)

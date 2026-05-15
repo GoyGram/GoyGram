@@ -53,6 +53,13 @@ class MTCodec:
     P_Q_INNER_DATA_DC=0xa9f55f95
     CLIENT_DH_INNER=0x6643b654
     AUTH_SEND_CODE=0xa677244f
+
+    AUTH_SIGN_IN=0x8d52a951
+
+    def auth_sign_in(self, phone:str, phone_code_hash:str, code:str)->bytes:
+        req=u32(self.AUTH_SIGN_IN)+tl_str(phone)+tl_str(phone_code_hash)+tl_str(code)
+        init=u32(self.INIT_CONNECTION)+i32(0)+tl_str('goygram')+tl_str('0.4.1')+tl_str('linux')+tl_str('en')+tl_str('en')+req
+        return u32(self.INVOKE_WITH_LAYER)+i32(self.LAYER)+init
     INIT_CONNECTION=0xc1cd5ea9
     INVOKE_WITH_LAYER=0xda9b0d0d
     CODE_SETTINGS=0xad253d78
