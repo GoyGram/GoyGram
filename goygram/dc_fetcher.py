@@ -24,8 +24,12 @@ def get_dynamic_dc_config(timeout: int = 6) -> dict[int, list[DcEndpoint]]:
     )
     # Use default opener with system proxy/env settings to match other network calls behavior.
     opener = build_opener(ProxyHandler())
-    with opener.open(req, timeout=timeout) as resp:
-        payload = resp.read().decode("utf-8", errors="replace")
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            payload = resp.read().decode("utf-8", errors="replace")
+    except PermissionError:
+        fallback = DcEndpoint(dc_id=2, host="149.154.167.50", port=443)
+        return {2: [fallback], 0: [fallback]}
 
     by_dc: dict[int, list[DcEndpoint]] = {}
     default_dc: int | None = None

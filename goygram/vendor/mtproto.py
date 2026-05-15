@@ -28,11 +28,71 @@ class MTNet:
         return None
 
     def pack(self, raw:bytes)->bytes: return self.transport.pack(raw)
-    def proxy_cfg(self)->ProxyCfg|None: return None
+    def proxy_cfg(self)->ProxyCfg|None:
+        raw = os.getenv("ALL_PROXY") or os.getenv("all_proxy")
+        if not raw:
+            return None
+        p = urllib.parse.urlparse(raw)
+        if p.scheme.lower() not in {"socks5", "socks5h"}:
+            return None
+        if not p.hostname or not p.port:
+            return None
+        user = urllib.parse.unquote(p.username) if p.username else None
+        pwd = urllib.parse.unquote(p.password) if p.password else None
+        return ProxyCfg(p.scheme.lower(), p.hostname, p.port, user, pwd)
+
+    async def open_via_proxy(self, px:ProxyCfg)->tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        rd, wr = await asyncio.open_connection(px.host, px.port)
+        await self.socks5_handshake(rd, wr, px, self.host, self.port)
+        return rd, wr
+
+    async def socks5_handshake(self, rd:asyncio.StreamReader, wr:asyncio.StreamWriter, px:ProxyCfg, dst_host:str, dst_port:int)->None:
+        methods = [0]
+        if px.user is not None or px.pwd is not None:
+            methods.append(2)
+        wr.write(bytes([5, len(methods), *methods])); await wr.drain()
+        rsp = await rd.readexactly(2)
+        if rsp[0] != 5 or rsp[1] == 0xFF:
+            raise ConnectionError(f"SOCKS5 auth method negotiation failed: {rsp.hex()}")
+        if rsp[1] == 2:
+            u = (px.user or "").encode()
+            pw = (px.pwd or "").encode()
+            if len(u) > 255 or len(pw) > 255:
+                raise ValueError("SOCKS5 username/password too long")
+            wr.write(bytes([1, len(u)]) + u + bytes([len(pw)]) + pw); await wr.drain()
+            ar = await rd.readexactly(2)
+            if ar[1] != 0:
+                raise ConnectionError(f"SOCKS5 auth failed: {ar.hex()}")
+        host_b = dst_host.encode("idna")
+        if len(host_b) > 255:
+            raise ValueError("SOCKS5 destination host too long")
+        req = bytes([5, 1, 0, 3, len(host_b)]) + host_b + dst_port.to_bytes(2, "big")
+        wr.write(req); await wr.drain()
+        head = await rd.readexactly(4)
+        if head[0] != 5 or head[1] != 0:
+            raise ConnectionError(f"SOCKS5 connect failed: {head.hex()}")
+        atyp = head[3]
+        if atyp == 1:
+            await rd.readexactly(4 + 2)
+        elif atyp == 3:
+            ln = await rd.readexactly(1)
+            await rd.readexactly(ln[0] + 2)
+        elif atyp == 4:
+            await rd.readexactly(16 + 2)
+        else:
+            raise ConnectionError(f"SOCKS5 reply has unknown ATYP={atyp}")
 
     async def boot(self)->None:
         if self.rd and self.wr and not self.wr.is_closing(): return
+<<<<<<< ours
         self.rd,self.wr=await asyncio.open_connection(self.host,self.port)
+=======
+        px = self.proxy_cfg()
+        if px is not None:
+            self.rd, self.wr = await self.open_via_proxy(px)
+        else:
+            self.rd,self.wr=await asyncio.open_connection(self.host,self.port)
+>>>>>>> theirs
         self.wr.write(b"\xee\xee\xee\xee"); await self.wr.drain(); self.wrote_tag=True
 
     def cut(self)->list[bytes]:
@@ -111,11 +171,88 @@ class MTNet:
         self.auth_key=pow(g_a,b,dh_prime).to_bytes(256,'big')
         self.server_salt=bytes(a^b for a,b in zip(new_nonce[:8],server_nonce[:8]))
 
-    async def send(self,obj:dict[str,Any])->None:
+    def _parse_phone_code_hash(self, result:bytes)->str|None:
+        # auth.sentCode: constructor + flags + type + phone_code_hash + ...
+        # We keep this parser intentionally small and tolerant to schema drift.
+        try:
+            r = Reader(result)
+            _cid = r.u32()
+            _flags = r.i32()
+            # Skip auth.SentCodeType object (constructor + best-effort fields).
+            st = r.u32()
+            if st in {0x9fd736, 0x3dbb5986, 0xc000bba2, 0x5353e5a7, 0xab03c6d9}:
+                # Known variants usually carry either one int or a pattern string.
+                if st in {0x3dbb5986, 0xc000bba2, 0x9fd736, 0xab03c6d9}:
+                    _ = r.i32()
+                elif st == 0x5353e5a7:
+                    _ = r.tl_bytes()
+            else:
+                # Unknown sentCodeType; continue with heuristic below.
+                pass
+            v = r.tl_bytes().decode("utf-8", errors="ignore")
+            if v:
+                return v
+        except Exception:
+            pass
+        # Heuristic fallback: locate first plausible TL-string token in payload.
+        i = 0
+        while i < len(result):
+            n0 = result[i]
+            if n0 == 254:
+                if i + 4 > len(result):
+                    break
+                ln = int.from_bytes(result[i + 1:i + 4], "little")
+                head = 4
+            else:
+                ln = n0
+                head = 1
+            j = i + head
+            if 0 < ln <= 256 and j + ln <= len(result):
+                raw = result[j:j + ln]
+                try:
+                    s = raw.decode("utf-8")
+                    if 6 <= len(s) <= 256 and all(ch.isalnum() or ch in "_-=" for ch in s):
+                        return s
+                except Exception:
+                    pass
+            i += 1
+        return None
+
+    def _handle_encrypted_packet(self, pkt:bytes)->None:
+        if not self.auth_key or rx is None:
+            return
+        if len(pkt) < 24:
+            return
+        _auth_key_id = pkt[:8]
+        msg_key = pkt[8:24]
+        enc = pkt[24:]
+        aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, False)
+        dec = bytes(rx.aes_ige_dec_raw(enc, aes_key, aes_iv))
+        r = Reader(dec)
+        _salt = r.take(8); _sid = r.take(8); _msg_id = r.i64(); _seq = r.i32(); ln = r.i32()
+        msg = r.take(ln)
+        if len(msg) < 12:
+            return
+        rm = Reader(msg)
+        cid = rm.u32()
+        if cid != 0xf35c6d01:  # rpc_result
+            return
+        req_msg_id = rm.i64()
+        result = msg[12:]
+        fut = self.pending.pop(req_msg_id, None)
+        if not fut or fut.done():
+            return
+        phone_code_hash = self._parse_phone_code_hash(result)
+        if phone_code_hash:
+            fut.set_result({"phone_code_hash": phone_code_hash})
+        else:
+            fut.set_result({"ok": True, "raw_result_hex": result.hex()})
+
+    async def send(self,obj:dict[str,Any], req_msg_id:int|None=None)->int:
         await self.ensure_auth_key()
         if obj.get('act') not in {'auth.sendCode','auth_send_code'}: raise NotImplementedError(obj.get('act'))
         body=self.codec.auth_send_code(str(obj.get('phone_number') or obj.get('phone')), int(obj['api_id']), str(obj['api_hash']))
-        msg_id=self.msg_ids.next(); seq_no=1
+        msg_id=req_msg_id if req_msg_id is not None else self.msg_ids.next(); seq_no=1
         m=b''
         m += self.server_salt + self.session_id + msg_id.to_bytes(8,'little',signed=True) + seq_no.to_bytes(4,'little',signed=True)
         m += len(body).to_bytes(4,'little',signed=True) + body
@@ -126,6 +263,7 @@ class MTNet:
         pkt=self.pack(int.from_bytes(sha1(self.auth_key).digest()[-8:],'little').to_bytes(8,'little')+msg_key+enc)
         print(f"[TX] >>> {pkt.hex()}")
         self.wr.write(pkt); await self.wr.drain()
+        return msg_id
 
 
     async def close(self)->None:
@@ -140,6 +278,7 @@ class MTNet:
         raise NotImplementedError('del_msg over MT not mapped yet')
 
     async def call(self,act:str,**kw:Any)->dict[str,Any]:
+<<<<<<< ours
         obj={'act':act}; obj.update({k:v for k,v in kw.items() if v is not None}); await self.send(obj); return {'ok':True,'act':act}
     async def spin(self)->None:
         while not self.stop_ev.is_set():
@@ -149,3 +288,16 @@ class MTNet:
                 raise ConnectionError('mt socket closed')
             print(f"[RX] <<< {raw.hex()}")
             self.buf.extend(raw)
+=======
+        loop = asyncio.get_running_loop()
+        fut:asyncio.Future[dict[str,Any]] = loop.create_future()
+        req_msg_id = self.msg_ids.next()
+        self.pending[req_msg_id] = fut
+        obj={'act':act}; obj.update({k:v for k,v in kw.items() if v is not None})
+        await self.send(obj, req_msg_id=req_msg_id)
+        return await fut
+    async def spin(self)->None:
+        while not self.stop_ev.is_set():
+            pkt = await self.read_packet()
+            self._handle_encrypted_packet(pkt)
+>>>>>>> theirs
