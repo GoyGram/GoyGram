@@ -1,3 +1,5 @@
+# GoyGram
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/sepiol026-wq/GoyGram/refs/heads/main/GoyGram.png" alt="GoyGram Logo" width="650">
 </p>
@@ -9,7 +11,7 @@
 [![Security](https://img.shields.io/badge/OpSec-Vault_Encrypted-black.svg?style=for-the-badge&logo=security)](https://github.com/sepiol026-wq/GoyGram)
 [![Docs & Wiki](https://img.shields.io/badge/Docs-Read_the_Wiki-blue.svg?style=for-the-badge&logo=readthedocs)](https://github.com/sepiol026-wq/GoyGram/wiki)
 
-# GoyGram
+## What is this?
 
 Ultimate split-brain Telegram framework (Python + Rust core) built for production-grade speed, control, and maximum OpSec.
 
