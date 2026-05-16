@@ -117,7 +117,7 @@ another = filters.text | filters.me
 async def handler(msg):
     await msg.reply("Filtered")
 ```
-
+## Wiki
 > 📚 **Looking for guides, API references, or multi-session farming?** > 
 > 👉 **[Check out the Official GoyGram Wiki!](https://github.com/sepiol026-wq/GoyGram/wiki)**
 
