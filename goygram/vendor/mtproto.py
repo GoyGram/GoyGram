@@ -575,15 +575,16 @@ class MTNet:
                     vec_cid = rm.u32()
                     if vec_cid == 0x1cb5c415:
                         upds = rm.i32()
-                        for _ in range(min(upds, 20)):
+                        log.warning('updates container: %d updates, remaining=%d bytes at pos=%d', upds, len(inner)-rm.p, rm.p)
+                        for i in range(min(upds, 30)):
                             if rm.p + 4 > len(inner):
                                 break
                             up_cid = int.from_bytes(inner[rm.p:rm.p+4], 'little')
-                            if up_cid in {0x1f2b0afd, 0x3131d92f, 0x384523f4}:
+                            log.warning('  update[%d] cid=0x%08x pos=%d', i, up_cid, rm.p)
+                            if up_cid in {0x1f2b0afd}:
                                 _consume(inner[rm.p:])
                                 break
-                            else:
-                                rm.p += 4
+                            rm.p += 4
                 except Exception:
                     pass
                 return
@@ -596,11 +597,16 @@ class MTNet:
             if cid == 0x1f2b0afd:
                 try:
                     msg_obj = inner[4:]
+                    msg_cid = int.from_bytes(msg_obj[:4], 'little') if len(msg_obj) >= 4 else 0
+                    log.warning('updateNewMessage: msg_cid=0x%08x len=%d', msg_cid, len(msg_obj))
                     parsed = self._parse_new_message(msg_obj)
                     if parsed:
+                        log.warning('PARSED: %s', parsed)
                         asyncio.ensure_future(self.bus.push("mt", parsed))
-                except Exception:
-                    pass
+                    else:
+                        log.warning('PARSE FAILED for msg_cid=0x%08x, data=%s', msg_cid, msg_obj[:128].hex())
+                except Exception as e:
+                    log.warning('updateNewMessage exception: %r', e)
                 return
             if cid == 0x3072cfa1:
                 try:
