@@ -21,7 +21,7 @@ def _html_to_entities(text:str)->tuple[str, list[tuple[int,int,int,str|None]]]:
         'pre': 6,
     }
     entities: list[tuple[int,int,int,str|None]] = []
-    stack: list[tuple[int,str,str|None]] = []  # (start_pos, tag, url)
+    stack: list[tuple[int,str,str|None]] = []
     result: list[str] = []
     pos = 0
     it = _re.finditer(r'</?([a-zA-Z][a-zA-Z0-9]*)(?:\s+[^>]*)?>', text)
@@ -54,7 +54,7 @@ def _html_to_entities(text:str)->tuple[str, list[tuple[int,int,int,str|None]]]:
         pos = written
     result.append(text[last_end:])
     cleaned = ''.join(result)
-    # apply remaining unclosed tags
+
     written = len(cleaned)
     while stack:
         start, otag, url = stack.pop()
@@ -212,7 +212,7 @@ def _parse_user_obj(b:bytes)->dict[str,Any]|None:
     if len(b) < 12:
         return None
     cid = int.from_bytes(b[:4], "little")
-    # known user constructors (Telegram layers 150+)
+
     if cid in {0x020b1422, 0x8f97c628, 0x5c0d0a2a, 0xd8576e2a, 0x7fe4ab4, 0x2e13f2c3, 0xebe8e785}:
         return _parse_user_obj_v4(b, cid)
     log.warning("Unsupported user constructor 0x%08x, raw=%s", cid, b[:64].hex())
@@ -288,6 +288,7 @@ class MTNet:
         key:bytes|None=None,
         iv:bytes|None=None,
         *,
+        proxy:str|None=None,
         app_name:str|None=None,
         app_version:str|None=None,
         device_model:str|None=None,
@@ -297,8 +298,9 @@ class MTNet:
         lang_code:str="en",
     )->None:
         self.host=host; self.port=port; self.bus=bus; self.key=key; self.iv=iv
+        self.proxy_url = proxy
         self.rd=None; self.wr=None; self.buf=bytearray(); self.stop_ev=asyncio.Event(); self.seq=0
-        self.pending:dict[int,asyncio.Future[dict[str,Any]]]={}
+        self.pending:dict[int,tuple[asyncio.Future[dict[str,Any]],dict[str,Any]]]={}
         self.transport=IntermediateTransport(); self.codec=MTCodec(
             app_name=app_name,
             app_version=app_version,
@@ -322,11 +324,14 @@ class MTNet:
     def pack(self, raw:bytes)->bytes: return self.transport.pack(raw)
 
     def proxy_cfg(self)->ProxyCfg|None:
-        raw = (
-            os.getenv("ALL_PROXY") or os.getenv("all_proxy")
-            or os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
-            or os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
-        )
+        if self.proxy_url:
+            raw = self.proxy_url
+        else:
+            raw = (
+                os.getenv("ALL_PROXY") or os.getenv("all_proxy")
+                or os.getenv("HTTPS_PROXY") or os.getenv("https_proxy")
+                or os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
+            )
         if not raw:
             return None
         p = urllib.parse.urlparse(raw)
@@ -523,7 +528,7 @@ class MTNet:
                 return None
             _flags = r.i32()
             st = r.u32()
-            # skip past sent code type object (variable size based on type cid)
+
             if st in {0x3dbb5986, 0xc000bba2, 0xab03c6d9}:
                 _ = r.i32()
             elif st == 0x5353e5a7:
@@ -636,12 +641,10 @@ class MTNet:
                     vec_cid = rm.u32()
                     if vec_cid == 0x1cb5c415:
                         upds = rm.i32()
-                        log.warning('updates container: %d updates, remaining=%d bytes at pos=%d', upds, len(inner)-rm.p, rm.p)
                         for i in range(min(upds, 30)):
                             if rm.p + 4 > len(inner):
                                 break
                             up_cid = int.from_bytes(inner[rm.p:rm.p+4], 'little')
-                            log.warning('  update[%d] cid=0x%08x pos=%d', i, up_cid, rm.p)
                             if up_cid in {0x1f2b0afd}:
                                 _consume(inner[rm.p:])
                                 break
@@ -658,17 +661,11 @@ class MTNet:
             if cid == 0x1f2b0afd:
                 try:
                     msg_obj = inner[4:]
-                    msg_cid = int.from_bytes(msg_obj[:4], 'little') if len(msg_obj) >= 4 else 0
-                    log.warning('updateNewMessage: msg_cid=0x%08x len=%d', msg_cid, len(msg_obj))
                     parsed = self._parse_new_message(msg_obj)
                     if parsed:
-                        log.warning('PARSED: %s', parsed)
                         asyncio.ensure_future(self.bus.push("mt", parsed))
-                        log.warning('PUSHED to bus')
-                    else:
-                        log.warning('PARSE FAILED for msg_cid=0x%08x, data=%s', msg_cid, msg_obj[:128].hex())
-                except Exception as e:
-                    log.warning('updateNewMessage exception: %r', e)
+                except Exception:
+                    pass
                 return
             if cid == 0x3072cfa1:
                 try:
@@ -689,7 +686,7 @@ class MTNet:
                     new_salt = int.from_bytes(rm.take(8), 'little', signed=False)
                     self.server_salt = new_salt.to_bytes(8, 'little')
                     self._init_done = False
-                    log.warning('Server salt updated to 0x%x, retrying msg %s', new_salt, bad_msg_id)
+                    log.info('Server salt updated to 0x%x, retrying msg %s', new_salt, bad_msg_id)
                     entry = self.pending.pop(bad_msg_id, None)
                     if entry is not None:
                         fut, saved_obj = entry
@@ -740,7 +737,7 @@ class MTNet:
                 except Exception:
                     pass
                 return
-            log.warning("Unhandled update cid=0x%08x", cid)
+            log.debug("Unhandled update cid=0x%08x", cid)
             return
 
         _consume(msg)
@@ -1124,7 +1121,7 @@ class MTNet:
         if len(data) < 20:
             return None
         try:
-            # only scan first 120 bytes — message text is in the message, not users/chats after
+
             search_end = min(len(data), 120)
             txt = ''
             for i in range(search_end - 2, 0, -1):
@@ -1137,7 +1134,7 @@ class MTNet:
                         decoded = candidate.decode('utf-8')
                         if not decoded.isprintable() or len(decoded) < 1:
                             continue
-                        # skip pure numbers unless they start with . / !
+
                         if decoded.isdigit():
                             continue
                         txt = decoded
@@ -1148,7 +1145,7 @@ class MTNet:
                 return None
             r = Reader(data)
             r.u32(); flags = r.i32()
-            r.i32()  # flags2 (newer constructors)
+            r.i32()
             msg_id = r.i32()
             sid = getattr(self, 'self_id', 0) or 0
             is_out = bool(flags & 2)

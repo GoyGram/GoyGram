@@ -58,6 +58,7 @@ class AppCore:
         api_hash: str | None = None,
         session_name: str = "default",
         *,
+        proxy: str | None = None,
         app_name: str | None = None,
         app_version: str | None = None,
         device_model: str | None = None,
@@ -85,6 +86,7 @@ class AppCore:
                 self.bus,
                 cfg.mt.key,
                 cfg.mt.iv,
+                proxy=proxy,
                 app_name=app_name,
                 app_version=app_version,
                 device_model=device_model,
@@ -146,7 +148,6 @@ class AppCore:
                 base = head.split("@", 1)[0].lower()
                 if base not in cmd:
                     return None
-                self.log.warning("CMD MATCH: %s -> %s", base, cmd)
                 return await fn(msg)
             self.cmd_hook.append(inner)
             return fn
@@ -531,6 +532,7 @@ class GoyGram:
         api_id: int | str | None = None,
         api_hash: str | None = None,
         session_name: str = "default",
+        proxy: str | None = None,
         app_name: str | None = None,
         app_version: str | None = None,
         device_model: str | None = None,
@@ -561,6 +563,7 @@ class GoyGram:
             api_id=api_id,
             api_hash=api_hash,
             session_name=session_name,
+            proxy=proxy,
             app_name=app_name,
             app_version=app_version,
             device_model=device_model,

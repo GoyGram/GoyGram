@@ -5,7 +5,7 @@ from typing import Any
 
 
 class MsgObj:
-    __slots__ = ("src", "raw", "app", "id", "chat_id", "from_id", "text")
+    __slots__ = ("src", "raw", "app", "id", "chat_id", "from_id", "text", "is_me")
 
     src: str
     raw: dict[str, Any]
@@ -14,6 +14,7 @@ class MsgObj:
     chat_id: int | str | None
     from_id: int | None
     text: str
+    is_me: bool
 
     def __init__(self, src: str, raw: dict[str, Any], app: Any) -> None:
         self.src = src
@@ -23,6 +24,11 @@ class MsgObj:
         self.chat_id = raw.get("chat_id")
         self.from_id = raw.get("from_id")
         self.text = str(raw.get("text", ""))
+        self.is_me = bool(raw.get("is_me", False))
+
+    @property
+    def msg_id(self) -> int | None:
+        return self.id
 
     def net(self) -> Any:
         if self.src == "bot":

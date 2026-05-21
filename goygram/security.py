@@ -90,7 +90,7 @@ def _read_vault(path: Path, session_name: str) -> dict[str, Any] | None:
     raw = path.read_bytes()
     if not raw:
         return None
-    if raw[0] == 0x7B:  # '{' — old plain JSON format
+    if raw[0] == 0x7B:
         log.info("Vault %s is in plain JSON format, will re-encrypt on next save.", path.name)
         return json.loads(raw.decode())
     try:
@@ -145,14 +145,14 @@ def _rich_menu_sync(title: str, options: list[str]) -> int:
             if ch == '\r' or ch == '\n':
                 sys.stdout.write("\n\r")
                 break
-            elif ch == '\x03': # Ctrl+C
+            elif ch == '\x03':
                 sys.stdout.write("\n\r")
                 raise KeyboardInterrupt
-            elif ch == '\x1b': # Arrow keys
+            elif ch == '\x1b':
                 next_ch = sys.stdin.read(2)
-                if next_ch == '[C' or next_ch == '[B': # Right or Down
+                if next_ch == '[C' or next_ch == '[B':
                     selected = (selected + 1) % len(options)
-                elif next_ch == '[D' or next_ch == '[A': # Left or Up
+                elif next_ch == '[D' or next_ch == '[A':
                     selected = (selected - 1) % len(options)
             
             sys.stdout.write("\r\033[K")
@@ -178,7 +178,7 @@ def _rich_password_input_sync(prompt_text: str) -> str:
             elif ch == '\x03':
                 sys.stdout.write("\n\r")
                 raise KeyboardInterrupt
-            elif ch in ('\x08', '\x7f'): # Backspace
+            elif ch in ('\x08', '\x7f'):
                 if pwd:
                     pwd.pop()
                     sys.stdout.write(f"\r\033[K\033[1m\033[36m? \033[0m{prompt_text}")
@@ -566,7 +566,7 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                         return {"source": "qr"}
             
             if _is_interactive():
-                # We do not print anything here because it will loop and clear the previous QR code
+
                 pass
             else:
                 print("Token expired. Regenerating...")
