@@ -533,6 +533,44 @@ class MTNet:
                         return
                     _consume(chunk)
                 return
+            if cid in {0x3131d92f, 0x384523f4}:
+                try:
+                    flags = rm.i32()
+                    msg_id = rm.i32()
+                    user_id = rm.i64()
+                    msg_text = rm.tl_bytes().decode("utf-8", errors="ignore")
+                    is_out = bool(flags & 2)
+                    sid = getattr(self, 'self_id', 0) or 0
+                    pkt = {
+                        "kind": "msg",
+                        "msg_id": msg_id,
+                        "chat_id": user_id if not is_out else (sid or user_id),
+                        "from_id": user_id if not is_out else (sid or user_id),
+                        "text": msg_text,
+                        "is_me": is_out or (sid != 0 and user_id == sid),
+                    }
+                    asyncio.ensure_future(self.bus.push("mt", pkt))
+                except Exception:
+                    pass
+                return
+            if cid == 0x9015e014:
+                try:
+                    _flags = rm.i32()
+                    _msg_id = rm.i32()
+                    _pts = rm.i32()
+                    _pts_count = rm.i32()
+                    _date = rm.i32()
+                    if _flags & (1 << 2):
+                        _ = rm.tl_bytes()
+                    if _flags & (1 << 9):
+                        _cnt = rm.i32()
+                        for _ in range(_cnt):
+                            _ = rm.i32() if rm.i32() else None
+                except Exception:
+                    pass
+                return
+            log.debug("Unhandled update cid=0x%08x", cid)
+            return
 
         _consume(msg)
 

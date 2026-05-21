@@ -467,6 +467,10 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                             "api_hash": api_hash,
                         }
                         _write_vault(vault, payload, session_name)
+                        uid = user.get("id", 0)
+                        if uid and uid != 0:
+                            app.self_id = uid
+                            app.mt.self_id = uid
                         if _is_interactive():
                             from rich.console import Console
                             Console().print(f"[bold green]Success! Session saved to {vault.name}[/bold green]")
@@ -550,6 +554,10 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                             "api_hash": api_hash,
                         }
                         _write_vault(vault, payload, session_name)
+                        uid = user.get("id", 0)
+                        if uid and uid != 0:
+                            app.self_id = uid
+                            app.mt.self_id = uid
                         if _is_interactive():
                             from rich.console import Console
                             Console().print(f"[bold green]Success! Session saved to {vault.name}[/bold green]")
@@ -745,6 +753,10 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
                 "api_hash": api_hash,
             }
             _write_vault(vault, payload, session_name)
+            uid = user.get("id", 0)
+            if uid and uid != 0:
+                app.self_id = uid
+                app.mt.self_id = uid
             if _is_interactive():
                 from rich.console import Console
                 Console().print(f"[bold green]Success! Session saved to {vault.name}[/bold green]")
@@ -775,6 +787,12 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                     app.mt.host = endpoint.host
                     app.mt.port = endpoint.port
             await app.mt.ensure_auth_key()
+            user_data = data.get("user", {})
+            uid = user_data.get("id", 0) if isinstance(user_data, dict) else 0
+            if uid and uid != 0:
+                app.self_id = uid
+                app.mt.self_id = uid
+                log.info("Self ID resolved: %s", uid)
             log.info("Vault %s detected. Session restored from vault into MT runtime.", vault.name)
             return {"source": "vault"}
         except Exception as e:
