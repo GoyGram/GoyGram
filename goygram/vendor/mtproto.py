@@ -608,6 +608,8 @@ class MTNet:
                 except Exception:
                     pass
                 return
+            if cid in {0xf2ebdb4e, 0x62ba04d9, 0xa8cc5c5e, 0xe5e5b5b5, 0xecb9b4a3}:
+                return
             if cid == 0xedab447b:
                 try:
                     bad_msg_id = rm.i64()
