@@ -146,6 +146,7 @@ class AppCore:
                 base = head.split("@", 1)[0].lower()
                 if base not in cmd:
                     return None
+                self.log.warning("CMD MATCH: %s -> %s", base, cmd)
                 return await fn(msg)
             self.cmd_hook.append(inner)
             return fn
