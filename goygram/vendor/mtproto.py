@@ -617,7 +617,7 @@ class MTNet:
                 except Exception:
                     pass
                 return
-            if cid in {0xf2ebdb4e, 0x62ba04d9, 0xa8cc5c5e, 0xe5e5b5b5, 0xecb9b4a3}:
+            if cid in {0xf2ebdb4e, 0x62ba04d9, 0xa8cc5c5e, 0xe5e5b5b5, 0xecb9b4a3, 0xe5bdf8de, 0xc32d5b12}:
                 return
             if cid == 0xedab447b:
                 try:
@@ -1058,40 +1058,33 @@ class MTNet:
             return None
         try:
             msg_cid = int.from_bytes(data[:4], 'little')
-            # common message constructors
-            known_msg_cids = {
-                0xd8f8a1f0, 0x22eb7f97, 0x7b9f6e7c, 0xf2ebdb4e,
-                0xa5db5cb6, 0x84a4ffe5, 0x9c84bc1a, 0x1c9e8e6f,
-                0x508e3195, 0x90a5fcf4, 0xa5a1c1f5, 0x5c18a155,
-                0xcc2c32c5, 0x73484a3c, 0xe782f6d4, 0x8f1d7b9b, 0x6a3c7b9f,
-            }
-            if msg_cid not in known_msg_cids:
+            # Try to find the text by scanning TL-encoded strings from the end
+            # TL string format: 1-byte length (< 254) + text, OR 0xFE + 3-byte LE length + text
+            txt = ''
+            for i in range(len(data) - 2, max(len(data) - 256, 0), -1):
+                n0 = data[i]
+                if n0 == 0 or n0 == 254:
+                    continue
+                if n0 < 254 and i + 1 + n0 <= len(data):
+                    candidate = data[i+1:i+1+n0]
+                    try:
+                        decoded = candidate.decode('utf-8')
+                        if decoded.isprintable() and len(decoded) >= 1:
+                            txt = decoded
+                            break
+                    except Exception:
+                        continue
+            if not txt:
                 return None
             r = Reader(data)
             r.u32(); flags = r.i32()
             msg_id = r.i32()
-            from_id = None
-            if flags & (1 << 8):
-                r.u32()  # peer cid
-                r.i64()
-            r.u32()  # peer_id cid
-            if flags & (1 << 2): r.tl_bytes()
-            if flags & (1 << 3): r.u32(); r.i64()
-            if flags & (1 << 13): r.i64()
-            if flags & (1 << 6): r.tl_bytes()
-            if flags & (1 << 7): r.tl_bytes()
-            if flags & (1 << 11): r.tl_bytes()
-            if flags & (1 << 21): r.tl_bytes()
-            if flags & (1 << 9): r.tl_bytes()
-            r.i32()  # date
-            txt = ''
-            if not (flags & (1 << 17)):
-                txt = r.tl_bytes().decode('utf-8', errors='ignore')
             sid = getattr(self, 'self_id', 0) or 0
+            is_out = bool(flags & 2)
             return {
                 'kind': 'msg', 'msg_id': msg_id,
-                'chat_id': from_id or sid, 'from_id': from_id,
-                'text': txt, 'is_me': False,
+                'chat_id': sid, 'from_id': sid if is_out else None,
+                'text': txt, 'is_me': is_out,
             }
         except Exception:
             return None
