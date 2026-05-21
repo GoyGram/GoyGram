@@ -1057,11 +1057,10 @@ class MTNet:
         if len(data) < 20:
             return None
         try:
-            msg_cid = int.from_bytes(data[:4], 'little')
-            # Try to find the text by scanning TL-encoded strings from the end
-            # TL string format: 1-byte length (< 254) + text, OR 0xFE + 3-byte LE length + text
+            # only scan first 120 bytes — message text is in the message, not users/chats after
+            search_end = min(len(data), 120)
             txt = ''
-            for i in range(len(data) - 2, max(len(data) - 256, 0), -1):
+            for i in range(search_end - 2, 0, -1):
                 n0 = data[i]
                 if n0 == 0 or n0 == 254:
                     continue
@@ -1069,9 +1068,13 @@ class MTNet:
                     candidate = data[i+1:i+1+n0]
                     try:
                         decoded = candidate.decode('utf-8')
-                        if decoded.isprintable() and len(decoded) >= 1:
-                            txt = decoded
-                            break
+                        if not decoded.isprintable() or len(decoded) < 1:
+                            continue
+                        # skip pure numbers unless they start with . / !
+                        if decoded.isdigit():
+                            continue
+                        txt = decoded
+                        break
                     except Exception:
                         continue
             if not txt:
