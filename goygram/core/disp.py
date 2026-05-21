@@ -34,6 +34,7 @@ class Disp:
             return
         kind = data.get("kind")
         if kind == "msg":
+            self.log.warning("DISP: msg received text=%r is_me=%s", data.get("text"), data.get("is_me"))
             msg = MsgObj(pkt.get("src", "sys"), data, self.app)
             for fn in list(self.app.hook):
                 try:

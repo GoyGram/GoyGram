@@ -603,6 +603,7 @@ class MTNet:
                     if parsed:
                         log.warning('PARSED: %s', parsed)
                         asyncio.ensure_future(self.bus.push("mt", parsed))
+                        log.warning('PUSHED to bus')
                     else:
                         log.warning('PARSE FAILED for msg_cid=0x%08x, data=%s', msg_cid, msg_obj[:128].hex())
                 except Exception as e:
