@@ -1081,6 +1081,7 @@ class MTNet:
                 return None
             r = Reader(data)
             r.u32(); flags = r.i32()
+            r.i32()  # flags2 (newer constructors)
             msg_id = r.i32()
             sid = getattr(self, 'self_id', 0) or 0
             is_out = bool(flags & 2)
