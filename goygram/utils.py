@@ -8,7 +8,6 @@ from goygram.filters import Filter, me, text
 
 
 def print_methods(app: Any) -> None:
-    """Print a DX-oriented overview of API entry points and filters."""
     lines: list[str] = []
     lines.append("=== GoyGram Developer Help ===")
     lines.append("• Dynamic methods:")

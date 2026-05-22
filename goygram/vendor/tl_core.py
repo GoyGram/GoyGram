@@ -33,6 +33,9 @@ class Reader:
         if n0==254: n=int.from_bytes(self.take(3),'little'); head=4
         else: n=n0; head=1
         d=self.take(n); pad=(4-((head+n)%4))%4; self.take(pad); return d
+    def tl_string(self)->str:
+        b=self.tl_bytes()
+        return b.decode('utf-8', errors='replace')
 
 @dataclass
 class IntermediateTransport:
@@ -62,7 +65,7 @@ def _default_app_version()->str:
     try:
         return "GoyGram " + pkg_version("goygram")
     except PackageNotFoundError:
-        return "GoyGram 0.5.3"
+        return "GoyGram 0.5.6"
 
 
 def _default_device_model()->str:
@@ -103,18 +106,19 @@ class MTCodec:
     MESSAGES_EDIT_MESSAGE=0xdfd14005
     MESSAGES_DELETE_MESSAGES=0xe58e95d2
     CHANNELS_DELETE_MESSAGES=0x84c1fd4e
+    MESSAGES_DELETE_HISTORY=0xb08f922a
     MESSAGES_GET_HISTORY=0x4423e6c5
     MESSAGES_GET_MESSAGES=0x63c66506
     MESSAGES_READ_HISTORY=0x0e306d3a
     MESSAGES_SEARCH=0x29ee847a
     MESSAGES_FORWARD_MESSAGES=0xd5039208
-    MESSAGES_SEND_MEDIA=0x7852834e
+    MESSAGES_SEND_MEDIA=0x330e77f
     MESSAGES_GET_ALL_CHATS=0x875f74be
     MESSAGES_SET_TYPING=0x58943ee2
     MESSAGES_GET_PINNED_MESSAGES=0x22ddd30c
     MESSAGES_UPDATE_PINNED_MESSAGE=0xd2aaf7ec
     MESSAGES_UNPIN_ALL_MESSAGES=0xee22b9a8
-    MESSAGES_SAVE_DRAFT=0x7ac3ac06
+    MESSAGES_SAVE_DRAFT=0x54ae308e
     MESSAGES_GET_ALL_DRAFTS=0x6a3f8d65
     USERS_GET_USERS=0x0d91a548
     USERS_GET_FULL_USER=0xb60f5918
@@ -127,6 +131,8 @@ class MTCodec:
     CHANNELS_EDIT_BANNED=0x96e6cd81
     CHANNELS_INVITE_TO_CHANNEL=0xc9e33d54
     CHANNELS_CREATE_CHANNEL=0x91006707
+    CHANNELS_DELETE_CHANNEL=0xc0111fe3
+    MESSAGES_DELETE_CHAT=0x5bd0ee50
     CHANNELS_EDIT_TITLE=0x566decd0
     CHANNELS_EDIT_PHOTO=0xf12e57c9
     CHANNELS_EDIT_ABOUT=0x13e27f1e
@@ -134,9 +140,49 @@ class MTCodec:
     ACCOUNT_UPDATE_STATUS=0x6628562c
     MESSAGES_GET_DIALOGS_FILTERS=0xefd48c89
     INPUT_USER=0xf21158c6
-    INPUT_USER_SELF=0x6727bce0
+    INPUT_USER_SELF=0xf7c1b13f
     MESSAGES_MARK_DIALOG_UNREAD=0xc286d98f
     MESSAGES_GET_UNREAD_MENTIONS=0xf107e790
+    MESSAGES_CHECK_CHAT_INVITE=0x3eadb1bb
+    MESSAGES_IMPORT_CHAT_INVITE=0x6c50051c
+    MESSAGES_EXPORT_CHAT_INVITE=0xa455de90
+    MESSAGES_DELETE_EXPORTED_CHAT_INVITE=0xd464a42b
+    MESSAGES_GET_WEB_PAGE=0x8d9692a3
+    MESSAGES_GET_WEB_PAGE_PREVIEW=0x570d6f6f
+    MESSAGES_GET_POLL_RESULTS=0xeda3e33b
+    MESSAGES_SEND_VOTE=0x10ea6184
+    MESSAGES_REPORT=0xfc78af9b
+    MESSAGES_REPORT_SPAM=0xcf1592db
+    MESSAGES_TOGGLE_DIALOG_PIN=0xa731e257
+    MESSAGES_GET_SCHEDULED_HISTORY=0xf5164f2b
+    MESSAGES_GET_SCHEDULED_MESSAGES=0xbdbb0464
+    MESSAGES_SEND_SCHEDULED_MESSAGES=0xbd38850a
+    MESSAGES_DELETE_SCHEDULED_MESSAGES=0x59ae2b16
+    MESSAGES_GET_REPLIES=0x22c8bb33
+    MESSAGES_GET_DISCUSSION_MESSAGE=0xa392eb16
+    MESSAGES_READ_MENTIONS=0x36e5bf4d
+    MESSAGES_GET_TOP_REACTIONS=0xbb9b056a
+    MESSAGES_GET_RECENT_REACTIONS=0x62154e5b
+    MESSAGES_CLEAR_RECENT_REACTIONS=0x9bc3acc2
+    MESSAGES_GET_AVAILABLE_REACTIONS=0x1890ef39
+    MESSAGES_GET_QUICK_REPLIES=0x5a7efa41
+    MESSAGES_GET_SAVED_DIALOGS=0xaf42244d
+    MESSAGES_GET_SAVED_HISTORY=0xe1a3ffd7
+    MESSAGES_TRANSLATE_TEXT=0x24ce6f51
+    MESSAGES_GET_SEARCH_COUNTERS=0x1b8446ad
+    MESSAGES_GET_PEER_SETTINGS=0x49fddb82
+    MESSAGES_GET_COMMON_DIALOGS=0xe40ca104
+    MESSAGES_GET_CHATS=0x49e9528f
+    MESSAGES_GET_FULL_CHAT=0xaeb00b34
+    MESSAGES_EDIT_CHAT_TITLE=0x73783ffd
+    MESSAGES_ADD_CHAT_USER=0xcbc6d107
+    MESSAGES_DELETE_CHAT_USER=0xa2185cab
+    MESSAGES_GET_MESSAGE_EDIT_DATA=0xfda68d36
+    MESSAGES_GET_PEER_DIALOGS=0xe470bcfd
+    MESSAGES_SET_BOT_COMMANDS=0x8535e63e
+    MESSAGES_GET_BOT_COMMANDS=0x34fdc939
+    MESSAGES_START_POLL=0xa4a7dd63
+
 
 
 
@@ -344,9 +390,9 @@ class MTCodec:
             elif tp == 2:
                 raw += u32(0x826f8b60) + i32(offset) + i32(length)
             elif tp == 3:
-                raw += u32(0xe04bb623) + i32(offset) + i32(length)
+                raw += u32(0x9c4e7e8b) + i32(offset) + i32(length)
             elif tp == 4:
-                raw += u32(0xbfa8f802) + i32(offset) + i32(length)
+                raw += u32(0xbf0693d4) + i32(offset) + i32(length)
             elif tp == 5:
                 raw += u32(0x28a20571) + i32(offset) + i32(length)
             elif tp == 6:
@@ -370,8 +416,23 @@ class MTCodec:
         return u32(self.MESSAGES_DELETE_MESSAGES)+i32(flags)+u32(VECTOR_ID)+i32(len(ids))+b''.join(i32(x) for x in ids)
     def channels_delete_messages(self, *, channel:bytes, ids:list[int])->bytes:
         return u32(self.CHANNELS_DELETE_MESSAGES)+channel+u32(VECTOR_ID)+i32(len(ids))+b''.join(i32(x) for x in ids)
-    def messages_set_typing(self, *, peer:bytes, action_cid:int=0x16bf744e)->bytes:
-        return u32(self.MESSAGES_SET_TYPING)+i32(0)+peer+i32(0)+u32(action_cid)
+    def messages_delete_history(self, *, peer:bytes, max_id:int=0, min_date:int=0, max_date:int=0, just_clear:bool=False, revoke:bool=False)->bytes:
+        flags = 0
+        if just_clear: flags |= 1 << 0
+        if revoke: flags |= 1 << 1
+        if min_date: flags |= 1 << 2
+        if max_date: flags |= 1 << 3
+        req = u32(self.MESSAGES_DELETE_HISTORY)+i32(flags)+peer+i32(max_id)
+        if min_date: req += i32(min_date)
+        if max_date: req += i32(max_date)
+        return req
+    def messages_set_typing(self, *, peer:bytes, action_cid:int=0x16bf744e, top_msg_id:int|None=None)->bytes:
+        flags = 0
+        req = u32(self.MESSAGES_SET_TYPING)+i32(flags)+peer
+        if top_msg_id is not None:
+            flags |= 1 << 0
+            req = u32(self.MESSAGES_SET_TYPING)+i32(flags)+peer+i32(top_msg_id)
+        return req + u32(action_cid)
     def messages_get_pinned_messages(self, *, peer:bytes)->bytes:
         return u32(self.MESSAGES_GET_PINNED_MESSAGES)+peer
     def messages_update_pinned_message(self, *, peer:bytes, msg_id:int, silent:bool=False, unpin:bool=False, pm_oneside:bool=False)->bytes:
@@ -385,11 +446,11 @@ class MTCodec:
         return u32(self.MESSAGES_UPDATE_PINNED_MESSAGE)+i32(flags)+peer+i32(msg_id)
     def messages_save_draft(self, *, peer:bytes, message:str, reply_to_msg_id:int|None=None)->bytes:
         flags = 0
-        if reply_to_msg_id is not None:
-            flags |= 1 << 4
         req = u32(self.MESSAGES_SAVE_DRAFT)+i32(flags)
         if reply_to_msg_id is not None:
-            req += u32(self.INPUT_REPLY_TO_MESSAGE)+i32(0)+i32(reply_to_msg_id)
+            flags |= 1 << 0
+            req = u32(self.MESSAGES_SAVE_DRAFT)+i32(flags)
+            req += u32(0x767d1a86)+i32(flags)+i32(reply_to_msg_id)
         req += peer+tl_str(message)
         return req
     def messages_get_all_drafts(self)->bytes:
@@ -421,6 +482,30 @@ class MTCodec:
         return u32(self.CHANNELS_JOIN_CHANNEL)+channel
     def channels_leave_channel(self, *, channel:bytes)->bytes:
         return u32(self.CHANNELS_LEAVE_CHANNEL)+channel
+    def channels_delete_channel(self, *, channel:bytes)->bytes:
+        return u32(self.CHANNELS_DELETE_CHANNEL)+channel
+    def messages_delete_chat(self, *, chat_id:int)->bytes:
+        return u32(self.MESSAGES_DELETE_CHAT)+i64(chat_id)
+    def channels_create_channel(
+        self, *, title:str, about:str='', broadcast:bool=False, megagroup:bool=False,
+        forum:bool=False, geo_point:bytes|None=None, address:str='', ttl_period:int=0
+    )->bytes:
+        flags = 0
+        if broadcast: flags |= 1 << 0
+        if megagroup: flags |= 1 << 1
+        if geo_point: flags |= 1 << 2
+        if ttl_period: flags |= 1 << 4
+        if forum: flags |= 1 << 5
+        req = u32(self.CHANNELS_CREATE_CHANNEL)+i32(flags)+tl_str(title)+tl_str(about)
+        if geo_point: req += geo_point
+        if geo_point: req += tl_str(address)
+        if ttl_period: req += i32(ttl_period)
+        return req
+    def channels_edit_banned(
+        self, *, channel:bytes, participant:bytes, banned_rights:int
+    )->bytes:
+        return u32(self.CHANNELS_EDIT_BANNED)+channel+participant+i32(banned_rights)
+
     def channels_invite_to_channel(self, *, channel:bytes, users:list[bytes])->bytes:
         vec = u32(VECTOR_ID)+i32(len(users))+b''.join(users)
         return u32(self.CHANNELS_INVITE_TO_CHANNEL)+channel+vec

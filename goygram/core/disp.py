@@ -33,6 +33,9 @@ class Disp:
         if not isinstance(data, dict):
             return
         kind = data.get("kind")
+        if kind == "err":
+            self.log.warning("Disp error event: %s", data.get("text", ""))
+            return
         if kind == "msg":
             msg = MsgObj(pkt.get("src", "sys"), data, self.app)
             for fn in list(self.app.hook):

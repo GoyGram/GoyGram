@@ -1,5 +1,4 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
-# Contains elements of Aiogram (MIT) / Pyrogram (LGPL-3.0)
 from __future__ import annotations
 
 import asyncio

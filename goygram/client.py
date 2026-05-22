@@ -97,6 +97,7 @@ class AppCore:
             )
             if api_id is not None:
                 self.mt._api_id = int(api_id)
+            self._load_vault_from_disk(session_name, api_id, api_hash)
         self.disp = Disp(self, self.bus)
         self.hook: list[Fn] = []
         self.cb_hook: list[CbFn] = []
@@ -109,6 +110,34 @@ class AppCore:
         self.api_id = api_id
         self.api_hash = api_hash
         self.session_name = session_name
+
+    def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any) -> None:
+        import logging
+        from pathlib import Path
+        from goygram.security import _read_vault, _extract_auth_blob
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+        log = logging.getLogger("goygram.dc")
+        vault = Path(f"{session_name}.vault")
+        if not vault.exists() or vault.stat().st_size == 0:
+            return
+        try:
+            data = _read_vault(vault, session_name)
+            auth_key = data.get("auth_key")
+            if auth_key and self.mt is not None:
+                self.mt.auth_key = _extract_auth_blob({"auth_key": auth_key})
+            dc = data.get("dc")
+            if dc is not None and self.mt is not None:
+                dc_map = get_dynamic_dc_config()
+                endpoint = pick_dc_endpoint(dc_map, preferred_dc=int(dc))
+                self.mt.host = endpoint.host
+                self.mt.port = endpoint.port
+            user_data = data.get("user", {})
+            uid = user_data.get("id", 0) if isinstance(user_data, dict) else 0
+            if uid and uid != 0 and self.mt is not None:
+                self.self_id = uid
+                self.mt.self_id = uid
+        except Exception:
+            pass
 
     def on_msg(self, fn: Fn | None = None, filt: Filter | None = None):
         def wrap(inner: Fn) -> Fn:
@@ -739,6 +768,19 @@ _MT_WRAP = [
     "upload_file", "download_file", "save_draft", "clear_draft", "mark_read",
     "mark_unread", "get_stats", "get_admin_logs", "create_topic", "edit_topic",
     "close_topic", "reopen_topic", "delete_topic", "get_admins", "get_owner",
+    "delete_channel", "delete_chat",
+    "get_sticker_set", "fave_sticker", "get_web_page", "get_web_page_preview",
+    "check_chat_invite", "import_chat_invite", "export_chat_invite", "delete_exported_chat_invite",
+    "get_poll_results", "send_vote", "report", "report_spam",
+    "toggle_dialog_pin", "get_scheduled_history", "get_replies",
+    "get_discussion_message", "read_mentions", "get_common_dialogs",
+    "get_chats", "get_full_chat", "edit_chat_title",
+    "get_top_reactions", "get_recent_reactions", "clear_recent_reactions",
+    "get_available_reactions", "get_quick_replies", "get_peer_settings",
+    "get_saved_dialogs", "get_saved_history", "get_message_edit_data",
+    "get_unread_mentions", "mark_dialog_unread",
+    "get_search_counters", "translate_text",
+    "send_scheduled_messages", "delete_scheduled_messages",
 ]
 
 

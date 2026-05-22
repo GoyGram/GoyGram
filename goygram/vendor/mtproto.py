@@ -1,17 +1,13 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
-# Contains elements of Aiogram (MIT) / Pyrogram (LGPL-3.0)
 from __future__ import annotations
 import asyncio, hashlib, os, secrets, struct, urllib.parse, logging
 from hashlib import sha1, sha256
 from typing import Any
+from goygram.errors import ConnectionClosedError, GoyGramError, RPCError
 
 import re as _re
 
 def _html_to_entities(text:str)->tuple[str, list[tuple[int,int,int,str|None]]]:
-    """Convert HTML tags to Telegram entities. Returns (cleaned_text, entities_list).
-    Each entity: (offset, length, type_code, url_or_None)
-    Type codes: 1=bold, 2=italic, 3=underline, 4=strikethrough, 5=code, 6=pre, 7=text_link, 8=text_mention
-    """
     tags = {
         'b': 1, 'strong': 1,
         'i': 2, 'em': 2,
@@ -68,7 +64,7 @@ def _html_to_entities(text:str)->tuple[str, list[tuple[int,int,int,str|None]]]:
 
 log = logging.getLogger("goygram.mtproto")
 
-from .tl_core import IntermediateTransport, MTCodec, MTMessage, MsgIdGen, Reader, factorize, kdf, kdf_msg, rsa_pad_encrypt
+from .tl_core import IntermediateTransport, MTCodec, MTMessage, MsgIdGen, Reader, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
 
 try:
     from goygram import ext as rx
@@ -315,6 +311,7 @@ class MTNet:
         self.qr_update_ev=asyncio.Event()
         self._init_done=False
         self._api_id:int|None=None
+        self._preferred_dc = int(str(port)[-1]) if 1 <= int(str(port)[-1]) <= 5 else 2
 
     def pick(self,obj:dict[str,Any],*keys:str)->Any:
         for k in keys:
@@ -582,10 +579,11 @@ class MTNet:
                     return
                 try:
                     parsed = self._parse_rpc_result(result)
+                    fut.set_result(parsed)
+                except GoyGramError as exc:
+                    fut.set_exception(exc)
                 except Exception as exc:
-                    import traceback; traceback.print_exc()
-                    parsed = {"ok": True, "raw_result_hex": result.hex(), "_parse_error": str(exc)}
-                fut.set_result(parsed)
+                    fut.set_exception(exc)
                 return
             if cid == 0x73f1f8dc:
                 try:
@@ -720,6 +718,23 @@ class MTNet:
                 except Exception:
                     pass
                 return
+            if cid == 0xe470cdb6:
+                try:
+                    chat_id = rm.i64()
+                    actor_id = rm.i64()
+                    date = rm.i32()
+                    rm.u32()
+                    rm.i64()
+                    rm.i64()
+                    rm.i32()
+                    rm.u32()
+                    rm.i64()
+                    rm.i64()
+                    rm.i32()
+                    asyncio.ensure_future(self.bus.push("mt", {"kind": "member", "chat_id": chat_id}))
+                except Exception:
+                    pass
+                return
             if cid == 0x62d6b459:
                 return
                 try:
@@ -851,7 +866,8 @@ class MTNet:
                 _ = r.u32()
                 ec = r.i32()
                 em = r.tl_bytes().decode("utf-8", errors="ignore")
-                return {"ok": False, "error_code": ec, "error": em, "error_message": em}
+                from goygram.errors import rpc_error
+                raise rpc_error(ec, em)
             if cid == 0x3072cfa1:
                 import gzip as _gz
                 try:
@@ -873,8 +889,48 @@ class MTNet:
         login_token = self._parse_login_token(result)
         if login_token is not None:
             return login_token
+        updates = self._parse_updates(result)
+        if updates.get("id") or updates.get("updates"):
+            return updates
         return {"ok": True, "raw_result_hex": result.hex()}
 
+    def _parse_updates(self, result:bytes)->dict[str,Any]:
+        if len(result) < 4:
+            return {"ok": True}
+        r = Reader(result)
+        cid = r.u32()
+        if cid == 0x74ae4240:
+            count = r.i32()
+            updates = []
+            msg_id = None
+            for _ in range(min(count, 50)):
+                if r.p + 4 > len(result):
+                    break
+                uc = int.from_bytes(result[r.p:r.p+4], "little")
+                if uc == 0x1f2b0afd:
+                    r.p += 4
+                    _flags = r.i32()
+                    mid = r.i32()
+                    msg_id = mid
+                    updates.append({"_": "updateNewMessage", "id": mid})
+                    break
+                elif uc == 0xed85eab5:
+                    r.p += 4
+                    flags = r.i32()
+                    cn = r.u32()
+                    r.p -= 4
+                    self._skip_peer(r)
+                    cnt = r.i32()
+                    ids = [r.i32() for _ in range(min(cnt, 20))]
+                    updates.append({"_": "updatePinnedMessages", "ids": ids})
+                else:
+                    r.p += 4
+            return {"ok": True, "updates": updates, "id": msg_id}
+        if cid == 0x9015e014:
+            _flags = r.i32()
+            mid = r.i32()
+            return {"ok": True, "id": mid, "updates": [{"_": "updateMessageID", "id": mid}]}
+        return {"ok": True}
     def _resolve_peer(self, obj:dict[str,Any])->bytes:
         chat_id = obj.get('chat_id') or obj.get('peer')
         access_hash = obj.get('access_hash', 0)
@@ -1115,6 +1171,310 @@ class MTNet:
                 date=int(obj['date']),
                 qts=int(obj.get('qts', 0)),
             )
+        if act in {'messages.acceptEncryption', 'acceptEncryption', 'accept_encryption'}:
+            return u32(0x3dbc0415)
+        if act in {'messages.acceptUrlAuth', 'acceptUrlAuth', 'accept_url_auth'}:
+            return u32(0x67a3f0de)
+        if act in {'messages.addPollAnswer', 'addPollAnswer', 'add_poll_answer'}:
+            return u32(0x19bc4b6d)
+        if act in {'messages.appendTodoList', 'appendTodoList', 'append_todo_list'}:
+            return u32(0x21a61057)
+        if act in {'messages.checkChatInvite', 'checkChatInvite', 'check_chat_invite'}:
+            return u32(0x3eadb1bb)
+        if act in {'messages.checkQuickReplyShortcut', 'checkQuickReplyShortcut', 'check_quick_reply_shortcut'}:
+            return u32(0xf1d0fbd3)
+        if act in {'messages.checkUrlAuthMatchCode', 'checkUrlAuthMatchCode', 'check_url_auth_match_code'}:
+            return u32(0xc9a47b0b)
+        if act in {'messages.clearRecentStickers', 'clearRecentStickers', 'clear_recent_stickers'}:
+            return u32(0x8999602d)
+        if act in {'messages.clickSponsoredMessage', 'clickSponsoredMessage', 'click_sponsored_message'}:
+            return u32(0x8235057e)
+        if act in {'messages.createForumTopic', 'createForumTopic', 'create_forum_topic'}:
+            return u32(0x2f98c3d5)
+        if act in {'messages.declineUrlAuth', 'declineUrlAuth', 'decline_url_auth'}:
+            return u32(0x35436bbc)
+        if act in {'messages.deleteChat', 'deleteChat', 'delete_chat'}:
+            return u32(0x5bd0ee50)
+        if act in {'messages.deleteChatUser', 'deleteChatUser', 'delete_chat_user'}:
+            return u32(0xa2185cab)
+        if act in {'messages.deleteExportedChatInvite', 'deleteExportedChatInvite', 'delete_exported_chat_invite'}:
+            return u32(0xd464a42b)
+        if act in {'messages.deleteFactCheck', 'deleteFactCheck', 'delete_fact_check'}:
+            return u32(0xd1da940c)
+        if act in {'messages.deleteParticipantReaction', 'deleteParticipantReaction', 'delete_participant_reaction'}:
+            return u32(0xe3b7f82c)
+        if act in {'messages.deleteParticipantReactions', 'deleteParticipantReactions', 'delete_participant_reactions'}:
+            return u32(0xa0b80cf8)
+        if act in {'messages.deletePollAnswer', 'deletePollAnswer', 'delete_poll_answer'}:
+            return u32(0xac8505a5)
+        if act in {'messages.deleteQuickReplyMessages', 'deleteQuickReplyMessages', 'delete_quick_reply_messages'}:
+            return u32(0xe105e910)
+        if act in {'messages.deleteQuickReplyShortcut', 'deleteQuickReplyShortcut', 'delete_quick_reply_shortcut'}:
+            return u32(0x3cc04740)
+        if act in {'messages.deleteRevokedExportedChatInvites', 'deleteRevokedExportedChatInvites', 'delete_revoked_exported_chat_invites'}:
+            return u32(0x56987bd5)
+        if act in {'messages.deleteScheduledMessages', 'deleteScheduledMessages', 'delete_scheduled_messages'}:
+            return u32(0x59ae2b16)
+        if act in {'messages.discardEncryption', 'discardEncryption', 'discard_encryption'}:
+            return u32(0xf393aea0)
+        if act in {'messages.editChatAbout', 'editChatAbout', 'edit_chat_about'}:
+            return u32(0xdef60797)
+        if act in {'messages.editChatAdmin', 'editChatAdmin', 'edit_chat_admin'}:
+            return u32(0xa85bd1c2)
+        if act in {'messages.editChatCreator', 'editChatCreator', 'edit_chat_creator'}:
+            return u32(0xf743b857)
+        if act in {'messages.editChatDefaultBannedRights', 'editChatDefaultBannedRights', 'edit_chat_default_banned_rights'}:
+            return u32(0xa5866b41)
+        if act in {'messages.editChatParticipantRank', 'editChatParticipantRank', 'edit_chat_participant_rank'}:
+            return u32(0xa00f32b0)
+        if act in {'messages.editChatPhoto', 'editChatPhoto', 'edit_chat_photo'}:
+            return u32(0x35ddd674)
+        if act in {'messages.editChatTitle', 'editChatTitle', 'edit_chat_title'}:
+            return u32(0x73783ffd)
+        if act in {'messages.editFactCheck', 'editFactCheck', 'edit_fact_check'}:
+            return u32(0x589ee75)
+        if act in {'messages.editForumTopic', 'editForumTopic', 'edit_forum_topic'}:
+            return u32(0xcecc1134)
+        if act in {'messages.editInlineBotMessage', 'editInlineBotMessage', 'edit_inline_bot_message'}:
+            return u32(0x83557dba)
+        if act in {'messages.editMessage', 'editMessage', 'edit_message'}:
+            return u32(0x51e842e1)
+        if act in {'messages.editQuickReplyShortcut', 'editQuickReplyShortcut', 'edit_quick_reply_shortcut'}:
+            return u32(0x5c003cef)
+        if act in {'messages.exportChatInvite', 'exportChatInvite', 'export_chat_invite'}:
+            return u32(0xa455de90)
+        if act in {'messages.faveSticker', 'faveSticker', 'fave_sticker'}:
+            return u32(0xb9ffc55b)
+        if act in {'messages.forwardMessages', 'forwardMessages', 'forward_messages'}:
+            return u32(0x13704a7c)
+        if act in {'messages.getAttachMenuBot', 'getAttachMenuBot', 'get_attach_menu_bot'}:
+            return u32(0x77216192)
+        if act in {'messages.getAttachMenuBots', 'getAttachMenuBots', 'get_attach_menu_bots'}:
+            return u32(0x16fcc2cb)
+        if act in {'messages.getAttachedStickers', 'getAttachedStickers', 'get_attached_stickers'}:
+            return u32(0xcc5b67cc)
+        if act in {'messages.getCustomEmojiDocuments', 'getCustomEmojiDocuments', 'get_custom_emoji_documents'}:
+            return u32(0xd9ab0f54)
+        if act in {'messages.getDialogUnreadMarks', 'getDialogUnreadMarks', 'get_dialog_unread_marks'}:
+            return u32(0x21202222)
+        if act in {'messages.getDocumentByHash', 'getDocumentByHash', 'get_document_by_hash'}:
+            return u32(0xb1f2061f)
+        if act in {'messages.getEmojiKeywords', 'getEmojiKeywords', 'get_emoji_keywords'}:
+            return u32(0x35a0e062)
+        if act in {'messages.getEmojiKeywordsDifference', 'getEmojiKeywordsDifference', 'get_emoji_keywords_difference'}:
+            return u32(0x1508b6af)
+        if act in {'messages.getEmojiKeywordsLanguages', 'getEmojiKeywordsLanguages', 'get_emoji_keywords_languages'}:
+            return u32(0x4e9963b2)
+        if act in {'messages.getEmojiURL', 'getEmojiURL', 'get_emoji_u_r_l'}:
+            return u32(0xd5b10c26)
+        if act in {'messages.getExtendedMedia', 'getExtendedMedia', 'get_extended_media'}:
+            return u32(0x84f80814)
+        if act in {'messages.getFactCheck', 'getFactCheck', 'get_fact_check'}:
+            return u32(0xb9cdc5ee)
+        if act in {'messages.getFutureChatCreatorAfterLeave', 'getFutureChatCreatorAfterLeave', 'get_future_chat_creator_after_leave'}:
+            return u32(0x3b7d0ea6)
+        if act in {'messages.getMessageReadParticipants', 'getMessageReadParticipants', 'get_message_read_participants'}:
+            return u32(0x31c1c44f)
+        if act in {'messages.getMessagesReactions', 'getMessagesReactions', 'get_messages_reactions'}:
+            return u32(0x8bba90e6)
+        if act in {'messages.getOnlines', 'getOnlines', 'get_onlines'}:
+            return u32(0x6e2be050)
+        if act in {'messages.getOutboxReadDate', 'getOutboxReadDate', 'get_outbox_read_date'}:
+            return u32(0x8c4bfe5d)
+        if act in {'messages.getPollResults', 'getPollResults', 'get_poll_results'}:
+            return u32(0xeda3e33b)
+        if act in {'messages.getSearchCounters', 'getSearchCounters', 'get_search_counters'}:
+            return u32(0x1bbcf300)
+        if act in {'messages.hideAllChatJoinRequests', 'hideAllChatJoinRequests', 'hide_all_chat_join_requests'}:
+            return u32(0xe085f4ea)
+        if act in {'messages.hideChatJoinRequest', 'hideChatJoinRequest', 'hide_chat_join_request'}:
+            return u32(0x7fe7e815)
+        if act in {'messages.hidePeerSettingsBar', 'hidePeerSettingsBar', 'hide_peer_settings_bar'}:
+            return u32(0x4facb138)
+        if act in {'messages.importChatInvite', 'importChatInvite', 'import_chat_invite'}:
+            return u32(0x6c50051c)
+        if act in {'messages.markDialogUnread', 'markDialogUnread', 'mark_dialog_unread'}:
+            return u32(0x8c5006f8)
+        if act in {'messages.migrateChat', 'migrateChat', 'migrate_chat'}:
+            return u32(0xa2875319)
+        if act in {'messages.prolongWebView', 'prolongWebView', 'prolong_web_view'}:
+            return u32(0xb0d81a83)
+        if act in {'messages.rateTranscribedAudio', 'rateTranscribedAudio', 'rate_transcribed_audio'}:
+            return u32(0x7f1d072f)
+        if act in {'messages.readDiscussion', 'readDiscussion', 'read_discussion'}:
+            return u32(0xf731a9f4)
+        if act in {'messages.readEncryptedHistory', 'readEncryptedHistory', 'read_encrypted_history'}:
+            return u32(0x7f4b690a)
+        if act in {'messages.readFeaturedStickers', 'readFeaturedStickers', 'read_featured_stickers'}:
+            return u32(0x5b118126)
+        if act in {'messages.readSavedHistory', 'readSavedHistory', 'read_saved_history'}:
+            return u32(0xba4a3b5b)
+        if act in {'messages.receivedMessages', 'receivedMessages', 'received_messages'}:
+            return u32(0x5a954c0)
+        if act in {'messages.receivedQueue', 'receivedQueue', 'received_queue'}:
+            return u32(0x55a5bb66)
+        if act in {'messages.reorderPinnedDialogs', 'reorderPinnedDialogs', 'reorder_pinned_dialogs'}:
+            return u32(0x3b1adf37)
+        if act in {'messages.reorderPinnedForumTopics', 'reorderPinnedForumTopics', 'reorder_pinned_forum_topics'}:
+            return u32(0xe7841f0)
+        if act in {'messages.reorderPinnedSavedDialogs', 'reorderPinnedSavedDialogs', 'reorder_pinned_saved_dialogs'}:
+            return u32(0x8b716587)
+        if act in {'messages.reorderQuickReplies', 'reorderQuickReplies', 'reorder_quick_replies'}:
+            return u32(0x60331907)
+        if act in {'messages.reorderStickerSets', 'reorderStickerSets', 'reorder_sticker_sets'}:
+            return u32(0x78337739)
+        if act in {'messages.report', 'report', 'report'}:
+            return u32(0xfc78af9b)
+        if act in {'messages.reportEncryptedSpam', 'reportEncryptedSpam', 'report_encrypted_spam'}:
+            return u32(0x4b0c8c0f)
+        if act in {'messages.reportMessagesDelivery', 'reportMessagesDelivery', 'report_messages_delivery'}:
+            return u32(0x5a6d7395)
+        if act in {'messages.reportMusicListen', 'reportMusicListen', 'report_music_listen'}:
+            return u32(0xddbcd819)
+        if act in {'messages.reportReaction', 'reportReaction', 'report_reaction'}:
+            return u32(0x3f64c076)
+        if act in {'messages.reportReadMetrics', 'reportReadMetrics', 'report_read_metrics'}:
+            return u32(0x4067c5e6)
+        if act in {'messages.reportSpam', 'reportSpam', 'report_spam'}:
+            return u32(0xcf1592db)
+        if act in {'messages.reportSponsoredMessage', 'reportSponsoredMessage', 'report_sponsored_message'}:
+            return u32(0x12cbf0c4)
+        if act in {'messages.requestAppWebView', 'requestAppWebView', 'request_app_web_view'}:
+            return u32(0x53618bce)
+        if act in {'messages.requestEncryption', 'requestEncryption', 'request_encryption'}:
+            return u32(0xf64daf43)
+        if act in {'messages.requestMainWebView', 'requestMainWebView', 'request_main_web_view'}:
+            return u32(0xc9e01e7b)
+        if act in {'messages.requestSimpleWebView', 'requestSimpleWebView', 'request_simple_web_view'}:
+            return u32(0x413a3e73)
+        if act in {'messages.requestUrlAuth', 'requestUrlAuth', 'request_url_auth'}:
+            return u32(0x894cc99c)
+        if act in {'messages.requestWebView', 'requestWebView', 'request_web_view'}:
+            return u32(0x269dc2c1)
+        if act in {'messages.saveDefaultSendAs', 'saveDefaultSendAs', 'save_default_send_as'}:
+            return u32(0xccfddf96)
+        if act in {'messages.saveDraft', 'saveDraft', 'save_draft'}:
+            return u32(0x54ae308e)
+        if act in {'messages.saveGif', 'saveGif', 'save_gif'}:
+            return u32(0x327a30cb)
+        if act in {'messages.saveRecentSticker', 'saveRecentSticker', 'save_recent_sticker'}:
+            return u32(0x392718f8)
+        if act in {'messages.searchCustomEmoji', 'searchCustomEmoji', 'search_custom_emoji'}:
+            return u32(0x2c11c0d7)
+        if act in {'messages.sendBotRequestedPeer', 'sendBotRequestedPeer', 'send_bot_requested_peer'}:
+            return u32(0x6c5cf2a7)
+        if act in {'messages.sendInlineBotResult', 'sendInlineBotResult', 'send_inline_bot_result'}:
+            return u32(0xc0cf7646)
+        if act in {'messages.sendMedia', 'sendMedia', 'send_media'}:
+            return u32(0x330e77f)
+        if act in {'messages.sendMessage', 'sendMessage', 'send_message'}:
+            return u32(0x545cd15a)
+        if act in {'messages.sendMultiMedia', 'sendMultiMedia', 'send_multi_media'}:
+            return u32(0x1bf89d74)
+        if act in {'messages.sendPaidReaction', 'sendPaidReaction', 'send_paid_reaction'}:
+            return u32(0x58bbcb50)
+        if act in {'messages.sendQuickReplyMessages', 'sendQuickReplyMessages', 'send_quick_reply_messages'}:
+            return u32(0x6c750de1)
+        if act in {'messages.sendReaction', 'sendReaction', 'send_reaction'}:
+            return u32(0xd30d78d4)
+        if act in {'messages.sendScheduledMessages', 'sendScheduledMessages', 'send_scheduled_messages'}:
+            return u32(0xbd38850a)
+        if act in {'messages.sendScreenshotNotification', 'sendScreenshotNotification', 'send_screenshot_notification'}:
+            return u32(0xa1405817)
+        if act in {'messages.sendVote', 'sendVote', 'send_vote'}:
+            return u32(0x10ea6184)
+        if act in {'messages.sendWebViewData', 'sendWebViewData', 'send_web_view_data'}:
+            return u32(0xdc0242c8)
+        if act in {'messages.sendWebViewResultMessage', 'sendWebViewResultMessage', 'send_web_view_result_message'}:
+            return u32(0xa4314f5)
+        if act in {'messages.setBotCallbackAnswer', 'setBotCallbackAnswer', 'set_bot_callback_answer'}:
+            return u32(0xd58f130a)
+        if act in {'messages.setBotGuestChatResult', 'setBotGuestChatResult', 'set_bot_guest_chat_result'}:
+            return u32(0xb8f106e3)
+        if act in {'messages.setBotPrecheckoutResults', 'setBotPrecheckoutResults', 'set_bot_precheckout_results'}:
+            return u32(0x9c2dd95)
+        if act in {'messages.setBotShippingResults', 'setBotShippingResults', 'set_bot_shipping_results'}:
+            return u32(0xe5f672fa)
+        if act in {'messages.setChatAvailableReactions', 'setChatAvailableReactions', 'set_chat_available_reactions'}:
+            return u32(0x864b2581)
+        if act in {'messages.setChatTheme', 'setChatTheme', 'set_chat_theme'}:
+            return u32(0x81202c9)
+        if act in {'messages.setChatWallPaper', 'setChatWallPaper', 'set_chat_wall_paper'}:
+            return u32(0x8ffacae1)
+        if act in {'messages.setDefaultHistoryTTL', 'setDefaultHistoryTTL', 'set_default_history_t_t_l'}:
+            return u32(0x9eb51445)
+        if act in {'messages.setDefaultReaction', 'setDefaultReaction', 'set_default_reaction'}:
+            return u32(0x4f47a016)
+        if act in {'messages.setEncryptedTyping', 'setEncryptedTyping', 'set_encrypted_typing'}:
+            return u32(0x791451ed)
+        if act in {'messages.setGameScore', 'setGameScore', 'set_game_score'}:
+            return u32(0x8ef8ecc0)
+        if act in {'messages.setHistoryTTL', 'setHistoryTTL', 'set_history_t_t_l'}:
+            return u32(0xb80e5fe4)
+        if act in {'messages.setInlineBotResults', 'setInlineBotResults', 'set_inline_bot_results'}:
+            return u32(0xbb12a419)
+        if act in {'messages.setInlineGameScore', 'setInlineGameScore', 'set_inline_game_score'}:
+            return u32(0x15ad9f64)
+        if act in {'messages.setTyping', 'setTyping', 'set_typing'}:
+            return u32(0x58943ee2)
+        if act in {'messages.startBot', 'startBot', 'start_bot'}:
+            return u32(0xe6df7378)
+        if act in {'messages.startHistoryImport', 'startHistoryImport', 'start_history_import'}:
+            return u32(0xb43df344)
+        if act in {'messages.summarizeText', 'summarizeText', 'summarize_text'}:
+            return u32(0xabbbd346)
+        if act in {'messages.toggleBotInAttachMenu', 'toggleBotInAttachMenu', 'toggle_bot_in_attach_menu'}:
+            return u32(0x69f59d69)
+        if act in {'messages.toggleDialogFilterTags', 'toggleDialogFilterTags', 'toggle_dialog_filter_tags'}:
+            return u32(0xfd2dda49)
+        if act in {'messages.toggleDialogPin', 'toggleDialogPin', 'toggle_dialog_pin'}:
+            return u32(0xa731e257)
+        if act in {'messages.toggleNoForwards', 'toggleNoForwards', 'toggle_no_forwards'}:
+            return u32(0xb2081a35)
+        if act in {'messages.togglePaidReactionPrivacy', 'togglePaidReactionPrivacy', 'toggle_paid_reaction_privacy'}:
+            return u32(0x435885b5)
+        if act in {'messages.togglePeerTranslations', 'togglePeerTranslations', 'toggle_peer_translations'}:
+            return u32(0xe47cb579)
+        if act in {'messages.toggleSavedDialogPin', 'toggleSavedDialogPin', 'toggle_saved_dialog_pin'}:
+            return u32(0xac81bbde)
+        if act in {'messages.toggleStickerSets', 'toggleStickerSets', 'toggle_sticker_sets'}:
+            return u32(0xb5052fea)
+        if act in {'messages.toggleSuggestedPostApproval', 'toggleSuggestedPostApproval', 'toggle_suggested_post_approval'}:
+            return u32(0x8107455c)
+        if act in {'messages.toggleTodoCompleted', 'toggleTodoCompleted', 'toggle_todo_completed'}:
+            return u32(0xd3e03124)
+        if act in {'messages.uninstallStickerSet', 'uninstallStickerSet', 'uninstall_sticker_set'}:
+            return u32(0xf96e55de)
+        if act in {'messages.updateDialogFilter', 'updateDialogFilter', 'update_dialog_filter'}:
+            return u32(0x1ad4a04a)
+        if act in {'messages.updateDialogFiltersOrder', 'updateDialogFiltersOrder', 'update_dialog_filters_order'}:
+            return u32(0xc563c1e4)
+        if act in {'messages.updatePinnedForumTopic', 'updatePinnedForumTopic', 'update_pinned_forum_topic'}:
+            return u32(0x175df251)
+        if act in {'messages.updatePinnedMessage', 'updatePinnedMessage', 'update_pinned_message'}:
+            return u32(0xd2aaf7ec)
+        if act in {'messages.updateSavedReactionTag', 'updateSavedReactionTag', 'update_saved_reaction_tag'}:
+            return u32(0x60297dec)
+        if act in {'messages.uploadEncryptedFile', 'uploadEncryptedFile', 'upload_encrypted_file'}:
+            return u32(0x5057c497)
+        if act in {'messages.uploadImportedMedia', 'uploadImportedMedia', 'upload_imported_media'}:
+            return u32(0x2a862092)
+        if act in {'messages.uploadMedia', 'uploadMedia', 'upload_media'}:
+            return u32(0x14967978)
+        if act in {'messages.viewSponsoredMessage', 'viewSponsoredMessage', 'view_sponsored_message'}:
+            return u32(0x269e3643)
+        if act in {'messages.clearAllDrafts', 'clearAllDrafts', 'clear_all_drafts'}:
+            return u32(0x7e58ee9c)
+        if act in {'messages.clearRecentReactions', 'clearRecentReactions', 'clear_recent_reactions'}:
+            return u32(0x9dfeefb4)
+        if act in {'messages.getDefaultHistoryTTL', 'getDefaultHistoryTTL', 'get_default_history_t_t_l'}:
+            return u32(0x658b7188)
+        if act in {'messages.getPaidReactionPrivacy', 'getPaidReactionPrivacy', 'get_paid_reaction_privacy'}:
+            return u32(0x472455aa)
+        if act in {'messages.getSplitRanges', 'getSplitRanges', 'get_split_ranges'}:
+            return u32(0x1cff7e08)
+        if act in {'messages.getSuggestedDialogFilters', 'getSuggestedDialogFilters', 'get_suggested_dialog_filters'}:
+            return u32(0xa29cd42c)
         raise NotImplementedError(f'MTProto method not implemented: {act}')
 
     def _parse_new_message(self, data:bytes)->dict[str,Any]|None:
@@ -1244,16 +1604,48 @@ class MTNet:
             return await self._auth_check_password_flow(str(kw.get('password') or ''), int(kw['api_id']))
         return await self._rpc_call(act, **kw)
 
-    async def spin(self)->None:
+    async def _connect(self) -> None:
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+        try:
+            dc_map = get_dynamic_dc_config()
+            selected = pick_dc_endpoint(dc_map, preferred_dc=self._preferred_dc)
+            self.host, self.port = selected.host, selected.port
+        except Exception:
+            pass
+        self._init_done = False
+        self.auth_ready.clear()
+        await self.ensure_auth_key()
+
+    async def spin(self) -> None:
         await self.auth_ready.wait()
+        backoff = 1.0
+        max_backoff = 60.0
         while not self.stop_ev.is_set():
             try:
                 pkt = await self.read_packet()
                 self._handle_encrypted_packet(pkt)
-            except ConnectionError as exc:
+                backoff = 1.0
+            except ConnectionError:
+                log.error("MTProto connection lost, reconnecting in %.1fs", backoff)
                 for entry in self.pending.values():
                     fut = entry[0] if isinstance(entry, tuple) else entry
                     if not fut.done():
-                        fut.set_exception(exc)
+                        fut.set_exception(ConnectionClosedError("MTProto connection lost"))
                 self.pending.clear()
-                raise
+                try:
+                    if self.wr:
+                        self.wr.close()
+                except Exception:
+                    pass
+                self.wr = None
+                self.rd = None
+                await asyncio.sleep(backoff)
+                if self.stop_ev.is_set():
+                    break
+                try:
+                    await self._connect()
+                    backoff = 1.0
+                except Exception as e:
+                    log.error("MTProto reconnect failed: %r", e)
+                    backoff = min(backoff * 2, max_backoff)
+                    continue
