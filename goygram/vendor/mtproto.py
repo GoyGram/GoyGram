@@ -1100,10 +1100,10 @@ class MTNet:
         self.pending[req_msg_id] = (fut, obj)
         try:
             await self.send(obj, req_msg_id=req_msg_id)
-            while req_msg_id in self.pending and not self.stop_ev.is_set():
+            while not fut.done() and not self.stop_ev.is_set():
                 pkt = await asyncio.wait_for(self.read_packet(), timeout=30.0)
                 self._handle_encrypted_packet(pkt)
-            if req_msg_id not in self.pending:
+            if fut.done():
                 return fut.result()
             raise TimeoutError(f'no response for act={act} msg_id={req_msg_id}')
         except asyncio.TimeoutError:
