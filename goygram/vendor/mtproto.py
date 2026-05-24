@@ -983,499 +983,33 @@ class MTNet:
             return user_id
         return self.codec.input_user(int(user_id), int(access_hash))
 
+    def _norm_act(self, name:str)->str:
+        if '.' in name:
+            return name
+        parts = name.split('_')
+        if len(parts) < 2:
+            return name
+        ns = parts[0]
+        rest = parts[1:]
+        return ns + '.' + rest[0] + ''.join(p[:1].upper() + p[1:] for p in rest[1:])
+
     def _build_body(self, act:str, obj:dict[str,Any])->bytes:
-        if act in {'auth.sendCode', 'auth_send_code'}:
-            return self.codec.auth_send_code(str(obj.get('phone_number') or obj.get('phone')), int(obj['api_id']), str(obj['api_hash']))
-        if act in {'auth.signIn', 'auth_sign_in'}:
-            return self.codec.auth_sign_in(
-                str(obj.get('phone_number') or obj.get('phone')),
-                str(obj.get('phone_code_hash')),
-                str(obj.get('phone_code') or obj.get('code')),
-                int(obj['api_id'])
-            )
-        if act in {'account.getPassword', 'account_get_password'}:
-            return self.codec.account_get_password(int(obj['api_id']))
-        if act in {'auth.checkPasswordSrp', 'auth_check_password_srp'}:
-            return self.codec.auth_check_password(
-                srp_id=int(obj['srp_id']),
-                A=bytes(obj['A']),
-                M1=bytes(obj['M1']),
-                api_id=int(obj['api_id'])
-            )
-        if act in {'auth.exportLoginToken', 'auth_export_login_token'}:
-            return self.codec.auth_export_login_token(int(obj['api_id']), str(obj['api_hash']), obj.get('except_ids', []))
-        if act in {'auth.importLoginToken', 'auth_import_login_token'}:
-            return self.codec.auth_import_login_token(bytes(obj['token']), int(obj['api_id']))
-        if act in {'auth.logOut', 'auth_log_out'}:
-            return self.codec.auth_log_out()
-        if act in {'messages.getDialogs', 'get_dialogs'}:
-            return self.codec.messages_get_dialogs(
-                limit=int(obj.get('limit', 100)),
-                exclude_pinned=bool(obj.get('exclude_pinned', False)),
-                folder_id=obj.get('folder_id'),
-                offset_date=int(obj.get('offset_date', 0)),
-                offset_id=int(obj.get('offset_id', 0)),
-                offset_peer=obj.get('offset_peer'),
-                hash=int(obj.get('hash', 0)),
-            )
-        if act in {'messages.getHistory', 'get_history'}:
-            peer = obj.get('peer') or self._resolve_peer(obj)
-            return self.codec.messages_get_history(
-                peer=peer if isinstance(peer, bytes) else self._resolve_peer(obj),
-                offset_id=int(obj.get('offset_id', 0)),
-                offset_date=int(obj.get('offset_date', 0)),
-                add_offset=int(obj.get('add_offset', 0)),
-                limit=int(obj.get('limit', 100)),
-                max_id=int(obj.get('max_id', 0)),
-                min_id=int(obj.get('min_id', 0)),
-                hash=int(obj.get('hash', 0)),
-            )
-        if act in {'messages.getMessages', 'get_messages'}:
-            ids = obj.get('ids') or obj.get('id') or []
-            if isinstance(ids, int):
-                ids = [ids]
-            return self.codec.messages_get_messages(ids=ids)
-        if act in {'messages.readHistory', 'read_history', 'mark_read'}:
-            return self.codec.messages_read_history(
-                peer=self._resolve_peer(obj),
-                max_id=int(obj.get('max_id', 0)),
-            )
-        if act in {'messages.search', 'search_messages'}:
-            return self.codec.messages_search(
-                peer=self._resolve_peer(obj),
-                q=str(obj.get('q', '')),
-                limit=int(obj.get('limit', 100)),
-                offset_id=int(obj.get('offset_id', 0)),
-            )
-        if act in {'messages.forwardMessages', 'forward_messages'}:
-            return self.codec.messages_forward_messages(
-                from_peer=self._resolve_peer({**obj, 'chat_id': obj.get('from_chat_id') or obj.get('from_peer')}),
-                to_peer=self._resolve_peer(obj),
-                ids=list(obj.get('ids') or obj.get('id') or []),
-                random_ids=[secrets.randbits(63) for _ in range(len(obj.get('ids') or obj.get('id') or []))],
-                silent=bool(obj.get('silent', False)),
-                drop_author=bool(obj.get('drop_author', False)),
-            )
-        if act in {'messages.sendMessage', 'send_msg'}:
-            peer = self._resolve_peer(obj)
-            reply_to = None
-            if obj.get('reply_to'):
-                reply_to = self.codec.input_reply_to_message(int(obj['reply_to']))
-            text = str(obj.get('text') or obj.get('message') or '')
-            entities = None
-            if obj.get('parse_mode') == 'HTML':
-                text, entities = _html_to_entities(text)
-            return self.codec.messages_send_message(
-                peer=peer,
-                message=text,
-                random_id=secrets.randbits(63),
-                reply_to=reply_to,
-                no_webpage=bool(obj.get('no_webpage', False)),
-                entities=entities,
-            )
-        if act in {'messages.editMessage', 'edit_msg'}:
-            return self.codec.messages_edit_message(
-                peer=self._resolve_peer(obj),
-                msg_id=int(obj.get('msg_id') or obj.get('message_id', 0)),
-                message=str(obj.get('text') or obj.get('message') or ''),
-                no_webpage=bool(obj.get('no_webpage', False)),
-            )
-        if act in {'messages.deleteMessages', 'del_msg', 'delete_messages'}:
-            ids = obj.get('ids') or obj.get('id')
-            if isinstance(ids, int):
-                ids = [ids]
-            if obj.get('msg_id'):
-                ids = [int(obj['msg_id'])]
-            return self.codec.messages_delete_messages(ids=ids or [], revoke=bool(obj.get('revoke', True)))
-        if act in {'channels.deleteMessages', 'channels_delete_messages'}:
-            ids = obj.get('ids') or obj.get('id')
-            if isinstance(ids, int):
-                ids = [ids]
-            return self.codec.channels_delete_messages(
-                channel=self._resolve_channel(obj),
-                ids=ids or [],
-            )
-        if act in {'messages.setTyping', 'send_typing'}:
-            return self.codec.messages_set_typing(peer=self._resolve_peer(obj))
-        if act in {'messages.getPinnedMessages', 'get_pinned_message', 'get_pinned_messages'}:
-            return self.codec.messages_get_pinned_messages(peer=self._resolve_peer(obj))
-        if act in {'messages.updatePinnedMessage', 'pin_message'}:
-            return self.codec.messages_update_pinned_message(
-                peer=self._resolve_peer(obj),
-                msg_id=int(obj.get('msg_id') or obj.get('message_id', 0)),
-                silent=bool(obj.get('silent', False)),
-                unpin=bool(obj.get('unpin', False)),
-            )
-        if act in {'messages.unpinAllMessages', 'unpin_message', 'unpin_all'}:
-            return self.codec.messages_update_pinned_message(
-                peer=self._resolve_peer(obj),
-                msg_id=int(obj.get('msg_id', 0)),
-                unpin=True,
-            )
-        if act in {'messages.saveDraft', 'save_draft'}:
-            return self.codec.messages_save_draft(
-                peer=self._resolve_peer(obj),
-                message=str(obj.get('message') or obj.get('text') or ''),
-                reply_to_msg_id=obj.get('reply_to_msg_id'),
-            )
-        if act in {'messages.getAllDrafts', 'clear_draft', 'get_all_drafts'}:
-            return self.codec.messages_get_all_drafts()
-        if act in {'messages.getAllChats', 'get_all_chats'}:
-            return self.codec.messages_get_all_chats(except_ids=obj.get('except_ids'))
-        if act in {'users.getUsers', 'get_users'}:
-            ids = obj.get('ids') or []
-            if not ids:
-                ids = [self.codec.input_user_self()]
-            elif isinstance(ids[0], int):
-                ids = [self.codec.input_user(uid, obj.get('access_hash', 0)) for uid in ids]
-            return self.codec.users_get_users(ids=ids)
-        if act in {'users.getFullUser', 'get_full_user', 'get_me'}:
-            if act == 'get_me':
-                user_id = self.codec.input_user_self()
+        import json
+        from goygram import ext as _ext
+        if _ext is None:
+            raise RuntimeError('rx (goygram.ext._ext) is not available')
+        data = {}
+        for k, v in obj.items():
+            if k == 'act' or v is None:
+                continue
+            if isinstance(v, (bytes, bytearray)):
+                data[k] = v.hex()
+            elif isinstance(v, memoryview):
+                data[k] = bytes(v).hex()
             else:
-                user_id = self._resolve_user(obj)
-            return self.codec.users_get_full_user(user_id=user_id)
-        if act in {'contacts.resolveUsername', 'resolve_peer', 'resolve_username'}:
-            username = str(obj.get('username') or obj.get('peer') or '')
-            if username.startswith('@'):
-                username = username[1:]
-            return self.codec.contacts_resolve_username(username=username)
-        if act in {'channels.getFullChannel', 'get_full_channel'}:
-            return self.codec.channels_get_full_channel(channel=self._resolve_channel(obj))
-        if act in {'channels.getParticipants', 'get_participants'}:
-            return self.codec.channels_get_participants(
-                channel=self._resolve_channel(obj),
-                offset=int(obj.get('offset', 0)),
-                limit=int(obj.get('limit', 200)),
-            )
-        if act in {'channels.joinChannel', 'join_channel'}:
-            return self.codec.channels_join_channel(channel=self._resolve_channel(obj))
-        if act in {'channels.leaveChannel', 'leave_channel'}:
-            return self.codec.channels_leave_channel(channel=self._resolve_channel(obj))
-        if act in {'channels.inviteToChannel', 'invite_to_channel'}:
-            users = obj.get('users') or []
-            if isinstance(users[0], int) if users else False:
-                users = [self.codec.input_user(uid, 0) for uid in users]
-            return self.codec.channels_invite_to_channel(channel=self._resolve_channel(obj), users=users)
-        if act in {'channels.editTitle', 'edit_title'}:
-            return self.codec.channels_edit_title(channel=self._resolve_channel(obj), title=str(obj.get('title', '')))
-        if act in {'channels.editAbout', 'edit_about'}:
-            return self.codec.channels_edit_about(channel=self._resolve_channel(obj), about=str(obj.get('about', '')))
-        if act in {'account.updateStatus', 'update_status'}:
-            return self.codec.account_update_status(offline=bool(obj.get('offline', False)))
-        if act in {'updates.getState', 'get_state'}:
-            return self.codec.updates_get_state()
-        if act in {'updates.getDifference', 'get_difference'}:
-            return self.codec.updates_get_difference(
-                pts=int(obj['pts']),
-                date=int(obj['date']),
-                qts=int(obj.get('qts', 0)),
-            )
-        if act in {'messages.acceptEncryption', 'acceptEncryption', 'accept_encryption'}:
-            return u32(0x3dbc0415)
-        if act in {'messages.acceptUrlAuth', 'acceptUrlAuth', 'accept_url_auth'}:
-            return u32(0x67a3f0de)
-        if act in {'messages.addPollAnswer', 'addPollAnswer', 'add_poll_answer'}:
-            return u32(0x19bc4b6d)
-        if act in {'messages.appendTodoList', 'appendTodoList', 'append_todo_list'}:
-            return u32(0x21a61057)
-        if act in {'messages.checkChatInvite', 'checkChatInvite', 'check_chat_invite'}:
-            return u32(0x3eadb1bb)
-        if act in {'messages.checkQuickReplyShortcut', 'checkQuickReplyShortcut', 'check_quick_reply_shortcut'}:
-            return u32(0xf1d0fbd3)
-        if act in {'messages.checkUrlAuthMatchCode', 'checkUrlAuthMatchCode', 'check_url_auth_match_code'}:
-            return u32(0xc9a47b0b)
-        if act in {'messages.clearRecentStickers', 'clearRecentStickers', 'clear_recent_stickers'}:
-            return u32(0x8999602d)
-        if act in {'messages.clickSponsoredMessage', 'clickSponsoredMessage', 'click_sponsored_message'}:
-            return u32(0x8235057e)
-        if act in {'messages.createForumTopic', 'createForumTopic', 'create_forum_topic'}:
-            return u32(0x2f98c3d5)
-        if act in {'messages.declineUrlAuth', 'declineUrlAuth', 'decline_url_auth'}:
-            return u32(0x35436bbc)
-        if act in {'messages.deleteChat', 'deleteChat', 'delete_chat'}:
-            return u32(0x5bd0ee50)
-        if act in {'messages.deleteChatUser', 'deleteChatUser', 'delete_chat_user'}:
-            return u32(0xa2185cab)
-        if act in {'messages.deleteExportedChatInvite', 'deleteExportedChatInvite', 'delete_exported_chat_invite'}:
-            return u32(0xd464a42b)
-        if act in {'messages.deleteFactCheck', 'deleteFactCheck', 'delete_fact_check'}:
-            return u32(0xd1da940c)
-        if act in {'messages.deleteParticipantReaction', 'deleteParticipantReaction', 'delete_participant_reaction'}:
-            return u32(0xe3b7f82c)
-        if act in {'messages.deleteParticipantReactions', 'deleteParticipantReactions', 'delete_participant_reactions'}:
-            return u32(0xa0b80cf8)
-        if act in {'messages.deletePollAnswer', 'deletePollAnswer', 'delete_poll_answer'}:
-            return u32(0xac8505a5)
-        if act in {'messages.deleteQuickReplyMessages', 'deleteQuickReplyMessages', 'delete_quick_reply_messages'}:
-            return u32(0xe105e910)
-        if act in {'messages.deleteQuickReplyShortcut', 'deleteQuickReplyShortcut', 'delete_quick_reply_shortcut'}:
-            return u32(0x3cc04740)
-        if act in {'messages.deleteRevokedExportedChatInvites', 'deleteRevokedExportedChatInvites', 'delete_revoked_exported_chat_invites'}:
-            return u32(0x56987bd5)
-        if act in {'messages.deleteScheduledMessages', 'deleteScheduledMessages', 'delete_scheduled_messages'}:
-            return u32(0x59ae2b16)
-        if act in {'messages.discardEncryption', 'discardEncryption', 'discard_encryption'}:
-            return u32(0xf393aea0)
-        if act in {'messages.editChatAbout', 'editChatAbout', 'edit_chat_about'}:
-            return u32(0xdef60797)
-        if act in {'messages.editChatAdmin', 'editChatAdmin', 'edit_chat_admin'}:
-            return u32(0xa85bd1c2)
-        if act in {'messages.editChatCreator', 'editChatCreator', 'edit_chat_creator'}:
-            return u32(0xf743b857)
-        if act in {'messages.editChatDefaultBannedRights', 'editChatDefaultBannedRights', 'edit_chat_default_banned_rights'}:
-            return u32(0xa5866b41)
-        if act in {'messages.editChatParticipantRank', 'editChatParticipantRank', 'edit_chat_participant_rank'}:
-            return u32(0xa00f32b0)
-        if act in {'messages.editChatPhoto', 'editChatPhoto', 'edit_chat_photo'}:
-            return u32(0x35ddd674)
-        if act in {'messages.editChatTitle', 'editChatTitle', 'edit_chat_title'}:
-            return u32(0x73783ffd)
-        if act in {'messages.editFactCheck', 'editFactCheck', 'edit_fact_check'}:
-            return u32(0x589ee75)
-        if act in {'messages.editForumTopic', 'editForumTopic', 'edit_forum_topic'}:
-            return u32(0xcecc1134)
-        if act in {'messages.editInlineBotMessage', 'editInlineBotMessage', 'edit_inline_bot_message'}:
-            return u32(0x83557dba)
-        if act in {'messages.editMessage', 'editMessage', 'edit_message'}:
-            return u32(0x51e842e1)
-        if act in {'messages.editQuickReplyShortcut', 'editQuickReplyShortcut', 'edit_quick_reply_shortcut'}:
-            return u32(0x5c003cef)
-        if act in {'messages.exportChatInvite', 'exportChatInvite', 'export_chat_invite'}:
-            return u32(0xa455de90)
-        if act in {'messages.faveSticker', 'faveSticker', 'fave_sticker'}:
-            return u32(0xb9ffc55b)
-        if act in {'messages.forwardMessages', 'forwardMessages', 'forward_messages'}:
-            return u32(0x13704a7c)
-        if act in {'messages.getAttachMenuBot', 'getAttachMenuBot', 'get_attach_menu_bot'}:
-            return u32(0x77216192)
-        if act in {'messages.getAttachMenuBots', 'getAttachMenuBots', 'get_attach_menu_bots'}:
-            return u32(0x16fcc2cb)
-        if act in {'messages.getAttachedStickers', 'getAttachedStickers', 'get_attached_stickers'}:
-            return u32(0xcc5b67cc)
-        if act in {'messages.getCustomEmojiDocuments', 'getCustomEmojiDocuments', 'get_custom_emoji_documents'}:
-            return u32(0xd9ab0f54)
-        if act in {'messages.getDialogUnreadMarks', 'getDialogUnreadMarks', 'get_dialog_unread_marks'}:
-            return u32(0x21202222)
-        if act in {'messages.getDocumentByHash', 'getDocumentByHash', 'get_document_by_hash'}:
-            return u32(0xb1f2061f)
-        if act in {'messages.getEmojiKeywords', 'getEmojiKeywords', 'get_emoji_keywords'}:
-            return u32(0x35a0e062)
-        if act in {'messages.getEmojiKeywordsDifference', 'getEmojiKeywordsDifference', 'get_emoji_keywords_difference'}:
-            return u32(0x1508b6af)
-        if act in {'messages.getEmojiKeywordsLanguages', 'getEmojiKeywordsLanguages', 'get_emoji_keywords_languages'}:
-            return u32(0x4e9963b2)
-        if act in {'messages.getEmojiURL', 'getEmojiURL', 'get_emoji_u_r_l'}:
-            return u32(0xd5b10c26)
-        if act in {'messages.getExtendedMedia', 'getExtendedMedia', 'get_extended_media'}:
-            return u32(0x84f80814)
-        if act in {'messages.getFactCheck', 'getFactCheck', 'get_fact_check'}:
-            return u32(0xb9cdc5ee)
-        if act in {'messages.getFutureChatCreatorAfterLeave', 'getFutureChatCreatorAfterLeave', 'get_future_chat_creator_after_leave'}:
-            return u32(0x3b7d0ea6)
-        if act in {'messages.getMessageReadParticipants', 'getMessageReadParticipants', 'get_message_read_participants'}:
-            return u32(0x31c1c44f)
-        if act in {'messages.getMessagesReactions', 'getMessagesReactions', 'get_messages_reactions'}:
-            return u32(0x8bba90e6)
-        if act in {'messages.getOnlines', 'getOnlines', 'get_onlines'}:
-            return u32(0x6e2be050)
-        if act in {'messages.getOutboxReadDate', 'getOutboxReadDate', 'get_outbox_read_date'}:
-            return u32(0x8c4bfe5d)
-        if act in {'messages.getPollResults', 'getPollResults', 'get_poll_results'}:
-            return u32(0xeda3e33b)
-        if act in {'messages.getSearchCounters', 'getSearchCounters', 'get_search_counters'}:
-            return u32(0x1bbcf300)
-        if act in {'messages.hideAllChatJoinRequests', 'hideAllChatJoinRequests', 'hide_all_chat_join_requests'}:
-            return u32(0xe085f4ea)
-        if act in {'messages.hideChatJoinRequest', 'hideChatJoinRequest', 'hide_chat_join_request'}:
-            return u32(0x7fe7e815)
-        if act in {'messages.hidePeerSettingsBar', 'hidePeerSettingsBar', 'hide_peer_settings_bar'}:
-            return u32(0x4facb138)
-        if act in {'messages.importChatInvite', 'importChatInvite', 'import_chat_invite'}:
-            return u32(0x6c50051c)
-        if act in {'messages.markDialogUnread', 'markDialogUnread', 'mark_dialog_unread'}:
-            return u32(0x8c5006f8)
-        if act in {'messages.migrateChat', 'migrateChat', 'migrate_chat'}:
-            return u32(0xa2875319)
-        if act in {'messages.prolongWebView', 'prolongWebView', 'prolong_web_view'}:
-            return u32(0xb0d81a83)
-        if act in {'messages.rateTranscribedAudio', 'rateTranscribedAudio', 'rate_transcribed_audio'}:
-            return u32(0x7f1d072f)
-        if act in {'messages.readDiscussion', 'readDiscussion', 'read_discussion'}:
-            return u32(0xf731a9f4)
-        if act in {'messages.readEncryptedHistory', 'readEncryptedHistory', 'read_encrypted_history'}:
-            return u32(0x7f4b690a)
-        if act in {'messages.readFeaturedStickers', 'readFeaturedStickers', 'read_featured_stickers'}:
-            return u32(0x5b118126)
-        if act in {'messages.readSavedHistory', 'readSavedHistory', 'read_saved_history'}:
-            return u32(0xba4a3b5b)
-        if act in {'messages.receivedMessages', 'receivedMessages', 'received_messages'}:
-            return u32(0x5a954c0)
-        if act in {'messages.receivedQueue', 'receivedQueue', 'received_queue'}:
-            return u32(0x55a5bb66)
-        if act in {'messages.reorderPinnedDialogs', 'reorderPinnedDialogs', 'reorder_pinned_dialogs'}:
-            return u32(0x3b1adf37)
-        if act in {'messages.reorderPinnedForumTopics', 'reorderPinnedForumTopics', 'reorder_pinned_forum_topics'}:
-            return u32(0xe7841f0)
-        if act in {'messages.reorderPinnedSavedDialogs', 'reorderPinnedSavedDialogs', 'reorder_pinned_saved_dialogs'}:
-            return u32(0x8b716587)
-        if act in {'messages.reorderQuickReplies', 'reorderQuickReplies', 'reorder_quick_replies'}:
-            return u32(0x60331907)
-        if act in {'messages.reorderStickerSets', 'reorderStickerSets', 'reorder_sticker_sets'}:
-            return u32(0x78337739)
-        if act in {'messages.report', 'report', 'report'}:
-            return u32(0xfc78af9b)
-        if act in {'messages.reportEncryptedSpam', 'reportEncryptedSpam', 'report_encrypted_spam'}:
-            return u32(0x4b0c8c0f)
-        if act in {'messages.reportMessagesDelivery', 'reportMessagesDelivery', 'report_messages_delivery'}:
-            return u32(0x5a6d7395)
-        if act in {'messages.reportMusicListen', 'reportMusicListen', 'report_music_listen'}:
-            return u32(0xddbcd819)
-        if act in {'messages.reportReaction', 'reportReaction', 'report_reaction'}:
-            return u32(0x3f64c076)
-        if act in {'messages.reportReadMetrics', 'reportReadMetrics', 'report_read_metrics'}:
-            return u32(0x4067c5e6)
-        if act in {'messages.reportSpam', 'reportSpam', 'report_spam'}:
-            return u32(0xcf1592db)
-        if act in {'messages.reportSponsoredMessage', 'reportSponsoredMessage', 'report_sponsored_message'}:
-            return u32(0x12cbf0c4)
-        if act in {'messages.requestAppWebView', 'requestAppWebView', 'request_app_web_view'}:
-            return u32(0x53618bce)
-        if act in {'messages.requestEncryption', 'requestEncryption', 'request_encryption'}:
-            return u32(0xf64daf43)
-        if act in {'messages.requestMainWebView', 'requestMainWebView', 'request_main_web_view'}:
-            return u32(0xc9e01e7b)
-        if act in {'messages.requestSimpleWebView', 'requestSimpleWebView', 'request_simple_web_view'}:
-            return u32(0x413a3e73)
-        if act in {'messages.requestUrlAuth', 'requestUrlAuth', 'request_url_auth'}:
-            return u32(0x894cc99c)
-        if act in {'messages.requestWebView', 'requestWebView', 'request_web_view'}:
-            return u32(0x269dc2c1)
-        if act in {'messages.saveDefaultSendAs', 'saveDefaultSendAs', 'save_default_send_as'}:
-            return u32(0xccfddf96)
-        if act in {'messages.saveDraft', 'saveDraft', 'save_draft'}:
-            return u32(0x54ae308e)
-        if act in {'messages.saveGif', 'saveGif', 'save_gif'}:
-            return u32(0x327a30cb)
-        if act in {'messages.saveRecentSticker', 'saveRecentSticker', 'save_recent_sticker'}:
-            return u32(0x392718f8)
-        if act in {'messages.searchCustomEmoji', 'searchCustomEmoji', 'search_custom_emoji'}:
-            return u32(0x2c11c0d7)
-        if act in {'messages.sendBotRequestedPeer', 'sendBotRequestedPeer', 'send_bot_requested_peer'}:
-            return u32(0x6c5cf2a7)
-        if act in {'messages.sendInlineBotResult', 'sendInlineBotResult', 'send_inline_bot_result'}:
-            return u32(0xc0cf7646)
-        if act in {'messages.sendMedia', 'sendMedia', 'send_media'}:
-            return u32(0x330e77f)
-        if act in {'messages.sendMessage', 'sendMessage', 'send_message'}:
-            return u32(0x545cd15a)
-        if act in {'messages.sendMultiMedia', 'sendMultiMedia', 'send_multi_media'}:
-            return u32(0x1bf89d74)
-        if act in {'messages.sendPaidReaction', 'sendPaidReaction', 'send_paid_reaction'}:
-            return u32(0x58bbcb50)
-        if act in {'messages.sendQuickReplyMessages', 'sendQuickReplyMessages', 'send_quick_reply_messages'}:
-            return u32(0x6c750de1)
-        if act in {'messages.sendReaction', 'sendReaction', 'send_reaction'}:
-            return u32(0xd30d78d4)
-        if act in {'messages.sendScheduledMessages', 'sendScheduledMessages', 'send_scheduled_messages'}:
-            return u32(0xbd38850a)
-        if act in {'messages.sendScreenshotNotification', 'sendScreenshotNotification', 'send_screenshot_notification'}:
-            return u32(0xa1405817)
-        if act in {'messages.sendVote', 'sendVote', 'send_vote'}:
-            return u32(0x10ea6184)
-        if act in {'messages.sendWebViewData', 'sendWebViewData', 'send_web_view_data'}:
-            return u32(0xdc0242c8)
-        if act in {'messages.sendWebViewResultMessage', 'sendWebViewResultMessage', 'send_web_view_result_message'}:
-            return u32(0xa4314f5)
-        if act in {'messages.setBotCallbackAnswer', 'setBotCallbackAnswer', 'set_bot_callback_answer'}:
-            return u32(0xd58f130a)
-        if act in {'messages.setBotGuestChatResult', 'setBotGuestChatResult', 'set_bot_guest_chat_result'}:
-            return u32(0xb8f106e3)
-        if act in {'messages.setBotPrecheckoutResults', 'setBotPrecheckoutResults', 'set_bot_precheckout_results'}:
-            return u32(0x9c2dd95)
-        if act in {'messages.setBotShippingResults', 'setBotShippingResults', 'set_bot_shipping_results'}:
-            return u32(0xe5f672fa)
-        if act in {'messages.setChatAvailableReactions', 'setChatAvailableReactions', 'set_chat_available_reactions'}:
-            return u32(0x864b2581)
-        if act in {'messages.setChatTheme', 'setChatTheme', 'set_chat_theme'}:
-            return u32(0x81202c9)
-        if act in {'messages.setChatWallPaper', 'setChatWallPaper', 'set_chat_wall_paper'}:
-            return u32(0x8ffacae1)
-        if act in {'messages.setDefaultHistoryTTL', 'setDefaultHistoryTTL', 'set_default_history_t_t_l'}:
-            return u32(0x9eb51445)
-        if act in {'messages.setDefaultReaction', 'setDefaultReaction', 'set_default_reaction'}:
-            return u32(0x4f47a016)
-        if act in {'messages.setEncryptedTyping', 'setEncryptedTyping', 'set_encrypted_typing'}:
-            return u32(0x791451ed)
-        if act in {'messages.setGameScore', 'setGameScore', 'set_game_score'}:
-            return u32(0x8ef8ecc0)
-        if act in {'messages.setHistoryTTL', 'setHistoryTTL', 'set_history_t_t_l'}:
-            return u32(0xb80e5fe4)
-        if act in {'messages.setInlineBotResults', 'setInlineBotResults', 'set_inline_bot_results'}:
-            return u32(0xbb12a419)
-        if act in {'messages.setInlineGameScore', 'setInlineGameScore', 'set_inline_game_score'}:
-            return u32(0x15ad9f64)
-        if act in {'messages.setTyping', 'setTyping', 'set_typing'}:
-            return u32(0x58943ee2)
-        if act in {'messages.startBot', 'startBot', 'start_bot'}:
-            return u32(0xe6df7378)
-        if act in {'messages.startHistoryImport', 'startHistoryImport', 'start_history_import'}:
-            return u32(0xb43df344)
-        if act in {'messages.summarizeText', 'summarizeText', 'summarize_text'}:
-            return u32(0xabbbd346)
-        if act in {'messages.toggleBotInAttachMenu', 'toggleBotInAttachMenu', 'toggle_bot_in_attach_menu'}:
-            return u32(0x69f59d69)
-        if act in {'messages.toggleDialogFilterTags', 'toggleDialogFilterTags', 'toggle_dialog_filter_tags'}:
-            return u32(0xfd2dda49)
-        if act in {'messages.toggleDialogPin', 'toggleDialogPin', 'toggle_dialog_pin'}:
-            return u32(0xa731e257)
-        if act in {'messages.toggleNoForwards', 'toggleNoForwards', 'toggle_no_forwards'}:
-            return u32(0xb2081a35)
-        if act in {'messages.togglePaidReactionPrivacy', 'togglePaidReactionPrivacy', 'toggle_paid_reaction_privacy'}:
-            return u32(0x435885b5)
-        if act in {'messages.togglePeerTranslations', 'togglePeerTranslations', 'toggle_peer_translations'}:
-            return u32(0xe47cb579)
-        if act in {'messages.toggleSavedDialogPin', 'toggleSavedDialogPin', 'toggle_saved_dialog_pin'}:
-            return u32(0xac81bbde)
-        if act in {'messages.toggleStickerSets', 'toggleStickerSets', 'toggle_sticker_sets'}:
-            return u32(0xb5052fea)
-        if act in {'messages.toggleSuggestedPostApproval', 'toggleSuggestedPostApproval', 'toggle_suggested_post_approval'}:
-            return u32(0x8107455c)
-        if act in {'messages.toggleTodoCompleted', 'toggleTodoCompleted', 'toggle_todo_completed'}:
-            return u32(0xd3e03124)
-        if act in {'messages.uninstallStickerSet', 'uninstallStickerSet', 'uninstall_sticker_set'}:
-            return u32(0xf96e55de)
-        if act in {'messages.updateDialogFilter', 'updateDialogFilter', 'update_dialog_filter'}:
-            return u32(0x1ad4a04a)
-        if act in {'messages.updateDialogFiltersOrder', 'updateDialogFiltersOrder', 'update_dialog_filters_order'}:
-            return u32(0xc563c1e4)
-        if act in {'messages.updatePinnedForumTopic', 'updatePinnedForumTopic', 'update_pinned_forum_topic'}:
-            return u32(0x175df251)
-        if act in {'messages.updatePinnedMessage', 'updatePinnedMessage', 'update_pinned_message'}:
-            return u32(0xd2aaf7ec)
-        if act in {'messages.updateSavedReactionTag', 'updateSavedReactionTag', 'update_saved_reaction_tag'}:
-            return u32(0x60297dec)
-        if act in {'messages.uploadEncryptedFile', 'uploadEncryptedFile', 'upload_encrypted_file'}:
-            return u32(0x5057c497)
-        if act in {'messages.uploadImportedMedia', 'uploadImportedMedia', 'upload_imported_media'}:
-            return u32(0x2a862092)
-        if act in {'messages.uploadMedia', 'uploadMedia', 'upload_media'}:
-            return u32(0x14967978)
-        if act in {'messages.viewSponsoredMessage', 'viewSponsoredMessage', 'view_sponsored_message'}:
-            return u32(0x269e3643)
-        if act in {'messages.clearAllDrafts', 'clearAllDrafts', 'clear_all_drafts'}:
-            return u32(0x7e58ee9c)
-        if act in {'messages.clearRecentReactions', 'clearRecentReactions', 'clear_recent_reactions'}:
-            return u32(0x9dfeefb4)
-        if act in {'messages.getDefaultHistoryTTL', 'getDefaultHistoryTTL', 'get_default_history_t_t_l'}:
-            return u32(0x658b7188)
-        if act in {'messages.getPaidReactionPrivacy', 'getPaidReactionPrivacy', 'get_paid_reaction_privacy'}:
-            return u32(0x472455aa)
-        if act in {'messages.getSplitRanges', 'getSplitRanges', 'get_split_ranges'}:
-            return u32(0x1cff7e08)
-        if act in {'messages.getSuggestedDialogFilters', 'getSuggestedDialogFilters', 'get_suggested_dialog_filters'}:
-            return u32(0xa29cd42c)
-        raise NotImplementedError(f'MTProto method not implemented: {act}')
+                data[k] = v
+        tl_name = self._norm_act(act)
+        return bytes(_ext.serialize_method(tl_name, json.dumps(data)))
 
     def _parse_new_message(self, data:bytes)->dict[str,Any]|None:
         if len(data) < 20:
@@ -1558,14 +1092,6 @@ class MTNet:
             self.wr.close(); await self.wr.wait_closed()
             self.wr=None; self.rd=None
 
-    async def send_msg(self, chat_id:int|str, text:str, **kw:Any)->dict[str,Any]:
-        payload={"chat_id": chat_id, "text": text}
-        payload.update({k:v for k,v in kw.items() if v is not None})
-        return await self.call('send_msg', **payload)
-
-    async def del_msg(self, chat_id:int|str, msg_id:int)->dict[str,Any]:
-        return await self.call('del_msg', chat_id=chat_id, msg_id=msg_id)
-
     async def _rpc_call(self, act:str, **kw:Any)->dict[str,Any]:
         loop = asyncio.get_running_loop()
         fut:asyncio.Future[dict[str,Any]] = loop.create_future()
@@ -1574,13 +1100,18 @@ class MTNet:
         self.pending[req_msg_id] = (fut, obj)
         try:
             await self.send(obj, req_msg_id=req_msg_id)
-            return await asyncio.wait_for(fut, timeout=30.0)
+            while req_msg_id in self.pending and not self.stop_ev.is_set():
+                pkt = await asyncio.wait_for(self.read_packet(), timeout=30.0)
+                self._handle_encrypted_packet(pkt)
+            if req_msg_id not in self.pending:
+                return fut.result()
+            raise TimeoutError(f'no response for act={act} msg_id={req_msg_id}')
         except asyncio.TimeoutError:
             self.pending.pop(req_msg_id, None)
             raise TimeoutError(f'no response for act={act} msg_id={req_msg_id}')
 
     async def _auth_check_password_flow(self, password:str, api_id:int)->dict[str,Any]:
-        state = await self._rpc_call('account_get_password', api_id=api_id)
+        state = await self._rpc_call('account.getPassword')
         if not isinstance(state, dict):
             return {"ok": False, "error": "UNEXPECTED_PASSWORD_STATE", "raw": state}
         if not state.get("ok", True):
@@ -1597,11 +1128,13 @@ class MTNet:
         except Exception as exc:
             import traceback; traceback.print_exc()
             return {"ok": False, "error": "PASSWORD_SRP_BUILD_FAILED", "error_message": str(exc)}
-        return await self._rpc_call('auth_check_password_srp', srp_id=srp_id, A=a_pub, M1=m1, api_id=api_id)
+        from goygram.vendor.tl_core import u32, i64, tl_bytes
+        srp = u32(0xd27ff082) + i64(srp_id) + tl_bytes(a_pub) + tl_bytes(m1)
+        return await self._rpc_call('auth.checkPassword', password=srp)
 
     async def call(self, act:str, **kw:Any)->dict[str,Any]:
-        if act in {'auth.checkPassword', 'auth_check_password'} and 'srp_id' not in kw:
-            return await self._auth_check_password_flow(str(kw.get('password') or ''), int(kw['api_id']))
+        if act == 'auth.checkPassword' and 'srp_id' not in kw and 'password' in kw and isinstance(kw['password'], str):
+            return await self._auth_check_password_flow(kw['password'], int(kw.get('api_id', 0)))
         return await self._rpc_call(act, **kw)
 
     async def _connect(self) -> None:

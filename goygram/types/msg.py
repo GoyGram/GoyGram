@@ -1,6 +1,7 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 
+import secrets
 from typing import Any
 
 
@@ -39,22 +40,52 @@ class MsgObj:
             raise RuntimeError("mt net is not configured")
         return self.app.mt
 
+    def _resolve_peer(self, chat_id):
+        c = self.app.mt.codec
+        if isinstance(chat_id, int):
+            if chat_id > 0:
+                return c.input_peer_user(chat_id, 0)
+            raw = -chat_id
+            if raw > 1000000000000:
+                return c.input_peer_channel(raw - 1000000000000, 0)
+            return c.input_peer_chat(raw)
+        return c.input_peer_self()
+
     async def reply(self, txt: str, kbd: Any | None = None, topic_id: int | None = None, link_options: Any | None = None, **kw: Any) -> Any:
         if self.chat_id is None:
             return None
-        if hasattr(self.app, "send_msg"):
-            return await self.app.send_msg(self.chat_id, txt, reply_to=self.id, kbd=kbd, topic_id=topic_id, via=self.src, link_options=link_options, **kw)
-        data = dict(kw)
-        data["reply_to"] = self.id
-        if kbd is not None:
-            data["kbd"] = kbd
-        if topic_id is not None:
-            data["topic_id"] = topic_id
-        if link_options is not None:
-            data["link_options"] = link_options
-        return await self.net().send_msg(self.chat_id, txt, **data)
+        if self.src == "bot" and self.app.bot is not None:
+            data = dict(kw)
+            if self.id is not None:
+                data["reply_parameters"] = {"message_id": self.id}
+            if kbd is not None:
+                data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
+            if topic_id is not None:
+                data["message_thread_id"] = topic_id
+            if link_options is not None:
+                data["link_preview_options"] = link_options.to_dict() if hasattr(link_options, "to_dict") else link_options
+            return await self.app.bot_req("sendMessage", chat_id=self.chat_id, text=txt, **data)
+        if self.app.mt is not None:
+            data = dict(kw)
+            peer = self._resolve_peer(self.chat_id)
+            if self.id is not None:
+                data["reply_to"] = self.app.mt.codec.input_reply_to_message(int(self.id))
+            if kbd is not None:
+                data["kbd"] = kbd
+            if link_options is not None:
+                data["link_options"] = link_options
+            return await self.app.mt_req("messages.sendMessage",
+                peer=peer,
+                message=txt,
+                random_id=secrets.randbits(63),
+                **data)
+        return None
 
     async def delete(self) -> Any:
         if self.chat_id is None or self.id is None:
             return None
-        return await self.net().del_msg(self.chat_id, int(self.id))
+        if self.src == "bot" and self.app.bot is not None:
+            return await self.app.bot_req("deleteMessage", chat_id=self.chat_id, message_id=self.id)
+        if self.app.mt is not None:
+            return await self.app.mt_req("messages.deleteMessages", id=[int(self.id)], revoke=True)
+        return None

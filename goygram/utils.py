@@ -10,12 +10,13 @@ from goygram.filters import Filter, me, text
 def print_methods(app: Any) -> None:
     lines: list[str] = []
     lines.append("=== GoyGram Developer Help ===")
-    lines.append("• Dynamic methods:")
-    lines.append("  - app.sendDocument(...), app.getChat(...), app.getUpdates(...)")
-    lines.append("  - app.mt_<method>(...) for MTProto actions, e.g. app.mt_get_dialogs(...)")
-    lines.append("• Built-in shortcuts:")
+    lines.append("• All methods are dynamically dispatched via runtime TL parsing:")
+    lines.append("  - Bot API: app.<camelCase>(...) e.g. app.sendMessage(...)")
+    lines.append("  - MTProto: app.mt_<namespace>_<method>(...) e.g. app.mt_messages_get_dialogs(...)")
+    lines.append("  - Complex types must be pre-serialized via codec helpers")
+    lines.append("• Built-in:")
     for name in sorted(x for x in dir(app) if not x.startswith("_") and callable(getattr(app, x, None))):
-        if name in {"send_msg", "send_photo", "send_doc", "edit_text", "del_msg", "answer_cb", "help"}:
+        if name == "help":
             sig = inspect.signature(getattr(app, name))
             lines.append(f"  - {name}{sig}")
     lines.append("• Filters:")

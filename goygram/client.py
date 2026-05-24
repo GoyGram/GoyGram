@@ -97,6 +97,7 @@ class AppCore:
             )
             if api_id is not None:
                 self.mt._api_id = int(api_id)
+            self._init_tl_schema()
             self._load_vault_from_disk(session_name, api_id, api_hash)
         self.disp = Disp(self, self.bus)
         self.hook: list[Fn] = []
@@ -110,6 +111,16 @@ class AppCore:
         self.api_id = api_id
         self.api_hash = api_hash
         self.session_name = session_name
+
+    def _init_tl_schema(self) -> None:
+        from pathlib import Path
+        from goygram.vendor.tl_schema import load_schema_into_rust
+        from goygram import ext as _ext
+        if _ext is None or _ext.schema_loaded():
+            return
+        api_tl = Path(__file__).resolve().parent.parent / "api.tl"
+        if api_tl.exists():
+            load_schema_into_rust(_ext, api_tl)
 
     def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any) -> None:
         import logging
@@ -188,10 +199,21 @@ class AppCore:
             return parts[0] + "".join(x[:1].upper() + x[1:] for x in parts[1:])
         return name
 
+    def _mt_method_name(self, name: str) -> str:
+        name = name[3:] if name.startswith("mt_") else name
+        if "." in name:
+            return name
+        parts = name.split("_")
+        if len(parts) < 2:
+            return name
+        ns = parts[0]
+        rest = parts[1:]
+        return ns + "." + rest[0] + "".join(p[:1].upper() + p[1:] for p in rest[1:])
+
     def _dynamic_method(self, name: str):
         async def call(**kw: Any) -> Any:
             if name.startswith("mt_"):
-                return await self.mt_req(name[3:], **kw)
+                return await self.mt_req(self._mt_method_name(name), **kw)
             return await self.bot_req(self._bot_method_name(name), **kw)
         return call
 
@@ -201,13 +223,15 @@ class AppCore:
     def __getattr__(self, name: str) -> Any:
         if self.api is not None and hasattr(self.api, name):
             return getattr(self.api, name)
-        if (self.bot is not None and not name.startswith("mt_")) or (self.mt is not None and name.startswith("mt_")):
+        if name.startswith("mt_") and self.mt is not None:
+            return self._dynamic_method(name)
+        if not name.startswith("mt_") and not name.startswith("_") and self.bot is not None:
             return self._dynamic_method(name)
         raise AttributeError(name)
 
     def __dir__(self) -> list[str]:
         base = set(super().__dir__())
-        base.update({"help", "sendDocument", "getChat", "getUpdates", "mt_get_dialogs"})
+        base.add("help")
         return sorted(base)
 
     def stop(self) -> None:
@@ -243,132 +267,6 @@ class AppCore:
             return "mt"
         raise RuntimeError("no transport configured")
 
-    async def send_msg(
-        self,
-        chat_id: int | str,
-        text: str,
-        reply_to: int | None = None,
-        kbd: Any | None = None,
-        topic_id: int | None = None,
-        media: Any | None = None,
-        link_options: Any | None = None,
-        link_preview_options: Any | None = None,
-        via: str | None = None,
-        **kw: Any,
-    ) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        opts = link_preview_options if link_preview_options is not None else link_options
-        if way == "bot":
-            if self.api is not None:
-                data = dict(kw)
-                if reply_to is not None:
-                    data["reply_parameters"] = {"message_id": reply_to}
-                if kbd is not None:
-                    data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
-                if topic_id is not None:
-                    data["message_thread_id"] = topic_id
-                if media is not None:
-                    data["media"] = media
-                if opts is not None:
-                    data["link_preview_options"] = opts.to_dict() if hasattr(opts, "to_dict") else opts
-                if "link_preview_options" in data:
-                    return await self.bot_req("sendMessage", chat_id=dst, text=text, **data)
-                return await self.api.send_message(dst, text, **data)
-            assert self.bot is not None
-            data = dict(kw)
-            if reply_to is not None:
-                data["reply_to"] = reply_to
-            if kbd is not None:
-                data["kbd"] = kbd
-            if topic_id is not None:
-                data["topic_id"] = topic_id
-            if media is not None:
-                data["media"] = media
-            if opts is not None:
-                data["link_options"] = opts
-            return await self.bot.send_msg(dst, text, **data)
-        assert self.mt is not None
-        data = dict(kw)
-        if reply_to is not None:
-            data["reply_to"] = reply_to
-        if kbd is not None:
-            data["kbd"] = kbd
-        if topic_id is not None:
-            data["topic_id"] = topic_id
-        if media is not None:
-            data["media"] = media
-        if opts is not None:
-            data["link_options"] = opts.to_dict() if hasattr(opts, "to_dict") else opts
-        return await self.mt.send_msg(dst, text, **data)
-
-    async def del_msg(self, chat_id: int | str, msg_id: int, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            assert self.bot is not None
-            return await self.bot.del_msg(dst, msg_id)
-        assert self.mt is not None
-        return await self.mt.del_msg(dst, msg_id)
-
-    async def edit_text(self, chat_id: int | str, msg_id: int, text: str, kbd: Any | None = None, via: str | None = None, **kw: Any) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            if self.api is not None:
-                data = dict(kw)
-                if kbd is not None:
-                    data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
-                return await self.api.edit_message_text(text=text, chat_id=dst, message_id=msg_id, **data)
-            data = dict(kw)
-            if kbd is not None:
-                data["reply_markup"] = kbd
-            return await self.bot_req("editMessageText", chat_id=dst, message_id=msg_id, text=text, **data)
-        raise RuntimeError("edit_text is only available for bot transport")
-
-    async def answer_cb(self, cb_id: str, text: str | None = None, alert: bool = False, url: str | None = None, cache_time: int = 0) -> Any:
-        return await self.bot_req("answerCallbackQuery", callback_query_id=cb_id, text=text, show_alert=alert, url=url, cache_time=cache_time)
-
-    async def send_photo(self, chat_id: int | str, photo: Any, caption: str | None = None, kbd: Any | None = None, via: str | None = None, **kw: Any) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            data = dict(kw)
-            if caption is not None:
-                data["caption"] = caption
-            if kbd is not None:
-                data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
-            return await self.bot_req("sendPhoto", chat_id=dst, photo=photo, **data)
-        return await self.send_msg(dst, caption or "", media={"kind": "photo", "photo": photo}, kbd=kbd, via=way, **kw)
-
-    async def send_doc(self, chat_id: int | str, document: Any, caption: str | None = None, kbd: Any | None = None, via: str | None = None, **kw: Any) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            data = dict(kw)
-            if caption is not None:
-                data["caption"] = caption
-            if kbd is not None:
-                data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
-            return await self.bot_req("sendDocument", chat_id=dst, document=document, **data)
-        return await self.send_msg(dst, caption or "", media={"kind": "document", "document": document}, kbd=kbd, via=way, **kw)
-
-    async def send_media_group(self, chat_id: int | str, media: list[dict[str, Any]], via: str | None = None, **kw: Any) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("sendMediaGroup", chat_id=dst, media=media, **kw)
-        return await self.send_msg(dst, "", media={"kind": "group", "items": media}, via=way, **kw)
-
-    async def set_webhook(self, url: str, **kw: Any) -> Any:
-        return await self.bot_req("setWebhook", url=url, **kw)
-
-    async def delete_webhook(self, drop_pending_updates: bool = False) -> Any:
-        return await self.bot_req("deleteWebhook", drop_pending_updates=drop_pending_updates)
-
-    async def get_webhook_info(self) -> Any:
-        return await self.bot_req("getWebhookInfo")
-
     def html(self, text: str) -> dict[str, Any]:
         return {"text": text, "parse_mode": "HTML"}
 
@@ -397,110 +295,6 @@ class AppCore:
             return await self.mt.req(act, data)
         return await self.mt.send({"act": act, **data})
 
-    async def get_admins(self, chat_id: int | str, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("getChatAdministrators", chat_id=dst)
-        return await self.mt_req("get_admins", chat_id=dst)
-
-    async def get_owner(self, chat_id: int | str, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            admins = await self.get_admins(dst, via="bot")
-            if isinstance(admins, list):
-                for item in admins:
-                    status = item.get("status")
-                    if status in {"creator", "owner"}:
-                        return item
-            return await self.bot_req("getChat", chat_id=dst)
-        return await self.mt_req("get_owner", chat_id=dst)
-
-    async def get_chat_full(self, chat_id: int | str, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("getChat", chat_id=dst)
-        return await self.mt_req("get_chat_full", chat_id=dst)
-
-    async def create_topic(self, chat_id: int | str, name: str, icon_color: int | None = None, via: str | None = None, **kw: Any) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("createForumTopic", chat_id=dst, name=name, icon_color=icon_color, **kw)
-        return await self.mt_req("create_topic", chat_id=dst, name=name, icon_color=icon_color, **kw)
-
-    async def edit_topic(self, chat_id: int | str, topic_id: int, name: str | None = None, icon_custom_emoji_id: str | None = None, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("editForumTopic", chat_id=dst, message_thread_id=topic_id, name=name, icon_custom_emoji_id=icon_custom_emoji_id)
-        return await self.mt_req("edit_topic", chat_id=dst, topic_id=topic_id, name=name, icon_custom_emoji_id=icon_custom_emoji_id)
-
-    async def close_topic(self, chat_id: int | str, topic_id: int, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("closeForumTopic", chat_id=dst, message_thread_id=topic_id)
-        return await self.mt_req("close_topic", chat_id=dst, topic_id=topic_id)
-
-    async def reopen_topic(self, chat_id: int | str, topic_id: int, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("reopenForumTopic", chat_id=dst, message_thread_id=topic_id)
-        return await self.mt_req("reopen_topic", chat_id=dst, topic_id=topic_id)
-
-    async def delete_topic(self, chat_id: int | str, topic_id: int, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("deleteForumTopic", chat_id=dst, message_thread_id=topic_id)
-        return await self.mt_req("delete_topic", chat_id=dst, topic_id=topic_id)
-
-    async def unpin_all_topic_msgs(self, chat_id: int | str, topic_id: int, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("unpinAllForumTopicMessages", chat_id=dst, message_thread_id=topic_id)
-        return await self.mt_req("unpin_all_topic_msgs", chat_id=dst, topic_id=topic_id)
-
-    async def edit_general_topic(self, chat_id: int | str, name: str, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("editGeneralForumTopic", chat_id=dst, name=name)
-        return await self.mt_req("edit_general_topic", chat_id=dst, name=name)
-
-    async def close_general_topic(self, chat_id: int | str, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("closeGeneralForumTopic", chat_id=dst)
-        return await self.mt_req("close_general_topic", chat_id=dst)
-
-    async def reopen_general_topic(self, chat_id: int | str, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("reopenGeneralForumTopic", chat_id=dst)
-        return await self.mt_req("reopen_general_topic", chat_id=dst)
-
-    async def hide_general_topic(self, chat_id: int | str, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("hideGeneralForumTopic", chat_id=dst)
-        return await self.mt_req("hide_general_topic", chat_id=dst)
-
-    async def unhide_general_topic(self, chat_id: int | str, via: str | None = None) -> Any:
-        way = self.via(chat_id, via)
-        dst = self.raw_chat(chat_id)
-        if way == "bot":
-            return await self.bot_req("unhideGeneralForumTopic", chat_id=dst)
-        return await self.mt_req("unhide_general_topic", chat_id=dst)
-
     async def close(self) -> None:
         self.stop_ev.set()
         await self.disp.close()
@@ -515,7 +309,6 @@ class AppCore:
             print("\nProcess interrupted by user. Exiting...")
             import os
             os._exit(0)
-        import signal
         signal.signal(signal.SIGINT, _instant_exit)
         signal.signal(signal.SIGTERM, _instant_exit)
         self.log.info("Starting GoyGram core.")
@@ -525,7 +318,7 @@ class AppCore:
             if self.bot:
                 self.log.info("Bot transport is enabled.")
                 try:
-                    await self.delete_webhook(drop_pending_updates=False)
+                    await self.bot_req("deleteWebhook", drop_pending_updates=False)
                 except Exception as e:
                     self.log.error("Failed to clear webhook before polling: %r", e)
                 tasks.append(asyncio.create_task(self.bot.spin(), name="bot"))
@@ -534,7 +327,7 @@ class AppCore:
                 tasks.append(asyncio.create_task(self.mt.spin(), name="mt"))
                 await bootstrap_session(self, api_id=self.api_id, api_hash=self.api_hash, session_name=self.session_name)
                 try:
-                    await self.mt_req('get_state')
+                    await self.mt_req('updates.getState')
                 except Exception:
                     pass
             await self.stop_ev.wait()
@@ -605,25 +398,6 @@ class GoyGram:
     def on_msg(self, fn: Fn | None = None, filt: Filter | None = None):
         return self.core.on_msg(fn, filt=filt)
 
-    def _bot_method_name(self, name: str) -> str:
-        if "_" in name:
-            parts = name.split("_")
-            return parts[0] + "".join(x[:1].upper() + x[1:] for x in parts[1:])
-        return name
-
-    def _dynamic_method(self, name: str):
-        async def call(**kw: Any) -> Any:
-            if name.startswith("mt_"):
-                return await self.mt_req(name[3:], **kw)
-            return await self.bot_req(self._bot_method_name(name), **kw)
-        return call
-
-    def help(self) -> None:
-        print_methods(self)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.core, name)
-
     def on_cb(self, fn: CbFn) -> CbFn:
         return self.core.on_cb(fn)
 
@@ -639,181 +413,14 @@ class GoyGram:
     def help(self) -> None:
         self.core.help()
 
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.core, name)
+
     def __dir__(self) -> list[str]:
         return sorted(set(super().__dir__()) | set(dir(self.core)))
-
-    async def send_msg(
-        self,
-        chat_id: int | str,
-        text: str,
-        reply_to: int | None = None,
-        kbd: Any | None = None,
-        topic_id: int | None = None,
-        media: Any | None = None,
-        link_options: Any | None = None,
-        link_preview_options: Any | None = None,
-        via: str | None = None,
-        **kw: Any,
-    ) -> Any:
-        return await self.core.send_msg(chat_id, text, reply_to=reply_to, kbd=kbd, topic_id=topic_id, media=media, link_options=link_options, link_preview_options=link_preview_options, via=via, **kw)
-
-    async def del_msg(self, chat_id: int | str, msg_id: int, via: str | None = None) -> Any:
-        return await self.core.del_msg(chat_id, msg_id, via=via)
-
-    async def edit_text(self, chat_id: int | str, msg_id: int, text: str, kbd: Any | None = None, via: str | None = None, **kw: Any) -> Any:
-        return await self.core.edit_text(chat_id, msg_id, text, kbd=kbd, via=via, **kw)
-
-    async def answer_cb(self, cb_id: str, text: str | None = None, alert: bool = False, url: str | None = None, cache_time: int = 0) -> Any:
-        return await self.core.answer_cb(cb_id, text=text, alert=alert, url=url, cache_time=cache_time)
-
-    async def send_photo(self, chat_id: int | str, photo: Any, caption: str | None = None, kbd: Any | None = None, via: str | None = None, **kw: Any) -> Any:
-        return await self.core.send_photo(chat_id, photo, caption=caption, kbd=kbd, via=via, **kw)
-
-    async def send_doc(self, chat_id: int | str, document: Any, caption: str | None = None, kbd: Any | None = None, via: str | None = None, **kw: Any) -> Any:
-        return await self.core.send_doc(chat_id, document, caption=caption, kbd=kbd, via=via, **kw)
-
-    async def send_media_group(self, chat_id: int | str, media: list[dict[str, Any]], via: str | None = None, **kw: Any) -> Any:
-        return await self.core.send_media_group(chat_id, media, via=via, **kw)
-
-    async def set_webhook(self, url: str, **kw: Any) -> Any:
-        return await self.core.set_webhook(url, **kw)
-
-    async def delete_webhook(self, drop_pending_updates: bool = False) -> Any:
-        return await self.core.delete_webhook(drop_pending_updates=drop_pending_updates)
-
-    async def get_webhook_info(self) -> Any:
-        return await self.core.get_webhook_info()
-
-    async def get_admins(self, chat_id: int | str, via: str | None = None) -> Any:
-        return await self.core.get_admins(chat_id, via=via)
-
-    async def get_owner(self, chat_id: int | str, via: str | None = None) -> Any:
-        return await self.core.get_owner(chat_id, via=via)
-
-    async def get_chat_full(self, chat_id: int | str, via: str | None = None) -> Any:
-        return await self.core.get_chat_full(chat_id, via=via)
-
-    async def create_topic(self, chat_id: int | str, name: str, icon_color: int | None = None, via: str | None = None, **kw: Any) -> Any:
-        return await self.core.create_topic(chat_id, name, icon_color=icon_color, via=via, **kw)
-
-    async def edit_topic(self, chat_id: int | str, topic_id: int, name: str | None = None, icon_custom_emoji_id: str | None = None, via: str | None = None) -> Any:
-        return await self.core.edit_topic(chat_id, topic_id, name=name, icon_custom_emoji_id=icon_custom_emoji_id, via=via)
-
-    async def close_topic(self, chat_id: int | str, topic_id: int, via: str | None = None) -> Any:
-        return await self.core.close_topic(chat_id, topic_id, via=via)
-
-    async def reopen_topic(self, chat_id: int | str, topic_id: int, via: str | None = None) -> Any:
-        return await self.core.reopen_topic(chat_id, topic_id, via=via)
-
-    async def delete_topic(self, chat_id: int | str, topic_id: int, via: str | None = None) -> Any:
-        return await self.core.delete_topic(chat_id, topic_id, via=via)
-
-    async def unpin_all_topic_msgs(self, chat_id: int | str, topic_id: int, via: str | None = None) -> Any:
-        return await self.core.unpin_all_topic_msgs(chat_id, topic_id, via=via)
-
-    async def edit_general_topic(self, chat_id: int | str, name: str, via: str | None = None) -> Any:
-        return await self.core.edit_general_topic(chat_id, name, via=via)
-
-    async def close_general_topic(self, chat_id: int | str, via: str | None = None) -> Any:
-        return await self.core.close_general_topic(chat_id, via=via)
-
-    async def reopen_general_topic(self, chat_id: int | str, via: str | None = None) -> Any:
-        return await self.core.reopen_general_topic(chat_id, via=via)
-
-    async def hide_general_topic(self, chat_id: int | str, via: str | None = None) -> Any:
-        return await self.core.hide_general_topic(chat_id, via=via)
-
-    async def unhide_general_topic(self, chat_id: int | str, via: str | None = None) -> Any:
-        return await self.core.unhide_general_topic(chat_id, via=via)
-
-    def html(self, text: str) -> dict[str, Any]:
-        return self.core.html(text)
-
-    def md(self, text: str) -> dict[str, Any]:
-        return self.core.md(text)
-
-    def __dir__(self) -> list[str]:
-        base = set(super().__dir__())
-        base.update({"help", "sendDocument", "getChat", "getUpdates", "mt_get_dialogs"})
-        return sorted(base)
 
     def stop(self) -> None:
         self.core.stop()
 
     async def run(self) -> None:
         await self.core.run()
-
-
-_BOT_WRAP = [
-    "ban_chat_member", "unban_chat_member", "restrict_chat_member", "promote_chat_member", "set_chat_administrator_custom_title",
-    "ban_chat_sender_chat", "unban_chat_sender_chat", "set_chat_permissions", "export_chat_invite_link", "create_chat_invite_link",
-    "edit_chat_invite_link", "revoke_chat_invite_link", "approve_chat_join_request", "decline_chat_join_request", "set_chat_photo",
-    "delete_chat_photo", "set_chat_title", "set_chat_description", "pin_chat_message", "unpin_chat_message",
-    "unpin_all_chat_messages", "leave_chat", "get_chat", "get_chat_member", "set_chat_sticker_set",
-    "delete_chat_sticker_set", "get_forum_topic_icon_stickers", "answer_inline_query", "answer_web_app_query", "set_my_commands",
-    "delete_my_commands", "get_my_commands", "set_my_name", "get_my_name", "set_my_description",
-    "get_my_description", "set_my_short_description", "get_my_short_description", "set_chat_menu_button", "get_chat_menu_button",
-    "set_my_default_administrator_rights", "get_my_default_administrator_rights", "send_poll", "stop_poll", "send_dice",
-    "send_venue", "send_contact", "send_location", "edit_message_caption", "edit_message_reply_markup",
-]
-
-_MT_WRAP = [
-    "get_me", "resolve_peer", "get_dialogs", "get_history", "get_messages",
-    "send_reaction", "forward_messages", "copy_messages", "pin_message", "unpin_message",
-    "read_history", "delete_history", "get_participants", "get_full_user", "get_full_chat",
-    "get_full_channel", "join_channel", "leave_channel", "edit_admin", "invite_to_channel",
-    "kick_participant", "ban_participant", "unban_participant", "mute_participant", "unmute_participant",
-    "create_group", "create_channel", "edit_title", "edit_about", "set_photo",
-    "delete_photo", "get_pinned_message", "search_messages", "search_global", "send_typing",
-    "upload_file", "download_file", "save_draft", "clear_draft", "mark_read",
-    "mark_unread", "get_stats", "get_admin_logs", "create_topic", "edit_topic",
-    "close_topic", "reopen_topic", "delete_topic", "get_admins", "get_owner",
-    "delete_channel", "delete_chat",
-    "get_sticker_set", "fave_sticker", "get_web_page", "get_web_page_preview",
-    "check_chat_invite", "import_chat_invite", "export_chat_invite", "delete_exported_chat_invite",
-    "get_poll_results", "send_vote", "report", "report_spam",
-    "toggle_dialog_pin", "get_scheduled_history", "get_replies",
-    "get_discussion_message", "read_mentions", "get_common_dialogs",
-    "get_chats", "get_full_chat", "edit_chat_title",
-    "get_top_reactions", "get_recent_reactions", "clear_recent_reactions",
-    "get_available_reactions", "get_quick_replies", "get_peer_settings",
-    "get_saved_dialogs", "get_saved_history", "get_message_edit_data",
-    "get_unread_mentions", "mark_dialog_unread",
-    "get_search_counters", "translate_text",
-    "send_scheduled_messages", "delete_scheduled_messages",
-]
-
-
-def _camel(name: str) -> str:
-    parts = name.split("_")
-    return parts[0] + "".join(x[:1].upper() + x[1:] for x in parts[1:])
-
-
-def _mk_bot(name: str) -> Any:
-    async def fn(self: AppCore, **kw: Any) -> Any:
-        return await self.bot_req(_camel(name), **kw)
-    fn.__name__ = name
-    return fn
-
-
-def _mk_mt(name: str) -> Any:
-    async def fn(self: AppCore, **kw: Any) -> Any:
-        return await self.mt_req(name, **kw)
-    fn.__name__ = name
-    return fn
-
-
-def _mk_fac(name: str) -> Any:
-    async def fn(self: GoyGram, *a: Any, **kw: Any) -> Any:
-        return await getattr(self.core, name)(*a, **kw)
-    fn.__name__ = name
-    return fn
-
-
-for _name in _BOT_WRAP:
-    setattr(AppCore, _name, _mk_bot(_name))
-    setattr(GoyGram, _name, _mk_fac(_name))
-
-for _name in _MT_WRAP:
-    setattr(AppCore, f"mt_{_name}", _mk_mt(_name))
-    setattr(GoyGram, f"mt_{_name}", _mk_fac(f"mt_{_name}"))
