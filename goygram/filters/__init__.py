@@ -1386,6 +1386,49 @@ class user(Filter):
             return False
 
 
+class state(Filter):
+    def __init__(self, name: str):
+        self._name_val = name
+        super().__init__(fn=self._chk, _name=f"state({name!r})")
+
+    def _chk(self, e: object) -> bool:
+        chat_id = getattr(e, 'chat_id', None)
+        from_id = getattr(e, 'from_id', None)
+        if chat_id is None or from_id is None:
+            return False
+        try:
+            chat_id = int(chat_id)
+            from_id = int(from_id)
+        except (TypeError, ValueError):
+            return False
+        app = getattr(e, 'app', None)
+        if app is None or not hasattr(app, 'fsm'):
+            return False
+        return app.fsm.get(chat_id, from_id) == self._name_val
+
+
+class state_any(Filter):
+    def __init__(self, *names: str):
+        self._names = set(names)
+        super().__init__(fn=self._chk, _name=f"state_any({names})")
+
+    def _chk(self, e: object) -> bool:
+        chat_id = getattr(e, 'chat_id', None)
+        from_id = getattr(e, 'from_id', None)
+        if chat_id is None or from_id is None:
+            return False
+        try:
+            chat_id = int(chat_id)
+            from_id = int(from_id)
+        except (TypeError, ValueError):
+            return False
+        app = getattr(e, 'app', None)
+        if app is None or not hasattr(app, 'fsm'):
+            return False
+        cur = app.fsm.get(chat_id, from_id)
+        return cur is not None and cur in self._names
+
+
 # ═══════════════ UTILITY ═══════════════
 
 any_filter = Filter(lambda e: True, _name="any")
@@ -1608,7 +1651,7 @@ __all__ = [
     "member_promoted", "member_demoted", "member_restricted", "member_unrestricted",
     "member_status", "member_chat", "member_user", "member_by",
     "member_self", "member_any",
-    "update_type", "network", "user",
+    "update_type", "network", "user", "state", "state_any",
     "any_filter", "none_filter", "func",
     "all_of", "any_of", "none_of", "at_least", "at_most", "exactly", "invert",
     "if_", "unless",

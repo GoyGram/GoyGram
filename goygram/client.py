@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from goygram.api.methods import BotAPI
 from goygram.core.bus import Bus
 from goygram.core.disp import Disp
+from goygram.core.fsm import FSMEngine
 from goygram.types.cb import CbObj
 from goygram.types.member import MemberObj
 from goygram.types.msg import MsgObj
@@ -99,6 +100,7 @@ class AppCore:
                 self.mt._api_id = int(api_id)
             self._init_tl_schema()
             self._load_vault_from_disk(session_name, api_id, api_hash)
+        self.fsm = FSMEngine()
         self.disp = Disp(self, self.bus)
         self.hook: list[Fn] = []
         self.cb_hook: list[CbFn] = []
@@ -332,8 +334,21 @@ class AppCore:
             return await self.mt.req(act, data)
         return await self.mt.send({"act": act, **data})
 
+    def set_state(self, chat_id: int | str, user_id: int | str, state: str, data: dict[str, Any] | None = None, ttl: float | None = None) -> None:
+        self.fsm.set(chat_id, user_id, state, data, ttl)
+
+    def get_state(self, chat_id: int | str, user_id: int | str) -> str | None:
+        return self.fsm.get(chat_id, user_id)
+
+    def get_state_data(self, chat_id: int | str, user_id: int | str) -> dict[str, Any] | None:
+        return self.fsm.get_data(chat_id, user_id)
+
+    def clear_state(self, chat_id: int | str, user_id: int | str) -> None:
+        self.fsm.clear(chat_id, user_id)
+
     async def close(self) -> None:
         self.stop_ev.set()
+        await self.fsm.stop()
         await self.disp.close()
         if self.bot:
             await self.bot.close()
@@ -352,6 +367,7 @@ class AppCore:
         tasks = []
         try:
             tasks.append(asyncio.create_task(self.disp.consume(), name="disp"))
+            await self.fsm.start()
             if self.bot:
                 self.log.info("Bot transport is enabled.")
                 try:
