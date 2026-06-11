@@ -64,7 +64,7 @@ def _html_to_entities(text:str)->tuple[str, list[tuple[int,int,int,str|None]]]:
 
 log = logging.getLogger("goygram.mtproto")
 
-from .tl_core import IntermediateTransport, MTCodec, MTMessage, MsgIdGen, Reader, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
+from .tl_core import IntermediateTransport, MTCodec, MTMessage, MsgIdGen, Reader, build_msg_container, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
 
 try:
     from goygram import ext as rx
@@ -686,7 +686,27 @@ class MTNet:
                     self._init_done = False
                     log.info('Server salt updated to 0x%x, retrying msg %s', new_salt, bad_msg_id)
                     entry = self.pending.pop(bad_msg_id, None)
-                    if entry is not None:
+                    if entry is None:
+                        return
+                    if isinstance(entry, dict) and entry.get('type') == 'container':
+                        new_sub_ids = []
+                        saved_objs = []
+                        for old_sub_id in entry['msg_ids']:
+                            sub_entry = self.pending.pop(old_sub_id, None)
+                            if sub_entry is None:
+                                continue
+                            fut2, saved_obj2 = sub_entry
+                            if fut2.done():
+                                continue
+                            new_id = self.msg_ids.next()
+                            self.pending[new_id] = (fut2, saved_obj2)
+                            new_sub_ids.append(new_id)
+                            saved_objs.append(saved_obj2)
+                        if new_sub_ids:
+                            new_container_id = self.msg_ids.next()
+                            self.pending[new_container_id] = {'type': 'container', 'msg_ids': new_sub_ids}
+                            asyncio.create_task(self._resend_container(new_container_id, saved_objs, new_sub_ids))
+                    else:
                         fut, saved_obj = entry
                         if not fut.done():
                             new_msg_id = self.msg_ids.next()
@@ -1050,6 +1070,102 @@ class MTNet:
             }
         except Exception:
             return None
+
+    async def send_container(self, calls:list[tuple[str,dict[str,Any]]])->int:
+        await self.ensure_auth_key()
+        if rx is None:
+            raise RuntimeError('rx (goygram.ext._ext) is not available; cannot encrypt')
+        loop = asyncio.get_running_loop()
+        sub_ids:list[int] = []
+        saved_objs:list[dict[str,Any]] = []
+        bodies:list[bytes] = []
+        for act, kw in calls:
+            obj:dict[str,Any] = {'act': act}
+            obj.update({k: v for k, v in kw.items() if v is not None})
+            sub_id = self.msg_ids.next()
+            fut:asyncio.Future[dict[str,Any]] = loop.create_future()
+            self.pending[sub_id] = (fut, obj)
+            sub_ids.append(sub_id)
+            saved_objs.append(obj)
+        for obj in saved_objs:
+            body = self._build_body(obj.get('act', ''), obj)
+            bodies.append(body)
+        seq_list:list[int] = []
+        for _ in bodies:
+            self.seq += 1
+            seq_list.append(self.seq * 2 - 1)
+        container_body = build_msg_container([(sid, seq, bd) for (sid, seq), bd in zip(sub_ids, seq_list, bodies)])
+        api_id = None
+        for _, kw in calls:
+            if kw.get('api_id'):
+                api_id = int(kw['api_id'])
+                break
+        if api_id is None:
+            api_id = self._api_id
+        if api_id is not None:
+            self._api_id = int(api_id)
+        if not self._init_done and self._api_id:
+            container_body = self.codec.wrap_init(self._api_id, container_body)
+            self._init_done = True
+        self.seq += 1
+        outer_seq_no = self.seq * 2 - 1
+        container_msg_id = self.msg_ids.next()
+        m = b''
+        m += self.server_salt + self.session_id + container_msg_id.to_bytes(8, 'little', signed=True) + outer_seq_no.to_bytes(4, 'little', signed=True)
+        m += len(container_body).to_bytes(4, 'little', signed=True) + container_body
+        pad = secrets.token_bytes((16 - (len(m) + 12) % 16) % 16 + 12)
+        msg_key_large = sha256(self.auth_key[88:120] + m + pad).digest()
+        msg_key = msg_key_large[8:24]
+        aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, True)
+        enc = bytes(rx.aes_ige_enc_raw(m + pad, aes_key, aes_iv))
+        pkt = self.pack(int.from_bytes(sha1(self.auth_key).digest()[-8:], 'little').to_bytes(8, 'little') + msg_key + enc)
+        log.debug('[TX] container msg_ids=%s', sub_ids)
+        self.wr.write(pkt)
+        await self.wr.drain()
+        self.pending[container_msg_id] = {'type': 'container', 'msg_ids': sub_ids}
+        return container_msg_id
+
+    async def _resend_container(self, container_msg_id:int, saved_objs:list[dict[str,Any]], sub_msg_ids:list[int])->None:
+        try:
+            await self.ensure_auth_key()
+            if rx is None:
+                raise RuntimeError('rx (goygram.ext._ext) is not available; cannot encrypt')
+            bodies:list[bytes] = []
+            for obj in saved_objs:
+                body = self._build_body(obj.get('act', ''), obj)
+                bodies.append(body)
+            seq_list:list[int] = []
+            for _ in bodies:
+                self.seq += 1
+                seq_list.append(self.seq * 2 - 1)
+            container_body = build_msg_container([(sid, seq, bd) for (sid, seq), bd in zip(sub_msg_ids, seq_list, bodies)])
+            if not self._init_done and self._api_id:
+                container_body = self.codec.wrap_init(self._api_id, container_body)
+                self._init_done = True
+            self.seq += 1
+            outer_seq_no = self.seq * 2 - 1
+            m = b''
+            m += self.server_salt + self.session_id + container_msg_id.to_bytes(8, 'little', signed=True) + outer_seq_no.to_bytes(4, 'little', signed=True)
+            m += len(container_body).to_bytes(4, 'little', signed=True) + container_body
+            pad = secrets.token_bytes((16 - (len(m) + 12) % 16) % 16 + 12)
+            msg_key_large = sha256(self.auth_key[88:120] + m + pad).digest()
+            msg_key = msg_key_large[8:24]
+            aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, True)
+            enc = bytes(rx.aes_ige_enc_raw(m + pad, aes_key, aes_iv))
+            pkt = self.pack(int.from_bytes(sha1(self.auth_key).digest()[-8:], 'little').to_bytes(8, 'little') + msg_key + enc)
+            log.debug('[TX] resend container msg_ids=%s', sub_msg_ids)
+            self.wr.write(pkt)
+            await self.wr.drain()
+        except Exception as e:
+            log.error('Resend container failed for container_msg_id=%s: %r', container_msg_id, e)
+            self.pending.pop(container_msg_id, None)
+            for sub_id in sub_msg_ids:
+                entry = self.pending.pop(sub_id, None)
+                if entry is None:
+                    continue
+                fut = entry[0] if isinstance(entry, tuple) else entry
+                if fut and not fut.done():
+                    fut.set_exception(e)
 
     async def _resend(self, msg_id:int, obj:dict[str,Any])->None:
         try:

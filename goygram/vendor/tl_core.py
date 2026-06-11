@@ -586,3 +586,9 @@ def rsa_pad_encrypt(data:bytes,n:int,e:int)->bytes:
     d=sha1(data).digest()+data
     d+=secrets.token_bytes(255-len(d))
     return pow(int.from_bytes(d,'big'),e,n).to_bytes(256,'big')
+
+def build_msg_container(messages:list[tuple[int,int,bytes]])->bytes:
+    raw=struct.pack('<I',0x73f1f8dc)+struct.pack('<i',len(messages))
+    for msg_id,seqno,body in messages:
+        raw+=struct.pack('<q',msg_id)+struct.pack('<i',seqno)+struct.pack('<i',len(body))+body
+    return raw
