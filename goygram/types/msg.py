@@ -6,7 +6,7 @@ from typing import Any
 
 
 class MsgObj:
-    __slots__ = ("src", "raw", "app", "id", "chat_id", "from_id", "text", "is_me")
+    __slots__ = ("src", "raw", "app", "id", "chat_id", "from_id", "text", "is_me", "cmd", "args", "match", "finds", "parts")
 
     src: str
     raw: dict[str, Any]
@@ -16,6 +16,11 @@ class MsgObj:
     from_id: int | None
     text: str
     is_me: bool
+    cmd: str | None
+    args: str | None
+    match: Any | None
+    finds: list[Any] | None
+    parts: list[str] | None
 
     def __init__(self, src: str, raw: dict[str, Any], app: Any) -> None:
         self.src = src
@@ -26,6 +31,11 @@ class MsgObj:
         self.from_id = raw.get("from_id")
         self.text = str(raw.get("text", ""))
         self.is_me = bool(raw.get("is_me", False))
+        self.cmd = None
+        self.args = None
+        self.match = None
+        self.finds = None
+        self.parts = None
 
     @property
     def msg_id(self) -> int | None:

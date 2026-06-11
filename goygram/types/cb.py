@@ -5,7 +5,7 @@ from typing import Any
 
 
 class CbObj:
-    __slots__ = ("src", "raw", "app", "id", "chat_id", "from_id", "msg_id", "data", "text")
+    __slots__ = ("src", "raw", "app", "id", "chat_id", "from_id", "msg_id", "data", "text", "match", "payload", "json_data")
 
     def __init__(self, src: str, raw: dict[str, Any], app: Any) -> None:
         self.src = src
@@ -17,6 +17,9 @@ class CbObj:
         self.msg_id = raw.get("msg_id")
         self.data = raw.get("data", "")
         self.text = raw.get("text", "")
+        self.match = None
+        self.payload = None
+        self.json_data = None
 
     async def answer(self, text: str | None = None, alert: bool = False, url: str | None = None, cache_time: int = 0) -> Any:
         if self.id is None:

@@ -105,6 +105,7 @@ class AppCore:
         self.cmd_hook: list[Fn] = []
         self.poll_hook: list[PollFn] = []
         self.member_hook: list[MemFn] = []
+        self.update_hook: list[Callable[[object], Awaitable[Any]]] = []
         self.stop_ev = asyncio.Event()
         self.log = get_logger("goygram.app")
         self.self_id: int | None = None
@@ -165,33 +166,69 @@ class AppCore:
             return wrap(fn)
         return wrap
 
-    def on_cb(self, fn: CbFn) -> CbFn:
-        self.cb_hook.append(fn)
-        return fn
+    def on_cb(self, fn: CbFn | None = None, *, filt: Filter | None = None):
+        def wrap(inner: CbFn) -> CbFn:
+            if filt is None:
+                self.cb_hook.append(inner)
+                return inner
+            async def guarded(cb: CbObj) -> Any:
+                if filt(cb):
+                    return await inner(cb)
+                return None
+            self.cb_hook.append(guarded)
+            return inner
+        if fn is not None:
+            return wrap(fn)
+        return wrap
 
-    def on_poll(self, fn: PollFn) -> PollFn:
-        self.poll_hook.append(fn)
-        return fn
+    def on_poll(self, fn: PollFn | None = None, *, filt: Filter | None = None):
+        def wrap(inner: PollFn) -> PollFn:
+            if filt is None:
+                self.poll_hook.append(inner)
+                return inner
+            async def guarded(poll: PollObj) -> Any:
+                if filt(poll):
+                    return await inner(poll)
+                return None
+            self.poll_hook.append(guarded)
+            return inner
+        if fn is not None:
+            return wrap(fn)
+        return wrap
 
-    def on_member(self, fn: MemFn) -> MemFn:
-        self.member_hook.append(fn)
-        return fn
+    def on_member(self, fn: MemFn | None = None, *, filt: Filter | None = None):
+        def wrap(inner: MemFn) -> MemFn:
+            if filt is None:
+                self.member_hook.append(inner)
+                return inner
+            async def guarded(mem: MemberObj) -> Any:
+                if filt(mem):
+                    return await inner(mem)
+                return None
+            self.member_hook.append(guarded)
+            return inner
+        if fn is not None:
+            return wrap(fn)
+        return wrap
+
+    def on_update(self, fn: Callable[[object], Awaitable[Any]] | None = None, *, filt: Filter | None = None):
+        def wrap(inner: Callable[[object], Awaitable[Any]]) -> Callable[[object], Awaitable[Any]]:
+            if filt is None:
+                self.update_hook.append(inner)
+                return inner
+            async def guarded(event: object) -> Any:
+                if filt(event):
+                    return await inner(event)
+                return None
+            self.update_hook.append(guarded)
+            return inner
+        if fn is not None:
+            return wrap(fn)
+        return wrap
 
     def on_cmd(self, *name: str) -> Callable[[Fn], Fn]:
-        cmd = {x.lower() for x in name}
-        def wrap(fn: Fn) -> Fn:
-            async def inner(msg: MsgObj) -> Any:
-                txt = (msg.text or "").strip()
-                if not txt:
-                    return None
-                head = txt.split(None, 1)[0]
-                base = head.split("@", 1)[0].lower()
-                if base not in cmd:
-                    return None
-                return await fn(msg)
-            self.cmd_hook.append(inner)
-            return fn
-        return wrap
+        from goygram.filters import command as _cmd_filt
+        return self.on_msg(filt=_cmd_filt(*name))
 
     def _bot_method_name(self, name: str) -> str:
         if "_" in name:
@@ -398,17 +435,20 @@ class GoyGram:
     def on_msg(self, fn: Fn | None = None, filt: Filter | None = None):
         return self.core.on_msg(fn, filt=filt)
 
-    def on_cb(self, fn: CbFn) -> CbFn:
-        return self.core.on_cb(fn)
+    def on_cb(self, fn: CbFn | None = None, *, filt: Filter | None = None):
+        return self.core.on_cb(fn, filt=filt)
 
     def on_cmd(self, *name: str) -> Callable[[Fn], Fn]:
         return self.core.on_cmd(*name)
 
-    def on_poll(self, fn: PollFn) -> PollFn:
-        return self.core.on_poll(fn)
+    def on_poll(self, fn: PollFn | None = None, *, filt: Filter | None = None):
+        return self.core.on_poll(fn, filt=filt)
 
-    def on_member(self, fn: MemFn) -> MemFn:
-        return self.core.on_member(fn)
+    def on_member(self, fn: MemFn | None = None, *, filt: Filter | None = None):
+        return self.core.on_member(fn, filt=filt)
+
+    def on_update(self, fn: Callable[[object], Awaitable[Any]] | None = None, *, filt: Filter | None = None):
+        return self.core.on_update(fn, filt=filt)
 
     def help(self) -> None:
         self.core.help()

@@ -50,10 +50,22 @@ class Disp:
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+            for fn in list(getattr(self.app, "update_hook", [])):
+                try:
+                    await fn(msg)
+                except Exception as e:
+                    self.log.error("Handler failure: %r", e)
+                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             return
         if kind == "poll":
             poll = PollObj(pkt.get("src", "sys"), data, self.app)
             for fn in list(getattr(self.app, "poll_hook", [])):
+                try:
+                    await fn(poll)
+                except Exception as e:
+                    self.log.error("Handler failure: %r", e)
+                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+            for fn in list(getattr(self.app, "update_hook", [])):
                 try:
                     await fn(poll)
                 except Exception as e:
@@ -68,11 +80,23 @@ class Disp:
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+            for fn in list(getattr(self.app, "update_hook", [])):
+                try:
+                    await fn(cb)
+                except Exception as e:
+                    self.log.error("Handler failure: %r", e)
+                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             return
         if kind != "member":
             return
         mem = MemberObj(pkt.get("src", "sys"), data, self.app)
         for fn in list(getattr(self.app, "member_hook", [])):
+            try:
+                await fn(mem)
+            except Exception as e:
+                self.log.error("Handler failure: %r", e)
+                await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+        for fn in list(getattr(self.app, "update_hook", [])):
             try:
                 await fn(mem)
             except Exception as e:
