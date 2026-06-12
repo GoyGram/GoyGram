@@ -305,6 +305,22 @@ class AppCore:
             return "mt"
         raise RuntimeError("no transport configured")
 
+    def ikb(self) -> Any:
+        from goygram.types.kbd import KbdBuilder
+        return KbdBuilder(kind="inline")
+
+    def rkb(self, **opts: Any) -> Any:
+        from goygram.types.kbd import KbdBuilder
+        return KbdBuilder(kind="reply", **opts)
+
+    def frk(self, **opts: Any) -> Any:
+        from goygram.types.kbd import KbdBuilder
+        return KbdBuilder(kind="force", **opts)
+
+    def rgk(self, **opts: Any) -> Any:
+        from goygram.types.kbd import KbdBuilder
+        return KbdBuilder(kind="remove", **opts)
+
     def html(self, text: str) -> dict[str, Any]:
         return {"text": text, "parse_mode": "HTML"}
 

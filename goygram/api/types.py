@@ -43,54 +43,6 @@ class Chat:
             "username": dump(self.username),
         }
 
-class InlineKeyboardButton:
-    __slots__ = ('text', 'callback_data', 'url')
-    def __init__(self, text: str, callback_data: str|None = None, url: str|None = None) -> None:
-        self.text = text
-        self.callback_data = callback_data
-        self.url = url
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "text": dump(self.text),
-            "callback_data": dump(self.callback_data),
-            "url": dump(self.url),
-        }
-
-class InlineKeyboardMarkup:
-    __slots__ = ('inline_keyboard')
-    def __init__(self, inline_keyboard: list[InlineKeyboardButton]) -> None:
-        self.inline_keyboard = inline_keyboard
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "inline_keyboard": dump(self.inline_keyboard),
-        }
-
-class KeyboardButton:
-    __slots__ = ('text')
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "text": dump(self.text),
-        }
-
-class ReplyKeyboardMarkup:
-    __slots__ = ('keyboard', 'resize_keyboard', 'one_time_keyboard')
-    def __init__(self, keyboard: list[KeyboardButton], resize_keyboard: bool|None = None, one_time_keyboard: bool|None = None) -> None:
-        self.keyboard = keyboard
-        self.resize_keyboard = resize_keyboard
-        self.one_time_keyboard = one_time_keyboard
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "keyboard": dump(self.keyboard),
-            "resize_keyboard": dump(self.resize_keyboard),
-            "one_time_keyboard": dump(self.one_time_keyboard),
-        }
-
 class Message:
     __slots__ = ('message_id', 'date', 'chat', 'text')
     def __init__(self, message_id: int, date: int, chat: Chat, text: str|None = None) -> None:
@@ -107,4 +59,4 @@ class Message:
             "text": dump(self.text),
         }
 
-__all__ = ['User', 'Chat', 'InlineKeyboardButton', 'InlineKeyboardMarkup', 'KeyboardButton', 'ReplyKeyboardMarkup', 'Message']
+__all__ = ['User', 'Chat', 'Message']
