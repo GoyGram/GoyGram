@@ -104,7 +104,6 @@ class AppCore:
         self.disp = Disp(self, self.bus)
         self.hook: list[Fn] = []
         self.cb_hook: list[CbFn] = []
-        self.cmd_hook: list[Fn] = []
         self.poll_hook: list[PollFn] = []
         self.member_hook: list[MemFn] = []
         self.update_hook: list[Callable[[object], Awaitable[Any]]] = []

@@ -47,14 +47,6 @@ class Disp:
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
-            for fn in list(getattr(self.app, "cmd_hook", [])):
-                try:
-                    await fn(msg)
-                except StopPropagation:
-                    return
-                except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             for fn in list(getattr(self.app, "update_hook", [])):
                 try:
                     await fn(msg)
