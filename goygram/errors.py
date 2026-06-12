@@ -8,6 +8,10 @@ class GoyGramError(Exception):
     pass
 
 
+class StopPropagation(GoyGramError):
+    pass
+
+
 class TransportError(GoyGramError):
     pass
 

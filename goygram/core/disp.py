@@ -7,6 +7,7 @@ from typing import Any
 
 from goygram.logging import get_logger
 
+from goygram.errors import StopPropagation
 from goygram.types.cb import CbObj
 from goygram.types.member import MemberObj
 from goygram.types.msg import MsgObj
@@ -41,18 +42,24 @@ class Disp:
             for fn in list(self.app.hook):
                 try:
                     await fn(msg)
+                except StopPropagation:
+                    return
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             for fn in list(getattr(self.app, "cmd_hook", [])):
                 try:
                     await fn(msg)
+                except StopPropagation:
+                    return
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             for fn in list(getattr(self.app, "update_hook", [])):
                 try:
                     await fn(msg)
+                except StopPropagation:
+                    return
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
@@ -62,12 +69,16 @@ class Disp:
             for fn in list(getattr(self.app, "poll_hook", [])):
                 try:
                     await fn(poll)
+                except StopPropagation:
+                    return
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             for fn in list(getattr(self.app, "update_hook", [])):
                 try:
                     await fn(poll)
+                except StopPropagation:
+                    return
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
@@ -77,12 +88,16 @@ class Disp:
             for fn in list(getattr(self.app, "cb_hook", [])):
                 try:
                     await fn(cb)
+                except StopPropagation:
+                    return
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             for fn in list(getattr(self.app, "update_hook", [])):
                 try:
                     await fn(cb)
+                except StopPropagation:
+                    return
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
@@ -93,12 +108,16 @@ class Disp:
         for fn in list(getattr(self.app, "member_hook", [])):
             try:
                 await fn(mem)
+            except StopPropagation:
+                return
             except Exception as e:
                 self.log.error("Handler failure: %r", e)
                 await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
         for fn in list(getattr(self.app, "update_hook", [])):
             try:
                 await fn(mem)
+            except StopPropagation:
+                return
             except Exception as e:
                 self.log.error("Handler failure: %r", e)
                 await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
