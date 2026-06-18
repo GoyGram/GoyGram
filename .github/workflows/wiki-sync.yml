@@ -1,0 +1,17 @@
+name: Sync Wiki to Docs
+
+on:
+  gollum:
+  workflow_dispatch:
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger docs rebuild
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.PAGES_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/GoyGram/goygram-docs/dispatches \
+            -d '{"event_type":"wiki-updated"}'
