@@ -9,7 +9,7 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-red.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
 [![Telegram API](https://img.shields.io/badge/Telegram-MTProto_%7C_BotAPI-2CA5E0.svg?style=for-the-badge&logo=telegram)](https://telegram.org)
 [![Security](https://img.shields.io/badge/OpSec-Vault_Encrypted-black.svg?style=for-the-badge&logo=security)](https://github.com/sepiol026-wq/GoyGram)
-[![Docs & Wiki](https://img.shields.io/badge/Docs-Read_the_Wiki-blue.svg?style=for-the-badge&logo=readthedocs)](https://github.com/sepiol026-wq/GoyGram/wiki)
+[![Docs & Wiki](https://img.shields.io/badge/Docs-Read_the_Wiki-blue.svg?style=for-the-badge&logo=readthedocs)](https://goygram.github.io/docs)
 
 ## What is this?
 
@@ -212,7 +212,7 @@ Logger hierarchy: `goygram.app`, `goygram.botapi`, `goygram.mtproto`, `goygram.d
 
 ## Wiki
 > 📚 **55 pages of documentation...** Every line of GoyGram, explained.
-> 👉 **[Check out the Official GoyGram Wiki!](https://github.com/sepiol026-wq/GoyGram/wiki)**
+> 👉 **[Check out the Official GoyGram Docs!](https://goygram.github.io/docs)**
 
 ## License
 See [LICENSE](./LICENSE).
