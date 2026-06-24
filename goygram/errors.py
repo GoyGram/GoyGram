@@ -309,7 +309,7 @@ class RustExtError(GoyGramError):
 
 
 _ERROR_PATTERNS: list[tuple[str, type[RPCError]]] = [
-    (r"^FLOOD_WAIT_(\d+)$", None),  # special handling — extracts seconds
+    (r"^FLOOD_WAIT_(\d+)$", None),
 
     ("USER_RESTRICTED", UserRestrictedError),
     ("USER_BANNED", UserBannedError),
