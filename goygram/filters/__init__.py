@@ -236,7 +236,6 @@ def _has_entity(e: object, etype: str) -> bool:
     return False
 
 
-# ═══════════════ TEXT ═══════════════
 
 text = Filter(lambda e: bool(getattr(e, "text", None)), _name="text")
 
@@ -489,7 +488,6 @@ class is_language(Filter):
         return False
 
 
-# ═══════════════ ENTITIES ═══════════════
 
 class has_entity(Filter):
     def __init__(self, entity_type: str):
@@ -554,7 +552,6 @@ class mentioned(Filter):
 
 mentioned = mentioned()
 
-# ═══════════════ MEDIA ═══════════════
 
 photo = Filter(lambda e: _mkey(e) == "photo", _name="photo")
 video = Filter(lambda e: _mkey(e) == "video", _name="video")
@@ -721,7 +718,6 @@ class album_len(Filter):
         return True
 
 
-# ═══════════════ CAPTION ═══════════════
 
 class caption_regex(Filter):
     def __init__(self, pattern: str, flags: int = 0):
@@ -766,7 +762,6 @@ class caption_len(Filter):
         return True
 
 
-# ═══════════════ CHAT TYPE ═══════════════
 
 private = Filter(lambda e: _ct(e) == "private", _name="private")
 group = Filter(lambda e: _ct(e) == "group", _name="group")
@@ -831,7 +826,6 @@ class topic(Filter):
             return False
 
 
-# ═══════════════ SENDER ═══════════════
 
 me = Filter(
     lambda e: bool(getattr(e, "is_me", False) or getattr(e, "from_id", None) == getattr(getattr(e, "app", None), "self_id", object())),
@@ -904,7 +898,6 @@ class lang_code(Filter):
         return str(lc or "").lower() == self._lang
 
 
-# ═══════════════ MESSAGE PROPERTIES ═══════════════
 
 edited = Filter(lambda e: bool(_rget(e, "edit_date")), _name="edited")
 forwarded = Filter(
@@ -972,7 +965,6 @@ class message_id(Filter):
             return False
 
 
-# ═══════════════ SERVICE MESSAGE ═══════════════
 
 new_chat_members = Filter(lambda e: bool(_rget(e, "new_chat_members")), _name="new_chat_members")
 left_chat_member = Filter(lambda e: bool(_rget(e, "left_chat_member")), _name="left_chat_member")
@@ -1024,7 +1016,6 @@ service = Filter(
 )
 
 
-# ═══════════════ CALLBACK QUERY ═══════════════
 
 class cb_data(Filter):
     def __init__(self, data: str):
@@ -1188,7 +1179,6 @@ cb_game = Filter(lambda e: bool(_rget(e, "game_short_name")), _name="cb_game")
 cb_any = Filter(lambda e: True, _name="cb_any")
 
 
-# ═══════════════ POLL ═══════════════
 
 poll_filter = Filter(lambda e: True, _name="poll_filter")
 poll_closed = Filter(lambda e: bool(getattr(e, "closed", False)), _name="poll_closed")
@@ -1272,7 +1262,6 @@ poll_any = poll_filter
 poll_answer = Filter(lambda e: getattr(e, "kind", None) == "poll_answer", _name="poll_answer")
 
 
-# ═══════════════ MEMBER UPDATE ═══════════════
 
 def _mtrans(e: object, old_s: str | None, new_s: str | None) -> bool:
     old_ok = old_s is None or getattr(e, "old", None) == old_s
@@ -1351,7 +1340,6 @@ member_self = Filter(
 member_any = Filter(lambda e: True, _name="member_any")
 
 
-# ═══════════════ CROSS-TYPE ═══════════════
 
 class update_type(Filter):
     _MAP = {"msg": "MsgObj", "cb": "CbObj", "poll": "PollObj", "member": "MemberObj"}
@@ -1429,7 +1417,6 @@ class state_any(Filter):
         return cur is not None and cur in self._names
 
 
-# ═══════════════ UTILITY ═══════════════
 
 any_filter = Filter(lambda e: True, _name="any")
 none_filter = Filter(lambda e: False, _name="none")
@@ -1480,7 +1467,6 @@ def invert(f: Filter) -> Filter:
     return ~f
 
 
-# ═══════════════ CONDITIONAL ═══════════════
 
 def if_(cond: Filter, then_f: Filter, else_f: Filter | None = None) -> Filter:
     ef = else_f or none_filter
@@ -1490,7 +1476,6 @@ def unless(filter_a: Filter, filter_b: Filter) -> Filter:
     return if_(~filter_b, filter_a)
 
 
-# ═══════════════ STATEFUL ═══════════════
 
 class once(Filter):
     def __init__(self, inner: Filter | None = None):
@@ -1581,7 +1566,6 @@ class throttled(Filter):
         return ok
 
 
-# ═══════════════ FILTER DATA ═══════════════
 
 class _AnyData(Filter):
     def __init__(self):
@@ -1604,7 +1588,6 @@ class filter_data(Filter):
         return True
 
 
-# ═══════════════ EXPORT ═══════════════
 
 __all__ = [
     "Filter",
