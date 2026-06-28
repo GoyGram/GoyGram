@@ -15,4 +15,4 @@ from . import filters
 try:
     __version__ = pkg_version("goygram")
 except PackageNotFoundError:
-    __version__ = "0.0.0"
+    __version__ = "0.6.6"
