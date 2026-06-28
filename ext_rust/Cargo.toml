@@ -1,0 +1,22 @@
+# CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
+[package]
+name = "goygram_ext"
+version = "0.6.0"
+edition = "2021"
+
+[lib]
+name = "goygram_ext"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.21.2", features = ["extension-module", "abi3", "abi3-py311"] }
+aes = "0.8.4"
+aes-gcm = "0.10.3"
+cipher = "0.4.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+strip = true
+lto = true
+opt-level = 3
