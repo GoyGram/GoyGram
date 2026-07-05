@@ -651,6 +651,8 @@ class MTNet:
                 return
             if cid in {0x74ae4240, 0x725b04c3}:
                 try:
+                    if cid == 0x74ae4240:
+                        _ = rm.i32()
                     vec_cid = rm.u32()
                     if vec_cid == 0x1cb5c415:
                         upd_cnt = rm.i32()
@@ -919,31 +921,34 @@ class MTNet:
         r = Reader(result)
         cid = r.u32()
         if cid == 0x74ae4240:
-            count = r.i32()
+            _ = r.i32()
+            vec_cid = r.u32()
             updates = []
             msg_id = None
-            for _ in range(min(count, 50)):
-                if r.p + 4 > len(result):
-                    break
-                uc = int.from_bytes(result[r.p:r.p+4], "little")
-                if uc == 0x1f2b0afd:
-                    r.p += 4
-                    _flags = r.i32()
-                    mid = r.i32()
-                    msg_id = mid
-                    updates.append({"_": "updateNewMessage", "id": mid})
-                    break
-                elif uc == 0xed85eab5:
-                    r.p += 4
-                    flags = r.i32()
-                    cn = r.u32()
-                    r.p -= 4
-                    self._skip_peer(r)
-                    cnt = r.i32()
-                    ids = [r.i32() for _ in range(min(cnt, 20))]
-                    updates.append({"_": "updatePinnedMessages", "ids": ids})
-                else:
-                    r.p += 4
+            if vec_cid == 0x1cb5c415:
+                count = r.i32()
+                for _ in range(min(count, 50)):
+                    if r.p + 4 > len(result):
+                        break
+                    uc = int.from_bytes(result[r.p:r.p+4], "little")
+                    if uc == 0x1f2b0afd:
+                        r.p += 4
+                        _flags = r.i32()
+                        mid = r.i32()
+                        msg_id = mid
+                        updates.append({"_": "updateNewMessage", "id": mid})
+                        break
+                    elif uc == 0xed85eab5:
+                        r.p += 4
+                        flags = r.i32()
+                        cn = r.u32()
+                        r.p -= 4
+                        self._skip_peer(r)
+                        cnt = r.i32()
+                        ids = [r.i32() for _ in range(min(cnt, 20))]
+                        updates.append({"_": "updatePinnedMessages", "ids": ids})
+                    else:
+                        r.p += 4
             return {"ok": True, "updates": updates, "id": msg_id}
         if cid == 0x9015e101:
             _flags = r.i32()
