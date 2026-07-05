@@ -1287,7 +1287,8 @@ class MTNet:
         return await self._rpc_call('auth.checkPassword', password=srp)
 
     async def call(self, act:str, **kw:Any)->dict[str,Any]:
-        if act == 'auth.checkPassword' and 'srp_id' not in kw and 'password' in kw and isinstance(kw['password'], str):
+        normalized = self._norm_act(act)
+        if normalized == 'auth.checkPassword' and 'srp_id' not in kw and 'password' in kw and isinstance(kw['password'], str):
             return await self._auth_check_password_flow(kw['password'], int(kw.get('api_id', 0)))
         return await self._rpc_call(act, **kw)
 

@@ -407,53 +407,55 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                     break
                 
                 app.mt.qr_update_ev.clear()
-                poll_res = await _mt_req_with_migrate(app, "auth_export_login_token", api_id=api_id, api_hash=api_hash, except_ids=[])
+                try:
+                    poll_res = await _mt_req_with_migrate(app, "auth_export_login_token", api_id=api_id, api_hash=api_hash, except_ids=[])
+                except GoyGramError as e:
+                    poll_err = str(e)
+                    if "SESSION_PASSWORD_NEEDED" in poll_err:
+                        if _is_interactive() and qr_lines_printed > 0:
+                            sys.stdout.write("\n")
+                        while True:
+                            pwd = await _ask_non_empty("2FA password: ", is_password=True)
+                            try:
+                                check = await _mt_req_with_migrate(app, "auth_check_password", password=pwd, api_id=api_id, api_hash=api_hash)
+                            except GoyGramError as e2:
+                                if _is_interactive():
+                                    from rich.console import Console
+                                    Console().print(f"[bold red]2FA error: {e2}[/bold red]")
+                                else:
+                                    print(f"2FA error: {e2}")
+                                continue
+                            except Exception as e2:
+                                if _is_interactive():
+                                    from rich.console import Console
+                                    Console().print(f"[bold red]auth.checkPassword failed: {e2}[/bold red]")
+                                else:
+                                    print(f"auth.checkPassword failed: {e2}")
+                                continue
+                            if not isinstance(check, dict):
+                                if _is_interactive():
+                                    from rich.console import Console
+                                    Console().print("[bold red]Unexpected MT response for auth.checkPassword[/bold red]")
+                                else:
+                                    print("Unexpected MT response for auth.checkPassword")
+                                continue
+                            check_err = _extract_error(check) or ""
+                            if check_err:
+                                if _is_interactive():
+                                    from rich.console import Console
+                                    Console().print(f"[bold red]2FA error: {check_err}[/bold red]")
+                                else:
+                                    print(f"2FA error: {check_err}")
+                                continue
+                            poll_res = check
+                            poll_res["type"] = "loginTokenSuccess"
+                            break
+                    else:
+                        if _is_interactive():
+                            from rich.console import Console
+                            Console().print(f"[bold red]QR poll error: {poll_err}[/bold red]")
+                        continue
                 
-                if poll_res.get("type") == "loginTokenSuccess":
-                    final = poll_res
-                    err = _extract_error(final) or ""
-                    if "SESSION_PASSWORD_NEEDED" in err or (final.get("user") is None and getattr(final, "raw", "").hex() == ""):
-                        pass
-                    if getattr(final, "raw", b"") or final.get("user") is None:
-                        pass
-                    user = _extract_user(final)
-                    if not user:
-                        pass
-
-                err = _extract_error(poll_res) or ""
-                if "SESSION_PASSWORD_NEEDED" in err:
-                    if _is_interactive() and qr_lines_printed > 0:
-                        sys.stdout.write("\n")
-                    while True:
-                        pwd = await _ask_non_empty("2FA password: ", is_password=True)
-                        try:
-                            check = await _mt_req_with_migrate(app, "auth_check_password", password=pwd, api_id=api_id, api_hash=api_hash)
-                        except Exception as e:
-                            if _is_interactive():
-                                from rich.console import Console
-                                Console().print(f"[bold red]auth.checkPassword failed: {e}[/bold red]")
-                            else:
-                                print(f"auth.checkPassword failed: {e}")
-                            continue
-                        if not isinstance(check, dict):
-                            if _is_interactive():
-                                from rich.console import Console
-                                Console().print("[bold red]Unexpected MT response for auth.checkPassword[/bold red]")
-                            else:
-                                print("Unexpected MT response for auth.checkPassword")
-                            continue
-                        check_err = _extract_error(check) or ""
-                        if check_err:
-                            if _is_interactive():
-                                from rich.console import Console
-                                Console().print(f"[bold red]2FA error: {check_err}[/bold red]")
-                            else:
-                                print(f"2FA error: {check_err}")
-                            continue
-                        poll_res = check
-                        poll_res["type"] = "loginTokenSuccess"
-                        break
-
                 if poll_res.get("type") == "loginTokenSuccess":
                     final = poll_res
                     user = _extract_user(final)
@@ -508,9 +510,13 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                     await app.mt.boot()
                     await app.mt.ensure_auth_key()
                     
-                    mig_res = await _mt_req_with_migrate(app, "auth_import_login_token", token=token_m, api_id=api_id)
-                    err = _extract_error(mig_res) or ""
-                    if "SESSION_PASSWORD_NEEDED" in err:
+                    try:
+                        mig_res = await _mt_req_with_migrate(app, "auth_import_login_token", token=token_m, api_id=api_id)
+                    except GoyGramError as e:
+                        mig_err = str(e)
+                    else:
+                        mig_err = _extract_error(mig_res) or ""
+                    if "SESSION_PASSWORD_NEEDED" in mig_err:
                         if _is_interactive() and qr_lines_printed > 0:
                             sys.stdout.write("\n")
                         while True:
