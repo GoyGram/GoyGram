@@ -3,6 +3,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
+use aes_gcm::{Aes256Gcm, KeyInit, aead::{Aead, Payload}, Nonce};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
@@ -418,6 +419,26 @@ fn aes_ige_dec_raw(data: Vec<u8>, key: Vec<u8>, iv: Vec<u8>) -> PyResult<Vec<u8>
 }
 
 #[pyfunction]
+fn aes_gcm_encrypt(py: Python<'_>, key: Vec<u8>, nonce: Vec<u8>, plaintext: Vec<u8>, aad: Vec<u8>) -> PyResult<Py<PyBytes>> {
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| PyRuntimeError::new_err(format!("AES-GCM key error: {}", e)))?;
+    let n = Nonce::from_slice(&nonce);
+    let ct = cipher.encrypt(n, Payload { msg: &plaintext, aad: &aad })
+        .map_err(|e| PyRuntimeError::new_err(format!("AES-GCM encrypt error: {}", e)))?;
+    Ok(PyBytes::new(py, &ct).into())
+}
+
+#[pyfunction]
+fn aes_gcm_decrypt(py: Python<'_>, key: Vec<u8>, nonce: Vec<u8>, ciphertext: Vec<u8>, aad: Vec<u8>) -> PyResult<Py<PyBytes>> {
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| PyRuntimeError::new_err(format!("AES-GCM key error: {}", e)))?;
+    let n = Nonce::from_slice(&nonce);
+    let pt = cipher.decrypt(n, Payload { msg: &ciphertext, aad: &aad })
+        .map_err(|e| PyRuntimeError::new_err(format!("AES-GCM decrypt error: {}", e)))?;
+    Ok(PyBytes::new(py, &pt).into())
+}
+
+#[pyfunction]
 fn cut(py: Python<'_>, data: Vec<u8>, offset: usize, length: usize) -> PyResult<Py<PyBytes>> {
     let end = (offset + length).min(data.len());
     Ok(PyBytes::new(py, &data[offset..end]).into())
@@ -443,6 +464,8 @@ fn ext(m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(aes_ige_dec, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_enc_raw, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_dec_raw, m)?)?;
+    m.add_function(wrap_pyfunction!(aes_gcm_encrypt, m)?)?;
+    m.add_function(wrap_pyfunction!(aes_gcm_decrypt, m)?)?;
     m.add_function(wrap_pyfunction!(cut, m)?)?;
     m.add_function(wrap_pyfunction!(pack, m)?)?;
     Ok(())

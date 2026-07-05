@@ -150,6 +150,9 @@ class AppCore:
             pass
 
     def on_msg(self, fn: Fn | None = None, filt: Filter | None = None):
+        if isinstance(fn, Filter):
+            filt = fn
+            fn = None
         def wrap(inner: Fn) -> Fn:
             if filt is None:
                 self.hook.append(inner)
@@ -165,6 +168,9 @@ class AppCore:
         return wrap
 
     def on_cb(self, fn: CbFn | None = None, *, filt: Filter | None = None):
+        if isinstance(fn, Filter):
+            filt = fn
+            fn = None
         def wrap(inner: CbFn) -> CbFn:
             if filt is None:
                 self.cb_hook.append(inner)
@@ -180,6 +186,9 @@ class AppCore:
         return wrap
 
     def on_poll(self, fn: PollFn | None = None, *, filt: Filter | None = None):
+        if isinstance(fn, Filter):
+            filt = fn
+            fn = None
         def wrap(inner: PollFn) -> PollFn:
             if filt is None:
                 self.poll_hook.append(inner)

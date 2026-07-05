@@ -58,8 +58,6 @@ def _derive_vault_key(session_name: str, salt: bytes | None = None) -> tuple[byt
 
 
 def _encrypt_vault_data(data: bytes, session_name: str) -> bytes:
-    if _rx is None:
-        raise RuntimeError("Rust extension not available, cannot encrypt vault")
     key, salt = _derive_vault_key(session_name)
     nonce = _secrets.token_bytes(12)
     ciphertext = _rx.aes_gcm_encrypt(key, nonce, data, b"")
@@ -67,8 +65,6 @@ def _encrypt_vault_data(data: bytes, session_name: str) -> bytes:
 
 
 def _decrypt_vault_data(raw: bytes, session_name: str) -> bytes:
-    if _rx is None:
-        raise RuntimeError("Rust extension not available, cannot decrypt vault")
     salt = raw[:16]
     nonce = raw[16:28]
     ciphertext = raw[28:]
@@ -92,8 +88,11 @@ def _read_vault(path: Path, session_name: str) -> dict[str, Any] | None:
     if not raw:
         return None
     if raw[0] == 0x7B:
-        log.info("Vault %s is in plain JSON format, will re-encrypt on next save.", path.name)
-        return json.loads(raw.decode())
+        log.info("Vault %s is in plain JSON format, re-encrypting now.", path.name)
+        data = json.loads(raw.decode())
+        _write_vault(path, data, session_name)
+        log.info("Vault %s re-encrypted successfully.", path.name)
+        return data
     try:
         plain = _decrypt_vault_data(raw, session_name)
         return json.loads(plain.decode())
