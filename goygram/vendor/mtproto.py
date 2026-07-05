@@ -651,11 +651,10 @@ class MTNet:
                 return
             if cid in {0x74ae4240, 0x725b04c3}:
                 try:
-                    _ = rm.i32()
                     vec_cid = rm.u32()
                     if vec_cid == 0x1cb5c415:
-                        upds = rm.i32()
-                        for i in range(min(upds, 30)):
+                        upd_cnt = rm.i32()
+                        for i in range(min(upd_cnt * 20, 200)):
                             if rm.p + 4 > len(inner):
                                 break
                             up_cid = int.from_bytes(inner[rm.p:rm.p+4], 'little')
