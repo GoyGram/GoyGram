@@ -1054,16 +1054,21 @@ class MTNet:
         from goygram import ext as _ext
         if _ext is None:
             raise RuntimeError('rx (goygram.ext._ext) is not available')
+        def _resolve_val(v: Any) -> Any:
+            if isinstance(v, dict) and '_' in v:
+                ctor_name = v.get('_')
+                inner = {k: _resolve_val(v2) for k, v2 in v.items() if k != '_'}
+                return _ext.serialize_constructor(ctor_name, json.dumps(inner)).hex()
+            if isinstance(v, (bytes, bytearray)):
+                return v.hex()
+            if isinstance(v, memoryview):
+                return bytes(v).hex()
+            return v
         data = {}
         for k, v in obj.items():
             if k == 'act' or v is None:
                 continue
-            if isinstance(v, (bytes, bytearray)):
-                data[k] = v.hex()
-            elif isinstance(v, memoryview):
-                data[k] = bytes(v).hex()
-            else:
-                data[k] = v
+            data[k] = _resolve_val(v)
         tl_name = self._norm_act(act)
         if tl_name == "auth.sendCode" and "settings" not in data:
             data["settings"] = _ext.serialize_constructor("codeSettings", json.dumps({"flags": 0})).hex()
