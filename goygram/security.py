@@ -17,6 +17,7 @@ import hashlib
 import secrets as _secrets
 
 from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+from goygram.errors import GoyGramError
 from goygram.logging import get_logger
 
 try:
@@ -303,13 +304,20 @@ def _extract_migrate_dc(err_text: str) -> int | None:
 
 async def _mt_req_with_migrate(app: Any, act: str, **kw: Any) -> dict[str, Any]:
     while True:
-        res = await app.mt_req(act, **kw)
-        if not isinstance(res, dict):
-            return {"error": "UNEXPECTED_RESPONSE", "raw": res}
-        err = (_extract_error(res) or "")
-        dc_id = _extract_migrate_dc(err)
-        if dc_id is None:
-            return res
+        try:
+            res = await app.mt_req(act, **kw)
+        except GoyGramError as exc:
+            dc_id = _extract_migrate_dc(str(exc))
+            if dc_id is None:
+                raise
+            log.info("MT request %s triggered migration to dc%s", act, dc_id)
+        else:
+            if not isinstance(res, dict):
+                return {"error": "UNEXPECTED_RESPONSE", "raw": res}
+            err = (_extract_error(res) or "")
+            dc_id = _extract_migrate_dc(err)
+            if dc_id is None:
+                return res
         dc_map = get_dynamic_dc_config()
         endpoint = pick_dc_endpoint(dc_map, preferred_dc=dc_id)
         await app.mt.close()
