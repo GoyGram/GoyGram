@@ -367,38 +367,28 @@ fn aes_ige_impl(data: &[u8], key: &[u8], iv: &[u8], direction: u8) -> Vec<u8> {
     use aes::Aes256;
 
     let cipher = Aes256::new_from_slice(key).expect("invalid key size");
-    let mut iv1 = [0u8; 16];
-    let mut iv2 = [0u8; 16];
-    iv1.copy_from_slice(&iv[..16]);
-    iv2.copy_from_slice(&iv[16..32]);
+    let mut x = [0u8; 16];
+    let mut y = [0u8; 16];
+    x.copy_from_slice(&iv[..16]);
+    y.copy_from_slice(&iv[16..32]);
     let mut result = data.to_vec();
-    let n = result.len();
     let bs = 16;
+    let nblk = result.len() / bs;
 
-    for i in (0..n).step_by(bs) {
-        if i + bs > n {
-            break;
-        }
+    for i in 0..nblk {
+        let off = i * bs;
         if direction == 0 {
-            for j in 0..bs {
-                result[i + j] ^= iv1[j];
-            }
-            cipher.decrypt_block((&mut result[i..i + bs]).into());
-            for j in 0..bs {
-                result[i + j] ^= iv2[j];
-            }
-            iv1.copy_from_slice(&data[i..i + bs]);
-            iv2.copy_from_slice(&result[i..i + bs]);
+            for j in 0..bs { result[off + j] ^= y[j]; }
+            cipher.decrypt_block((&mut result[off..off + bs]).into());
+            for j in 0..bs { result[off + j] ^= x[j]; }
+            x.copy_from_slice(&data[off..off + bs]);
+            y.copy_from_slice(&result[off..off + bs]);
         } else {
-            for j in 0..bs {
-                result[i + j] ^= iv2[j];
-            }
-            cipher.encrypt_block((&mut result[i..i + bs]).into());
-            for j in 0..bs {
-                result[i + j] ^= iv1[j];
-            }
-            iv1.copy_from_slice(&result[i..i + bs]);
-            iv2.copy_from_slice(&data[i..i + bs]);
+            for j in 0..bs { result[off + j] ^= x[j]; }
+            cipher.encrypt_block((&mut result[off..off + bs]).into());
+            for j in 0..bs { result[off + j] ^= y[j]; }
+            x.copy_from_slice(&result[off..off + bs]);
+            y.copy_from_slice(&data[off..off + bs]);
         }
     }
 
@@ -456,4 +446,19 @@ fn ext(m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cut, m)?)?;
     m.add_function(wrap_pyfunction!(pack, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::aes_ige_impl;
+
+    #[test]
+    fn ige_roundtrip() {
+        let key = [0u8; 32];
+        let iv = [1u8; 32];
+        let plain = [42u8; 64];
+        let enc = aes_ige_impl(&plain, &key, &iv, 1);
+        let dec = aes_ige_impl(&enc, &key, &iv, 0);
+        assert_eq!(&dec, &plain);
+    }
 }
