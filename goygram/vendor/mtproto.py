@@ -616,7 +616,7 @@ class MTNet:
                         return
                     _consume(chunk)
                 return
-            if cid in {0x3131d92f, 0x384523f4}:
+            if cid in {0x313bc7f8, 0x4d6deea5}:
                 try:
                     flags = rm.i32()
                     msg_id = rm.i32()
@@ -636,7 +636,7 @@ class MTNet:
                 except Exception:
                     pass
                 return
-            if cid == 0x9015e014:
+            if cid == 0x9015e101:
                 try:
                     _flags = rm.i32()
                     _msg_id = rm.i32()
@@ -654,6 +654,7 @@ class MTNet:
                 return
             if cid in {0x74ae4240, 0x725b04c3}:
                 try:
+                    _ = rm.i32()
                     vec_cid = rm.u32()
                     if vec_cid == 0x1cb5c415:
                         upds = rm.i32()
