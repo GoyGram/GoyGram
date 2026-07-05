@@ -679,7 +679,7 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
                     app,
                     "auth_sign_in",
                     phone_number=phone,
-                    code=code,
+                    phone_code=code,
                     phone_code_hash=phone_code_hash,
                     api_id=api_id,
                     api_hash=api_hash,
