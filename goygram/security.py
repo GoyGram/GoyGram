@@ -684,21 +684,21 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
                     api_id=api_id,
                     api_hash=api_hash,
                 )
+            except GoyGramError as e:
+                sign_err = str(e)
             except Exception as e:
-                if _is_interactive():
-                    from rich.console import Console
-                    Console().print(f"[bold red]auth.signIn failed: {e}[/bold red]")
-                else:
-                    print(f"auth.signIn failed: {e}")
-                continue
-            if not isinstance(sign, dict):
-                if _is_interactive():
-                    from rich.console import Console
-                    Console().print("[bold red]Unexpected MT response for auth.signIn[/bold red]")
-                else:
-                    print("Unexpected MT response for auth.signIn")
-                continue
-            sign_err = _extract_error(sign) or ""
+                sign_err = str(e)
+            else:
+                if not isinstance(sign, dict):
+                    if _is_interactive():
+                        from rich.console import Console
+                        Console().print("[bold red]Unexpected MT response for auth.signIn[/bold red]")
+                    else:
+                        print("Unexpected MT response for auth.signIn")
+                    continue
+                sign_err = _extract_error(sign) or ""
+                if not sign_err:
+                    final = sign
             if "PHONE_CODE_INVALID" in sign_err or "CODE_INVALID" in sign_err:
                 if _is_interactive():
                     from rich.console import Console
@@ -706,8 +706,13 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
                 else:
                     print("Invalid code, try again.")
                 continue
-
-            final = sign
+            if sign_err and "SESSION_PASSWORD_NEEDED" not in sign_err:
+                if _is_interactive():
+                    from rich.console import Console
+                    Console().print(f"[bold red]auth.signIn failed: {sign_err}[/bold red]")
+                else:
+                    print(f"auth.signIn failed: {sign_err}")
+                continue
             if "SESSION_PASSWORD_NEEDED" in sign_err:
                 while True:
                     pwd = await _ask_non_empty("2FA password: ", is_password=True)
