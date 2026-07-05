@@ -651,19 +651,13 @@ class MTNet:
                 return
             if cid in {0x74ae4240, 0x725b04c3}:
                 try:
-                    if cid == 0x74ae4240:
-                        _ = rm.i32()
                     vec_cid = rm.u32()
                     if vec_cid == 0x1cb5c415:
                         upd_cnt = rm.i32()
-                        for i in range(min(upd_cnt * 20, 200)):
-                            if rm.p + 4 > len(inner):
-                                break
-                            up_cid = int.from_bytes(inner[rm.p:rm.p+4], 'little')
-                            if up_cid in {0x1f2b0afd}:
-                                _consume(inner[rm.p:])
-                                break
-                            rm.p += 4
+                        needle = b'\xfd\x0a\x2b\x1f'
+                        pos = inner.find(needle, rm.p)
+                        if pos >= 0 and pos < len(inner) - 4:
+                            _consume(inner[pos:])
                 except Exception:
                     pass
                 return
@@ -691,7 +685,7 @@ class MTNet:
                 except Exception:
                     pass
                 return
-            if cid in {0xf2ebdb4e, 0xe5bdf8de, 0xc32d5b12}:
+            if cid in {0xf2ebdb4e, 0xe5bdf8de, 0xc32d5b12, 0xc01e857f}:
                 return
             if cid == 0xedab447b:
                 try:
@@ -921,34 +915,36 @@ class MTNet:
         r = Reader(result)
         cid = r.u32()
         if cid == 0x74ae4240:
-            _ = r.i32()
             vec_cid = r.u32()
             updates = []
             msg_id = None
             if vec_cid == 0x1cb5c415:
                 count = r.i32()
-                for _ in range(min(count, 50)):
-                    if r.p + 4 > len(result):
-                        break
-                    uc = int.from_bytes(result[r.p:r.p+4], "little")
-                    if uc == 0x1f2b0afd:
-                        r.p += 4
-                        _flags = r.i32()
-                        mid = r.i32()
-                        msg_id = mid
-                        updates.append({"_": "updateNewMessage", "id": mid})
-                        break
-                    elif uc == 0xed85eab5:
-                        r.p += 4
-                        flags = r.i32()
-                        cn = r.u32()
-                        r.p -= 4
-                        self._skip_peer(r)
-                        cnt = r.i32()
-                        ids = [r.i32() for _ in range(min(cnt, 20))]
-                        updates.append({"_": "updatePinnedMessages", "ids": ids})
-                    else:
-                        r.p += 4
+                upmid_needle = b'\xd6\xbf\x90\x4e'
+                upnm_needle = b'\xfd\x0a\x2b\x1f'
+                mid_pos = result.find(upmid_needle, r.p)
+                if mid_pos >= 0 and mid_pos + 8 <= len(result):
+                    msg_id = int.from_bytes(result[mid_pos+4:mid_pos+8], 'little')
+                if msg_id:
+                    updates.append({"_": "updateMessageID", "id": msg_id})
+                upnm_pos = result.find(upnm_needle, r.p)
+                if upnm_pos >= 0:
+                    updates.append({"_": "updateNewMessage", "id": msg_id})
+                pin_needle = b'\xb5\xea\x85\xed'
+                pin_pos = result.find(pin_needle, r.p)
+                if pin_pos >= 0:
+                    ids = []
+                    try:
+                        tr = Reader(result[pin_pos+4:])
+                        tr.i32()
+                        tr.i32()
+                        if tr.i32() > 0:
+                            tr = Reader(result[pin_pos+4+4+8:])
+                        cnt2 = tr.i32()
+                        ids = [tr.i32() for _ in range(min(cnt2, 20))]
+                    except Exception:
+                        pass
+                    updates.append({"_": "updatePinnedMessages", "ids": ids})
             return {"ok": True, "updates": updates, "id": msg_id}
         if cid == 0x9015e101:
             _flags = r.i32()
