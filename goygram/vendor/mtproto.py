@@ -1065,6 +1065,8 @@ class MTNet:
             else:
                 data[k] = v
         tl_name = self._norm_act(act)
+        if tl_name == "auth.sendCode" and "settings" not in data:
+            data["settings"] = _ext.serialize_constructor("codeSettings", json.dumps({"flags": 0})).hex()
         return bytes(_ext.serialize_method(tl_name, json.dumps(data)))
 
     def _parse_new_message(self, data:bytes)->dict[str,Any]|None:
