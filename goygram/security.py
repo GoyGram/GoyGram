@@ -624,7 +624,7 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
             print(f"Requesting Telegram code for {phone}...")
             
         try:
-            sent = await _mt_req_with_migrate(app, "auth_send_code", phone=phone, api_id=api_id, api_hash=api_hash)
+            sent = await _mt_req_with_migrate(app, "auth_send_code", phone_number=phone, api_id=api_id, api_hash=api_hash)
         except Exception as e:
             if _is_interactive():
                 from rich.console import Console
@@ -672,7 +672,7 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
                 sign = await _mt_req_with_migrate(
                     app,
                     "auth_sign_in",
-                    phone=phone,
+                    phone_number=phone,
                     code=code,
                     phone_code_hash=phone_code_hash,
                     api_id=api_id,

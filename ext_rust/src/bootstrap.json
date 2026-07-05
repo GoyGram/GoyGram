@@ -1,0 +1,1292 @@
+{
+  "methods": {
+    "msgs_ack": {
+      "cid": 1658238041,
+      "fields": [
+        {
+          "type": "Vector",
+          "is_vector": true,
+          "vector_inner": "long",
+          "name": "msg_ids",
+          "is_bare": false,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "msgs_state_req": {
+      "cid": 3664378706,
+      "fields": [
+        {
+          "type": "Vector",
+          "is_vector": true,
+          "vector_inner": "long",
+          "name": "msg_ids",
+          "is_bare": false,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "req_pq_multi": {
+      "cid": 3195965169,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "req_DH_params": {
+      "cid": 3608339646,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "p",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "q",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "long",
+          "name": "public_key_fingerprint",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "encrypted_data",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "set_client_DH_params": {
+      "cid": 4110704415,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "encrypted_data",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "rpc_drop_answer": {
+      "cid": 1491380032,
+      "fields": [
+        {
+          "type": "long",
+          "name": "req_msg_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "initConnection": {
+      "cid": 3251461801,
+      "fields": [
+        {
+          "type": "#",
+          "name": "flags",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int",
+          "name": "api_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "device_model",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "system_version",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "app_version",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "system_lang_code",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "lang_pack",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "lang_code",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "InputClientProxy",
+          "flag_bit": 0,
+          "name": "proxy",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "JSONValue",
+          "flag_bit": 1,
+          "name": "params",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "!X",
+          "name": "query",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": true
+    },
+    "invokeWithLayer": {
+      "cid": 3667594509,
+      "fields": [
+        {
+          "type": "int",
+          "name": "layer",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "!X",
+          "name": "query",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "auth.sendCode": {
+      "cid": 2792825935,
+      "fields": [
+        {
+          "type": "string",
+          "name": "phone_number",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int",
+          "name": "api_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "api_hash",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "CodeSettings",
+          "name": "settings",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "auth.signUp": {
+      "cid": 2865215255,
+      "fields": [
+        {
+          "type": "#",
+          "name": "flags",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "true",
+          "is_bare": true,
+          "flag_bit": 0,
+          "name": "no_joined_notifications",
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "string",
+          "name": "phone_number",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "phone_code_hash",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "first_name",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "last_name",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": true
+    },
+    "auth.signIn": {
+      "cid": 2371004753,
+      "fields": [
+        {
+          "type": "#",
+          "name": "flags",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "phone_number",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "phone_code_hash",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "flag_bit": 0,
+          "name": "phone_code",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "EmailVerification",
+          "flag_bit": 1,
+          "name": "email_verification",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        }
+      ],
+      "has_flags": true
+    },
+    "auth.logOut": {
+      "cid": 1047706137,
+      "fields": [],
+      "has_flags": false
+    },
+    "auth.checkPassword": {
+      "cid": 3515567382,
+      "fields": [
+        {
+          "type": "InputCheckPasswordSRP",
+          "name": "password",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "auth.requestPasswordRecovery": {
+      "cid": 3633822822,
+      "fields": [],
+      "has_flags": false
+    },
+    "auth.exportLoginToken": {
+      "cid": 3084944894,
+      "fields": [
+        {
+          "type": "int",
+          "name": "api_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "string",
+          "name": "api_hash",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "Vector",
+          "is_vector": true,
+          "vector_inner": "long",
+          "name": "except_ids",
+          "is_bare": false,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "auth.importLoginToken": {
+      "cid": 2511101156,
+      "fields": [
+        {
+          "type": "bytes",
+          "name": "token",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "account.updateStatus": {
+      "cid": 1713919532,
+      "fields": [
+        {
+          "type": "Bool",
+          "name": "offline",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "account.getPassword": {
+      "cid": 1418342645,
+      "fields": [],
+      "has_flags": false
+    },
+    "updates.getState": {
+      "cid": 3990128682,
+      "fields": [],
+      "has_flags": false
+    },
+    "help.getConfig": {
+      "cid": 3304659051,
+      "fields": [],
+      "has_flags": false
+    },
+    "help.getNearestDc": {
+      "cid": 531836966,
+      "fields": [],
+      "has_flags": false
+    }
+  },
+  "constructors": {
+    "resPQ": {
+      "cid": 85337187,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "pq",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "Vector",
+          "is_vector": true,
+          "vector_inner": "long",
+          "name": "server_public_key_fingerprints",
+          "is_bare": false,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "p_q_inner_data": {
+      "cid": 2211011308,
+      "fields": [
+        {
+          "type": "bytes",
+          "name": "pq",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "p",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "q",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int256",
+          "name": "new_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "p_q_inner_data_dc": {
+      "cid": 2851430293,
+      "fields": [
+        {
+          "type": "bytes",
+          "name": "pq",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "p",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "q",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int256",
+          "name": "new_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int",
+          "name": "dc",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "server_DH_params_ok": {
+      "cid": 3504867164,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "encrypted_answer",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "server_DH_inner_data": {
+      "cid": 3045658042,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int",
+          "name": "g",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "dh_prime",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "g_a",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int",
+          "name": "server_time",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "client_DH_inner_data": {
+      "cid": 1715713620,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "long",
+          "name": "retry_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "g_b",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "dh_gen_ok": {
+      "cid": 1003222836,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "new_nonce_hash1",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "dh_gen_retry": {
+      "cid": 1188831161,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "new_nonce_hash2",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "dh_gen_fail": {
+      "cid": 2795351554,
+      "fields": [
+        {
+          "type": "int128",
+          "name": "nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "server_nonce",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int128",
+          "name": "new_nonce_hash3",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "rpc_result": {
+      "cid": 4082920705,
+      "fields": [
+        {
+          "type": "long",
+          "name": "req_msg_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "Object",
+          "name": "result",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "msg_container": {
+      "cid": 1945237724,
+      "fields": [
+        {
+          "type": "vector<%Message>",
+          "name": "messages",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "gzip_packed": {
+      "cid": 812830625,
+      "fields": [
+        {
+          "type": "bytes",
+          "name": "packed_data",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "inputPeerEmpty": {
+      "cid": 2134579434,
+      "fields": [],
+      "has_flags": false
+    },
+    "inputPeerSelf": {
+      "cid": 2107670217,
+      "fields": [],
+      "has_flags": false
+    },
+    "inputPeerChat": {
+      "cid": 900291769,
+      "fields": [
+        {
+          "type": "long",
+          "name": "chat_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "inputPeerUser": {
+      "cid": 3723011404,
+      "fields": [
+        {
+          "type": "long",
+          "name": "user_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "long",
+          "name": "access_hash",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "inputPeerChannel": {
+      "cid": 666680316,
+      "fields": [
+        {
+          "type": "long",
+          "name": "channel_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "long",
+          "name": "access_hash",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "inputUserSelf": {
+      "cid": 4156666175,
+      "fields": [],
+      "has_flags": false
+    },
+    "inputUser": {
+      "cid": 4061223110,
+      "fields": [
+        {
+          "type": "long",
+          "name": "user_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "long",
+          "name": "access_hash",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "inputChannel": {
+      "cid": 4082822184,
+      "fields": [
+        {
+          "type": "long",
+          "name": "channel_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "long",
+          "name": "access_hash",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "inputClientProxy": {
+      "cid": 1968737087,
+      "fields": [
+        {
+          "type": "string",
+          "name": "address",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int",
+          "name": "port",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "inputCheckPasswordEmpty": {
+      "cid": 2558588504,
+      "fields": [],
+      "has_flags": false
+    },
+    "inputCheckPasswordSRP": {
+      "cid": 3531600002,
+      "fields": [
+        {
+          "type": "long",
+          "name": "srp_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "A",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "bytes",
+          "name": "M1",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "codeSettings": {
+      "cid": 2904898936,
+      "fields": [
+        {
+          "type": "#",
+          "name": "flags",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "true",
+          "is_bare": true,
+          "flag_bit": 0,
+          "name": "allow_flashcall",
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "true",
+          "is_bare": true,
+          "flag_bit": 1,
+          "name": "current_number",
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "true",
+          "is_bare": true,
+          "flag_bit": 4,
+          "name": "allow_app_hash",
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "true",
+          "is_bare": true,
+          "flag_bit": 5,
+          "name": "allow_missed_call",
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "true",
+          "is_bare": true,
+          "flag_bit": 7,
+          "name": "allow_firebase",
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "true",
+          "is_bare": true,
+          "flag_bit": 9,
+          "name": "unknown_number",
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "Vector",
+          "is_vector": true,
+          "vector_inner": "bytes",
+          "flag_bit": 6,
+          "name": "logout_tokens",
+          "is_bare": false
+        },
+        {
+          "type": "string",
+          "flag_bit": 8,
+          "name": "token",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "Bool",
+          "flag_bit": 8,
+          "name": "app_sandbox",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        }
+      ],
+      "has_flags": true
+    },
+    "emailVerificationCode": {
+      "cid": 2452510121,
+      "fields": [
+        {
+          "type": "string",
+          "name": "code",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "emailVerificationGoogle": {
+      "cid": 3683688130,
+      "fields": [
+        {
+          "type": "string",
+          "name": "token",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        }
+      ],
+      "has_flags": false
+    },
+    "inputReplyToMessage": {
+      "cid": 1003796418,
+      "fields": [
+        {
+          "type": "#",
+          "name": "flags",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int",
+          "name": "reply_to_msg_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null,
+          "flag_bit": null
+        },
+        {
+          "type": "int",
+          "flag_bit": 0,
+          "name": "top_msg_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "InputPeer",
+          "flag_bit": 1,
+          "name": "reply_to_peer_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "string",
+          "flag_bit": 2,
+          "name": "quote_text",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "Vector",
+          "is_vector": true,
+          "vector_inner": "MessageEntity",
+          "flag_bit": 3,
+          "name": "quote_entities",
+          "is_bare": false
+        },
+        {
+          "type": "int",
+          "flag_bit": 4,
+          "name": "quote_offset",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "InputPeer",
+          "flag_bit": 5,
+          "name": "monoforum_peer_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "int",
+          "flag_bit": 6,
+          "name": "todo_item_id",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        },
+        {
+          "type": "bytes",
+          "flag_bit": 7,
+          "name": "poll_option",
+          "is_bare": false,
+          "is_vector": false,
+          "vector_inner": null
+        }
+      ],
+      "has_flags": true
+    }
+  }
+}

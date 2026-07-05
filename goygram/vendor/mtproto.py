@@ -1,6 +1,6 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
-import asyncio, hashlib, os, secrets, struct, urllib.parse, logging
+import asyncio, hashlib, json, os, secrets, struct, urllib.parse, logging
 from hashlib import sha1, sha256
 from typing import Any
 from goygram.errors import ConnectionClosedError, GoyGramError, RPCError
@@ -64,7 +64,7 @@ def _html_to_entities(text:str)->tuple[str, list[tuple[int,int,int,str|None]]]:
 
 log = logging.getLogger("goygram.mtproto")
 
-from .tl_core import IntermediateTransport, MTCodec, MTMessage, MsgIdGen, Reader, build_msg_container, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
+from .tl_core import IntermediateTransport, MTMessage, MsgIdGen, Reader, build_msg_container, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
 
 try:
     from goygram import ext as rx
@@ -297,15 +297,7 @@ class MTNet:
         self.proxy_url = proxy
         self.rd=None; self.wr=None; self.buf=bytearray(); self.stop_ev=asyncio.Event(); self.seq=0
         self.pending:dict[int,tuple[asyncio.Future[dict[str,Any]],dict[str,Any]]]={}
-        self.transport=IntermediateTransport(); self.codec=MTCodec(
-            app_name=app_name,
-            app_version=app_version,
-            device_model=device_model,
-            system_version=system_version,
-            system_lang_code=system_lang_code,
-            lang_pack=lang_pack,
-            lang_code=lang_code,
-        ); self.msg_ids=MsgIdGen(); self.wrote_tag=False
+        self.transport=IntermediateTransport(); self.msg_ids=MsgIdGen(); self.wrote_tag=False
         self.auth_key:bytes|None=None; self.server_salt:bytes=b'\x00'*8; self.session_id=secrets.token_bytes(8)
         self.auth_ready=asyncio.Event()
         self.qr_update_ev=asyncio.Event()
@@ -478,8 +470,10 @@ class MTNet:
         if self.auth_key is not None:
             self.auth_ready.set()
             return
+        if rx is None: raise RuntimeError('rx (goygram.ext) is not available')
         nonce=secrets.token_bytes(16)
-        res=self._read_unencrypted_body(await self.invoke_unencrypted(self.codec.req_pq_multi(nonce)))
+        req_pq=bytes(rx.serialize_method('req_pq_multi', json.dumps({'nonce': nonce.hex()})))
+        res=self._read_unencrypted_body(await self.invoke_unencrypted(req_pq))
         rr=Reader(res); cid=rr.u32()
         if cid != 0x05162463: raise RuntimeError(f'unexpected resPQ cid={cid:x}')
         n=rr.take(16); server_nonce=rr.take(16); pq=rr.tl_bytes(); _vec=rr.u32(); cnt=rr.i32(); fps=[rr.i64() for _ in range(cnt)]
@@ -491,14 +485,28 @@ class MTNet:
         e=65537
         p,q=sorted(factorize(int.from_bytes(pq,'big')))
         new_nonce=secrets.token_bytes(32)
-        inner=self.codec.p_q_inner_data(pq=pq,p=p.to_bytes(4,'big'),q=q.to_bytes(4,'big'),nonce=nonce,server_nonce=server_nonce,new_nonce=new_nonce)
+        inner=bytes(rx.serialize_constructor('p_q_inner_data', json.dumps({
+            'pq': pq.hex(),
+            'p': p.to_bytes(4,'big').hex(),
+            'q': q.to_bytes(4,'big').hex(),
+            'nonce': nonce.hex(),
+            'server_nonce': server_nonce.hex(),
+            'new_nonce': new_nonce.hex(),
+        })))
         enc=rsa_pad_encrypt(inner,n_mod,e)
-        dh=self._read_unencrypted_body(await self.invoke_unencrypted(self.codec.req_dh_params(nonce=nonce,server_nonce=server_nonce,p=p.to_bytes(4,'big'),q=q.to_bytes(4,'big'),fp=fp,encrypted_data=enc)))
+        dh_req=bytes(rx.serialize_method('req_DH_params', json.dumps({
+            'nonce': nonce.hex(),
+            'server_nonce': server_nonce.hex(),
+            'p': p.to_bytes(4,'big').hex(),
+            'q': q.to_bytes(4,'big').hex(),
+            'public_key_fingerprint': fp,
+            'encrypted_data': enc.hex(),
+        })))
+        dh=self._read_unencrypted_body(await self.invoke_unencrypted(dh_req))
         rd=Reader(dh); dcid=rd.u32()
         if dcid!=0xd0e8075c: raise RuntimeError(f'unexpected dh params cid={dcid:x}')
         _=rd.take(16); _=rd.take(16); encrypted_answer=rd.tl_bytes()
         tmp_key,tmp_iv=kdf(new_nonce,server_nonce)
-        if rx is None: raise RuntimeError('rx (goygram.ext._ext) is not available; cannot decrypt DH answer')
         dec=bytes(rx.aes_ige_dec_raw(encrypted_answer,tmp_key,tmp_iv))
         answer=dec[20:]
         ra=Reader(answer); aid=ra.u32()
@@ -506,10 +514,20 @@ class MTNet:
         if aid!=0xb5890dba: raise RuntimeError(f'unexpected server_DH_inner_data cid={aid:#010x}')
         _=ra.take(16); _=ra.take(16); g=ra.i32(); dh_prime=int.from_bytes(ra.tl_bytes(),'big'); g_a=int.from_bytes(ra.tl_bytes(),'big'); _=ra.i32(); _=ra.i32()
         b=int.from_bytes(secrets.token_bytes(256),'big'); g_b=pow(g,b,dh_prime).to_bytes(256,'big')
-        cli=self.codec.client_dh_inner(nonce=nonce,server_nonce=server_nonce,retry_id=0,g_b=g_b)
+        cli=bytes(rx.serialize_constructor('client_DH_inner_data', json.dumps({
+            'nonce': nonce.hex(),
+            'server_nonce': server_nonce.hex(),
+            'retry_id': 0,
+            'g_b': g_b.hex(),
+        })))
         payload=sha1(cli).digest()+cli; payload+=b'\x00'*((16-len(payload)%16)%16)
         enc2=bytes(rx.aes_ige_enc_raw(payload,tmp_key,tmp_iv))
-        ans=self._read_unencrypted_body(await self.invoke_unencrypted(self.codec.set_client_dh_params(nonce=nonce,server_nonce=server_nonce,encrypted_data=enc2)))
+        ans_req=bytes(rx.serialize_method('set_client_DH_params', json.dumps({
+            'nonce': nonce.hex(),
+            'server_nonce': server_nonce.hex(),
+            'encrypted_data': enc2.hex(),
+        })))
+        ans=self._read_unencrypted_body(await self.invoke_unencrypted(ans_req))
         c=Reader(ans).u32()
         if c!=0x3bcbf734: raise RuntimeError(f'dh_gen not ok: {c:x}')
         self.auth_key=pow(g_a,b,dh_prime).to_bytes(256,'big')
@@ -955,27 +973,27 @@ class MTNet:
         chat_id = obj.get('chat_id') or obj.get('peer')
         access_hash = obj.get('access_hash', 0)
         if chat_id is None:
-            return self.codec.input_peer_self()
+            return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
         if isinstance(chat_id, bytes):
             return chat_id
         if isinstance(chat_id, str):
             if chat_id in ('self', 'me'):
-                return self.codec.input_peer_self()
+                return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
             if chat_id.lstrip('-').isdigit():
                 chat_id = int(chat_id)
             else:
-                return self.codec.input_peer_self()
+                return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
         if isinstance(chat_id, int):
             if chat_id == 0:
-                return self.codec.input_peer_self()
+                return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
             if chat_id > 0:
-                return self.codec.input_peer_user(chat_id, int(access_hash))
+                return bytes(rx.serialize_constructor('inputPeerUser', json.dumps({'user_id': chat_id, 'access_hash': int(access_hash)})))
             raw = -chat_id
             if raw > 1000000000000:
                 channel_id = raw - 1000000000000
-                return self.codec.input_peer_channel(channel_id, int(access_hash))
-            return self.codec.input_peer_chat(raw)
-        return self.codec.input_peer_self()
+                return bytes(rx.serialize_constructor('inputPeerChannel', json.dumps({'channel_id': channel_id, 'access_hash': int(access_hash)})))
+            return bytes(rx.serialize_constructor('inputPeerChat', json.dumps({'chat_id': raw})))
+        return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
 
     def _resolve_channel(self, obj:dict[str,Any])->bytes:
         chat_id = obj.get('chat_id') or obj.get('channel')
@@ -991,17 +1009,35 @@ class MTNet:
                     channel_id = raw
             else:
                 channel_id = chat_id
-            return self.codec.input_channel(channel_id, int(access_hash))
-        return self.codec.input_channel(0, 0)
+            return bytes(rx.serialize_constructor('inputChannel', json.dumps({'channel_id': channel_id, 'access_hash': int(access_hash)})))
+        return bytes(rx.serialize_constructor('inputChannel', json.dumps({'channel_id': 0, 'access_hash': 0})))
 
     def _resolve_user(self, obj:dict[str,Any])->bytes:
         user_id = obj.get('user_id')
         access_hash = obj.get('access_hash', 0)
         if user_id is None or (isinstance(user_id, str) and user_id in ('self', 'me')):
-            return self.codec.input_user_self()
+            return bytes(rx.serialize_constructor('inputUserSelf', '{}'))
         if isinstance(user_id, bytes):
             return user_id
-        return self.codec.input_user(int(user_id), int(access_hash))
+        return bytes(rx.serialize_constructor('inputUser', json.dumps({'user_id': int(user_id), 'access_hash': int(access_hash)})))
+
+    def _wrap_init_query(self, api_id:int, query:bytes)->bytes:
+        if rx is None: raise RuntimeError('rx (goygram.ext) is not available')
+        inner = bytes(rx.serialize_method('initConnection', json.dumps({
+            'flags': 0,
+            'api_id': api_id,
+            'device_model': 'Unknown',
+            'system_version': 'Unknown',
+            'app_version': '1.0',
+            'system_lang_code': 'en',
+            'lang_pack': '',
+            'lang_code': 'en',
+            'query': query.hex(),
+        })))
+        return bytes(rx.serialize_method('invokeWithLayer', json.dumps({
+            'layer': 211,
+            'query': inner.hex(),
+        })))
 
     def _norm_act(self, name:str)->str:
         if '.' in name:
@@ -1105,7 +1141,7 @@ class MTNet:
         if api_id is not None:
             self._api_id = int(api_id)
         if not self._init_done and self._api_id:
-            container_body = self.codec.wrap_init(self._api_id, container_body)
+            container_body = self._wrap_init_query(self._api_id, container_body)
             self._init_done = True
         self.seq += 1
         outer_seq_no = self.seq * 2 - 1
@@ -1140,7 +1176,7 @@ class MTNet:
                 seq_list.append(self.seq * 2 - 1)
             container_body = build_msg_container([(sid, seq, bd) for (sid, seq), bd in zip(sub_msg_ids, seq_list, bodies)])
             if not self._init_done and self._api_id:
-                container_body = self.codec.wrap_init(self._api_id, container_body)
+                container_body = self._wrap_init_query(self._api_id, container_body)
                 self._init_done = True
             self.seq += 1
             outer_seq_no = self.seq * 2 - 1
@@ -1187,7 +1223,7 @@ class MTNet:
             self._api_id = int(api_id)
         body = self._build_body(act, obj)
         if not self._init_done and self._api_id:
-            body = self.codec.wrap_init(self._api_id, body)
+            body = self._wrap_init_query(self._api_id, body)
             self._init_done = True
         msg_id=req_msg_id if req_msg_id is not None else self.msg_ids.next()
         self.seq += 1; seq_no = self.seq * 2 - 1

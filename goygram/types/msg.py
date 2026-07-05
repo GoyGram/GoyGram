@@ -1,6 +1,7 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 
+import json
 import secrets
 from typing import Any
 
@@ -51,15 +52,20 @@ class MsgObj:
         return self.app.mt
 
     def _resolve_peer(self, chat_id):
-        c = self.app.mt.codec
+        from goygram import ext as rx
+        if rx is None:
+            raise RuntimeError('rx (goygram.ext) is not available')
         if isinstance(chat_id, int):
             if chat_id > 0:
-                return c.input_peer_user(chat_id, 0)
+                return bytes(rx.serialize_constructor('inputPeerUser',
+                    json.dumps({'user_id': chat_id, 'access_hash': 0})))
             raw = -chat_id
             if raw > 1000000000000:
-                return c.input_peer_channel(raw - 1000000000000, 0)
-            return c.input_peer_chat(raw)
-        return c.input_peer_self()
+                return bytes(rx.serialize_constructor('inputPeerChannel',
+                    json.dumps({'channel_id': raw - 1000000000000, 'access_hash': 0})))
+            return bytes(rx.serialize_constructor('inputPeerChat',
+                json.dumps({'chat_id': raw})))
+        return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
 
     async def reply(self, txt: str, kbd: Any | None = None, topic_id: int | None = None, link_options: Any | None = None, **kw: Any) -> Any:
         if self.chat_id is None:
@@ -79,7 +85,8 @@ class MsgObj:
             data = dict(kw)
             peer = self._resolve_peer(self.chat_id)
             if self.id is not None:
-                data["reply_to"] = self.app.mt.codec.input_reply_to_message(int(self.id))
+                data["reply_to"] = bytes(rx.serialize_constructor('inputReplyToMessage',
+                    json.dumps({'reply_to_msg_id': int(self.id)})))
             if kbd is not None:
                 data["kbd"] = kbd
             if link_options is not None:

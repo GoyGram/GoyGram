@@ -1,187 +1,21 @@
-// Copyleft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
-use aes::Aes256;
-use aes_gcm::aead::Aead;
-use aes_gcm::{Aes256Gcm, Nonce};
-use pyo3::exceptions::PyValueError;
+// Rust extension: dynamic TL serialization with hot-reload
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use serde::Deserialize;
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::PyValueError;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
-fn pad(src: &[u8]) -> Vec<u8> {
-    let n = 16 - (src.len() % 16);
-    let p = if n == 0 { 16 } else { n };
-    let mut out = Vec::with_capacity(src.len() + p);
-    out.extend_from_slice(src);
-    out.resize(src.len() + p, p as u8);
-    out
-}
+static METHODS: RwLock<Option<HashMap<String, TlMethod>>> = RwLock::new(None);
+static CTORS: RwLock<Option<HashMap<String, TlConstructor>>> = RwLock::new(None);
 
-fn unpad(src: &[u8]) -> PyResult<Vec<u8>> {
-    if src.is_empty() {
-        return Ok(Vec::new());
-    }
-    let p = *src.last().unwrap() as usize;
-    if p == 0 || p > 16 || src.len() < p {
-        return Err(PyValueError::new_err("bad pad"));
-    }
-    if src[src.len() - p..].iter().any(|b| *b as usize != p) {
-        return Err(PyValueError::new_err("bad pad"));
-    }
-    Ok(src[..src.len() - p].to_vec())
-}
-
-fn chk(key: &[u8], iv: &[u8], data: &[u8]) -> PyResult<()> {
-    if key.len() != 32 {
-        return Err(PyValueError::new_err("key must be 32 bytes"));
-    }
-    if iv.len() != 32 {
-        return Err(PyValueError::new_err("iv must be 32 bytes"));
-    }
-    if data.len() % 16 != 0 {
-        return Err(PyValueError::new_err("data must be multiple of 16"));
-    }
-    Ok(())
-}
-
-fn enc_raw(key: &[u8], iv: &[u8], data: &[u8]) -> PyResult<Vec<u8>> {
-    chk(key, iv, data)?;
-    let aes = Aes256::new_from_slice(key).map_err(|_| PyValueError::new_err("bad key"))?;
-    let mut x = iv[..16].to_vec();
-    let mut y = iv[16..].to_vec();
-    let mut out = Vec::with_capacity(data.len());
-    for blk in data.chunks_exact(16) {
-        let mut tmp = [0u8; 16];
-        for i in 0..16 {
-            tmp[i] = blk[i] ^ x[i];
-        }
-        let mut ga = GenericArray::clone_from_slice(&tmp);
-        aes.encrypt_block(&mut ga);
-        let mut c = [0u8; 16];
-        for i in 0..16 {
-            c[i] = ga[i] ^ y[i];
-        }
-        x.copy_from_slice(&c);
-        y.copy_from_slice(blk);
-        out.extend_from_slice(&c);
-    }
-    Ok(out)
-}
-
-fn dec_raw(key: &[u8], iv: &[u8], data: &[u8]) -> PyResult<Vec<u8>> {
-    chk(key, iv, data)?;
-    let aes = Aes256::new_from_slice(key).map_err(|_| PyValueError::new_err("bad key"))?;
-    let mut x = iv[..16].to_vec();
-    let mut y = iv[16..].to_vec();
-    let mut out = Vec::with_capacity(data.len());
-    for blk in data.chunks_exact(16) {
-        let mut tmp = [0u8; 16];
-        for i in 0..16 {
-            tmp[i] = blk[i] ^ y[i];
-        }
-        let mut ga = GenericArray::clone_from_slice(&tmp);
-        aes.decrypt_block(&mut ga);
-        let mut p = [0u8; 16];
-        for i in 0..16 {
-            p[i] = ga[i] ^ x[i];
-        }
-        x.copy_from_slice(blk);
-        y.copy_from_slice(&p);
-        out.extend_from_slice(&p);
-    }
-    Ok(out)
-}
-
-#[pyfunction]
-fn aes_ige_enc(data: &[u8], key: &[u8], iv: &[u8]) -> PyResult<Vec<u8>> {
-    let raw = pad(data);
-    enc_raw(key, iv, &raw)
-}
-
-#[pyfunction]
-fn aes_ige_dec(data: &[u8], key: &[u8], iv: &[u8]) -> PyResult<Vec<u8>> {
-    let raw = dec_raw(key, iv, data)?;
-    unpad(&raw)
-}
-
-#[pyfunction]
-fn aes_ige_enc_raw(data: &[u8], key: &[u8], iv: &[u8]) -> PyResult<Vec<u8>> {
-    enc_raw(key, iv, data)
-}
-
-#[pyfunction]
-fn aes_ige_dec_raw(data: &[u8], key: &[u8], iv: &[u8]) -> PyResult<Vec<u8>> {
-    dec_raw(key, iv, data)
-}
-
-#[pyfunction]
-fn cut(py: Python<'_>, buf: &[u8]) -> PyResult<(Vec<Py<PyBytes>>, Py<PyBytes>)> {
-    let mut i = 0usize;
-    let mut out = Vec::new();
-    while i + 4 <= buf.len() {
-        let n = u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
-        if n == 0 {
-            return Err(PyValueError::new_err("zero frame"));
-        }
-        if i + 4 + n > buf.len() {
-            break;
-        }
-        out.push(PyBytes::new(py, &buf[i + 4..i + 4 + n]).into());
-        i += 4 + n;
-    }
-    Ok((out, PyBytes::new(py, &buf[i..]).into()))
-}
-
-#[pyfunction]
-fn pack(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() + 4);
-    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-    out.extend_from_slice(data);
-    out
-}
-
-#[pyfunction]
-fn aes_gcm_encrypt(py: Python<'_>, key: &[u8], nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> PyResult<Py<PyBytes>> {
-    if key.len() != 32 {
-        return Err(PyValueError::new_err("key must be 32 bytes"));
-    }
-    if nonce.len() != 12 {
-        return Err(PyValueError::new_err("nonce must be 12 bytes"));
-    }
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|_| PyValueError::new_err("bad key"))?;
-    let n = Nonce::from_slice(nonce);
-    let ct = cipher
-        .encrypt(n, aes_gcm::aead::Payload { msg: plaintext, aad })
-        .map_err(|_| PyValueError::new_err("encryption failed"))?;
-    Ok(PyBytes::new(py, &ct).into())
-}
-
-#[pyfunction]
-fn aes_gcm_decrypt(py: Python<'_>, key: &[u8], nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> PyResult<Py<PyBytes>> {
-    if key.len() != 32 {
-        return Err(PyValueError::new_err("key must be 32 bytes"));
-    }
-    if nonce.len() != 12 {
-        return Err(PyValueError::new_err("nonce must be 12 bytes"));
-    }
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|_| PyValueError::new_err("bad key"))?;
-    let n = Nonce::from_slice(nonce);
-    let pt = cipher
-        .decrypt(n, aes_gcm::aead::Payload { msg: ciphertext, aad })
-        .map_err(|_| PyValueError::new_err("decryption failed (wrong key or corrupted data)"))?;
-    Ok(PyBytes::new(py, &pt).into())
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TlFieldDef {
     name: String,
     #[serde(rename = "type")]
-    field_type: String,
+    ftype: String,
     #[serde(default)]
     flag_bit: Option<u32>,
     #[serde(default)]
@@ -192,263 +26,437 @@ struct TlFieldDef {
     vector_inner: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct TlMethodDef {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TlMethod {
     cid: u32,
     fields: Vec<TlFieldDef>,
     #[serde(default)]
     has_flags: bool,
 }
 
-#[derive(Debug, Clone)]
-struct TlMethod {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TlConstructor {
     cid: u32,
     fields: Vec<TlFieldDef>,
+    #[serde(default)]
     has_flags: bool,
 }
 
-static SCHEMA: OnceLock<HashMap<String, TlMethod>> = OnceLock::new();
+#[derive(Debug, Deserialize)]
+struct SchemaInput {
+    methods: HashMap<String, TlMethod>,
+    #[serde(default)]
+    constructors: HashMap<String, TlConstructor>,
+}
 
-fn get_schema() -> PyResult<&'static HashMap<String, TlMethod>> {
-    SCHEMA.get().ok_or_else(|| PyValueError::new_err("TL schema not loaded; call load_schema first"))
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SchemaInfo {
+    layer: u32,
+    #[serde(default)]
+    methods: u32,
+    #[serde(default)]
+    constructors: u32,
+}
+
+fn pack_schema(methods: &HashMap<String, TlMethod>, ctors: &HashMap<String, TlConstructor>) -> SchemaInfo {
+    SchemaInfo {
+        layer: 0,
+        methods: methods.len() as u32,
+        constructors: ctors.len() as u32,
+    }
+}
+
+static BOOTSTRAP_SCHEMA_JSON: &str = include_str!("bootstrap.json");
+
+fn apply_bootstrap() {
+    let mut m = METHODS.write().unwrap();
+    let mut c = CTORS.write().unwrap();
+    if m.is_none() && c.is_none() {
+        if let Ok(raw) = serde_json::from_str::<SchemaInput>(BOOTSTRAP_SCHEMA_JSON) {
+            *m = Some(raw.methods);
+            *c = Some(raw.constructors);
+        }
+    }
 }
 
 #[pyfunction]
-fn load_schema(schema_json: &str) -> PyResult<()> {
-    let raw: HashMap<String, TlMethodDef> = serde_json::from_str(schema_json)
-        .map_err(|e| PyValueError::new_err(format!("failed to parse schema JSON: {}", e)))?;
-    let mut methods = HashMap::new();
-    for (name, def) in raw {
-        methods.insert(name, TlMethod {
-            cid: def.cid,
-            fields: def.fields,
-            has_flags: def.has_flags,
-        });
-    }
-    SCHEMA.set(methods).map_err(|_| PyValueError::new_err("schema already loaded"))?;
-    Ok(())
-}
-
-fn tl_bytes_raw(data: &[u8]) -> Vec<u8> {
-    let n = data.len();
-    let mut out = Vec::new();
-    if n < 254 {
-        out.push(n as u8);
-        out.extend_from_slice(data);
-    } else {
-        out.push(254u8);
-        out.extend_from_slice(&(n as u32).to_le_bytes()[..3]);
-        out.extend_from_slice(data);
-    }
-    let pad = (4 - (out.len() % 4)) % 4;
-    out.resize(out.len() + pad, 0);
-    out
-}
-
-fn hex_to_bytes(hex: &str) -> PyResult<Vec<u8>> {
-    let hex = hex.trim();
-    if hex.len() % 2 != 0 {
-        return Err(PyValueError::new_err("hex string must have even length"));
-    }
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16)
-            .map_err(|e| PyValueError::new_err(format!("invalid hex: {}", e))))
-        .collect()
-}
-
-fn serialize_value(field: &TlFieldDef, val: &serde_json::Value) -> PyResult<Vec<u8>> {
-    let ft = &field.field_type;
-    if field.is_bare && ft == "true" {
-        return Ok(Vec::new());
-    }
-    if field.is_vector {
-        let inner = field.vector_inner.as_deref().unwrap_or("int");
-        let arr = val.as_array().ok_or_else(|| {
-            PyValueError::new_err(format!("field {} expects an array", field.name))
-        })?;
-        let mut out = Vec::new();
-        out.extend_from_slice(&0x1cb5c415u32.to_le_bytes());
-        out.extend_from_slice(&(arr.len() as i32).to_le_bytes());
-        for item in arr {
-            let item_field = TlFieldDef {
-                name: String::new(),
-                field_type: inner.to_string(),
-                flag_bit: None,
-                is_bare: false,
-                is_vector: false,
-                vector_inner: None,
-            };
-            out.extend(serialize_value(&item_field, item)?);
-        }
-        return Ok(out);
-    }
-    match ft.as_str() {
-        "int" | "Int" => {
-            let v = val.as_i64().ok_or_else(|| PyValueError::new_err(format!("field {} expects int", field.name)))?;
-            Ok((v as i32).to_le_bytes().to_vec())
-        }
-        "uint" | "UInt" => {
-            let v = val.as_u64().ok_or_else(|| PyValueError::new_err(format!("field {} expects uint", field.name)))?;
-            Ok((v as u32).to_le_bytes().to_vec())
-        }
-        "long" | "Long" => {
-            if let Some(s) = val.as_str() {
-                let v: i64 = s.parse().map_err(|_| PyValueError::new_err(format!("field {} invalid long string", field.name)))?;
-                return Ok(v.to_le_bytes().to_vec());
+fn load_schema(schema_json: &str) -> PyResult<String> {
+    let raw: SchemaInput = match serde_json::from_str::<SchemaInput>(schema_json) {
+        Ok(s) => s,
+        Err(_) => {
+            let methods_map: HashMap<String, TlMethod> = serde_json::from_str(schema_json)
+                .map_err(|e| PyValueError::new_err(format!("schema parsing failed: {}", e)))?;
+            SchemaInput {
+                methods: methods_map,
+                constructors: HashMap::new(),
             }
-            let v = val.as_i64().ok_or_else(|| PyValueError::new_err(format!("field {} expects long", field.name)))?;
-            Ok(v.to_le_bytes().to_vec())
         }
-        "double" | "Double" => {
-            let v = val.as_f64().ok_or_else(|| PyValueError::new_err(format!("field {} expects double", field.name)))?;
-            Ok(v.to_le_bytes().to_vec())
+    };
+
+    let info = SchemaInfo {
+        layer: 0,
+        methods: raw.methods.len() as u32,
+        constructors: raw.constructors.len() as u32,
+    };
+
+    {
+        let mut m = METHODS.write().unwrap();
+        let mut c = CTORS.write().unwrap();
+        *m = Some(raw.methods);
+        *c = Some(raw.constructors);
+    }
+
+    Ok(serde_json::to_string(&info).unwrap())
+}
+
+#[pyfunction]
+fn schema_info() -> PyResult<String> {
+    let m = METHODS.read().unwrap();
+    let c = CTORS.read().unwrap();
+    match (&*m, &*c) {
+        (Some(methods), Some(ctors)) => {
+            let info = pack_schema(methods, ctors);
+            Ok(serde_json::to_string(&info).unwrap())
+        }
+        _ => Ok(r#"{"methods":0,"constructors":0}"#.to_string()),
+    }
+}
+
+fn serialize_tl(name: &str, args_json: &str, cid: u32, fields: &[TlFieldDef], has_flags: bool) -> PyResult<Vec<u8>> {
+    use std::collections::HashSet;
+
+    let args: serde_json::Value = serde_json::from_str(args_json)
+        .map_err(|e| PyValueError::new_err(format!("args parsing failed: {}", e)))?;
+
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(&cid.to_le_bytes());
+
+    if has_flags {
+        let mut flags_val: u32 = 0;
+        let mut seen: HashSet<String> = HashSet::new();
+
+        for f in fields {
+            if let Some(bit) = f.flag_bit {
+                let key = format!("flag_{}", bit);
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.insert(key);
+            }
+        }
+
+        let mut delay_writes: Vec<(usize, Vec<u8>)> = Vec::new();
+        let mut flags_idx: isize = -1;
+
+        for (idx, f) in fields.iter().enumerate() {
+            if f.ftype == "#" {
+                flags_idx = idx as isize;
+                flags_val = 0;
+                continue;
+            }
+
+            if f.flag_bit.is_some() {
+                let val = args.get(&f.name);
+                let has_val = match val {
+                    Some(serde_json::Value::Null) | None => false,
+                    Some(serde_json::Value::Bool(true)) if f.is_bare => true,
+                    Some(serde_json::Value::Bool(false)) if f.is_bare => false,
+                    _ => val.is_some(),
+                };
+
+                if !has_val {
+                    continue;
+                }
+
+                if f.is_bare {
+                    flags_val |= 1 << f.flag_bit.unwrap();
+                    continue;
+                }
+
+                flags_val |= 1 << f.flag_bit.unwrap();
+                let fb = encode_field_value(&f, val.unwrap_or(&serde_json::Value::Null))
+                    .map_err(|e| PyValueError::new_err(format!("{}:{}: {}", name, f.name, e)))?;
+                delay_writes.push((idx, fb));
+            } else {
+                if let Some(ref val) = args.get(&f.name) {
+                    let fb = encode_field_value(&f, val)
+                        .map_err(|e| PyValueError::new_err(format!("{}:{}: {}", name, f.name, e)))?;
+                    buf.extend_from_slice(&fb);
+                }
+            }
+        }
+
+        if flags_idx >= 0 {
+            let flags_bytes = flags_val.to_le_bytes().to_vec();
+            buf.extend_from_slice(&flags_bytes);
+        }
+
+        for (_, fb) in delay_writes {
+            buf.extend_from_slice(&fb);
+        }
+    } else {
+        for f in fields {
+            if let Some(ref val) = args.get(&f.name) {
+                let fb = encode_field_value(&f, val)
+                    .map_err(|e| PyValueError::new_err(format!("{}:{}: {}", name, f.name, e)))?;
+                buf.extend_from_slice(&fb);
+            }
+        }
+    }
+
+    Ok(buf)
+}
+
+fn encode_field_value(f: &TlFieldDef, val: &serde_json::Value) -> Result<Vec<u8>, String> {
+    match f.ftype.as_str() {
+        "#" => {
+            let n = val.as_i64().ok_or("flags not int")? as u32;
+            Ok(n.to_le_bytes().to_vec())
+        }
+        "int" | "Int" => {
+            let n = val.as_i64().ok_or("int expected")? as i32;
+            Ok(n.to_le_bytes().to_vec())
+        }
+        "long" | "Long" | "int128" | "int256" => {
+            if val.is_string() {
+                let s = val.as_str().unwrap();
+                let bytes = hex::decode(s)
+                    .map_err(|e| format!("hex: {}", e))?;
+                Ok(bytes)
+            } else if val.is_number() {
+                let n = val.as_i64().ok_or("long expected")?;
+                Ok(n.to_le_bytes().to_vec())
+            } else {
+                Err(format!("cannot encode field {} as long", f.name))
+            }
         }
         "string" | "String" => {
             let s = val.as_str().unwrap_or("");
-            Ok(tl_bytes_raw(s.as_bytes()))
+            encode_tl_string(s)
         }
         "bytes" | "Bytes" => {
-            let s = val.as_str().ok_or_else(|| PyValueError::new_err(format!("field {} expects hex-encoded bytes", field.name)))?;
-            let raw = hex_to_bytes(s)?;
-            Ok(tl_bytes_raw(&raw))
-        }
-        "int128" => {
-            let s = val.as_str().ok_or_else(|| PyValueError::new_err(format!("field {} expects hex int128", field.name)))?;
-            let raw = hex_to_bytes(s)?;
-            if raw.len() != 16 {
-                return Err(PyValueError::new_err(format!("field {} int128 must be 16 bytes", field.name)));
+            if val.is_string() {
+                let s = val.as_str().unwrap();
+                let b = hex::decode(s).map_err(|e| format!("hex: {}", e))?;
+                encode_tl_bytes(&b)
+            } else if val.is_array() {
+                let mut b = Vec::new();
+                for v in val.as_array().unwrap() {
+                    let n = v.as_u64().ok_or("byte expected")? as u8;
+                    b.push(n);
+                }
+                encode_tl_bytes(&b)
+            } else {
+                Err(format!("cannot encode field {} as bytes", f.name))
             }
-            Ok(raw)
         }
-        "int256" => {
-            let s = val.as_str().ok_or_else(|| PyValueError::new_err(format!("field {} expects hex int256", field.name)))?;
-            let raw = hex_to_bytes(s)?;
-            if raw.len() != 32 {
-                return Err(PyValueError::new_err(format!("field {} int256 must be 32 bytes", field.name)));
+        "double" | "Double" => {
+            let n = val.as_f64().ok_or("double expected")?;
+            Ok(n.to_le_bytes().to_vec())
+        }
+        "Bool" | "boolTrue" | "boolFalse" => {
+            let b = val.as_bool().unwrap_or(false);
+            if b {
+                Ok(0x997275b5u32.to_le_bytes().to_vec())
+            } else {
+                Ok(0xbc799737u32.to_le_bytes().to_vec())
             }
-            Ok(raw)
         }
-        "Bool" | "bool" => {
-            let v = val.as_bool().unwrap_or(false);
-            Ok(if v { 0x997275b5u32.to_le_bytes().to_vec() } else { 0xbc799737u32.to_le_bytes().to_vec() })
-        }
-        "#" => {
-            let v = val.as_i64().unwrap_or(0);
-            Ok((v as i32).to_le_bytes().to_vec())
+        "true" | "True" => {
+            Ok(vec![])
         }
         _ => {
-            let s = val.as_str().ok_or_else(|| {
-                PyValueError::new_err(format!("field {} type {} expects hex-encoded bytes string", field.name, ft))
-            })?;
-            hex_to_bytes(s)
-        }
-    }
-}
-
-fn compute_flags(fields: &[TlFieldDef], args: &serde_json::Map<String, serde_json::Value>) -> i32 {
-    let mut flags: i32 = 0;
-    for field in fields {
-        if let Some(bit) = field.flag_bit {
-            if let Some(val) = args.get(&field.name) {
-                if field.is_bare && field.field_type == "true" {
-                    if val.as_bool().unwrap_or(false) {
-                        flags |= 1 << bit;
+            if f.is_vector {
+                encode_tl_vector(f, val)
+            } else if f.ftype.starts_with('!') {
+                if val.is_string() {
+                    let s = val.as_str().unwrap();
+                    if s.is_empty() {
+                        return Ok(vec![]);
                     }
+                    hex::decode(s).map_err(|e| format!("hex: {}", e))
                 } else {
-                    flags |= 1 << bit;
+                    Ok(vec![])
                 }
+            } else if val.is_string() {
+                let s = val.as_str().unwrap();
+                if s.is_empty() {
+                    return Ok(vec![]);
+                }
+                hex::decode(s).map_err(|e| format!("hex: {}", e))
+            } else if val.is_number() {
+                let n = val.as_i64().unwrap_or(0);
+                Ok(n.to_le_bytes().to_vec())
+            } else {
+                Ok(vec![])
             }
         }
     }
-    flags
 }
 
-fn serialize_method_impl(name: &str, args_json: &str) -> PyResult<Vec<u8>> {
-    let schema = get_schema()?;
-    let method = schema.get(name).ok_or_else(|| {
-        PyValueError::new_err(format!("unknown TL method: {}", name))
-    })?;
-    let args: serde_json::Value = serde_json::from_str(args_json)
-        .map_err(|e| PyValueError::new_err(format!("invalid args JSON: {}", e)))?;
-    let args_map = args.as_object().ok_or_else(|| {
-        PyValueError::new_err("args must be a JSON object")
-    })?;
+fn encode_tl_string(s: &str) -> Result<Vec<u8>, String> {
+    let b = s.as_bytes();
+    let mut buf = Vec::new();
+    if b.len() <= 253 {
+        buf.push(b.len() as u8);
+    } else {
+        buf.push(254);
+        buf.extend_from_slice(&(b.len() as u32).to_le_bytes()[..3]);
+    }
+    buf.extend_from_slice(b);
+    while buf.len() % 4 != 0 {
+        buf.push(0);
+    }
+    Ok(buf)
+}
 
-    let mut out = Vec::new();
-    out.extend_from_slice(&method.cid.to_le_bytes());
+fn encode_tl_bytes(b: &[u8]) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    if b.len() <= 253 {
+        buf.push(b.len() as u8);
+    } else {
+        buf.push(254);
+        buf.extend_from_slice(&(b.len() as u32).to_le_bytes()[..3]);
+    }
+    buf.extend_from_slice(b);
+    while buf.len() % 4 != 0 {
+        buf.push(0);
+    }
+    Ok(buf)
+}
 
-    let mut flags_val: Option<i32> = None;
-    if method.has_flags {
-        flags_val = Some(compute_flags(&method.fields, args_map));
+fn encode_tl_vector(f: &TlFieldDef, val: &serde_json::Value) -> Result<Vec<u8>, String> {
+    let arr = val.as_array().ok_or("vector expected array")?;
+    let inner_type = f.vector_inner.as_deref().unwrap_or("int");
+
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(&0x1cb5c415u32.to_le_bytes());
+    buf.extend_from_slice(&(arr.len() as u32).to_le_bytes());
+
+    for item in arr {
+        let inner_field = TlFieldDef {
+            name: "item".to_string(),
+            ftype: inner_type.to_string(),
+            flag_bit: None,
+            is_bare: false,
+            is_vector: false,
+            vector_inner: None,
+        };
+        let eb = encode_field_value(&inner_field, item)?;
+        buf.extend_from_slice(&eb);
     }
 
-    let mut added_flags = false;
-    for field in &method.fields {
-        if field.field_type == "#" && method.has_flags {
-            if let Some(f) = flags_val {
-                out.extend_from_slice(&f.to_le_bytes());
-                added_flags = true;
-            }
-            continue;
-        }
-        if field.flag_bit.is_some() {
-            if let Some(f) = flags_val {
-                if (f & (1 << field.flag_bit.unwrap())) == 0 {
-                    continue;
-                }
-            }
-            if let Some(val) = args_map.get(&field.name) {
-                out.extend(serialize_value(field, val)?);
-            }
-            continue;
-        }
-        if let Some(val) = args_map.get(&field.name) {
-            out.extend(serialize_value(field, val)?);
-        } else if field.field_type == "#" {
-            if !added_flags {
-                if let Some(f) = flags_val {
-                    out.extend_from_slice(&f.to_le_bytes());
-                } else {
-                    out.extend_from_slice(&0i32.to_le_bytes());
-                }
-                added_flags = true;
-            }
-        }
-    }
-    Ok(out)
+    Ok(buf)
 }
 
 #[pyfunction]
-fn serialize_method(py: Python<'_>, name: &str, args_json: &str) -> PyResult<Py<PyBytes>> {
-    let data = serialize_method_impl(name, args_json)?;
+fn serialize_method(py: Python<'_>, method: &str, args_json: &str) -> PyResult<Py<PyBytes>> {
+    let m = METHODS.read().unwrap();
+    let methods = m.as_ref()
+        .ok_or_else(|| PyRuntimeError::new_err("schema not loaded"))?;
+
+    let tl = methods.get(method)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown method: {}", method)))?;
+
+    let data = serialize_tl(method, args_json, tl.cid, &tl.fields, tl.has_flags)?;
     Ok(PyBytes::new(py, &data).into())
 }
 
 #[pyfunction]
-fn tl_method_exists(name: &str) -> PyResult<bool> {
-    let schema = get_schema()?;
-    Ok(schema.contains_key(name))
+fn serialize_constructor(py: Python<'_>, name: &str, args_json: &str) -> PyResult<Py<PyBytes>> {
+    let c = CTORS.read().unwrap();
+    let ctors = c.as_ref()
+        .ok_or_else(|| PyRuntimeError::new_err("schema not loaded"))?;
+
+    let tl = ctors.get(name)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown constructor: {}", name)))?;
+
+    let data = serialize_tl(name, args_json, tl.cid, &tl.fields, tl.has_flags)?;
+    Ok(PyBytes::new(py, &data).into())
+}
+
+fn aes_ige_impl(data: &[u8], key: &[u8], iv: &[u8], direction: u8) -> Vec<u8> {
+    use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+    use aes::Aes256;
+
+    let cipher = Aes256::new_from_slice(key).expect("invalid key size");
+    let mut block_iv = iv.to_vec();
+    let mut result = data.to_vec();
+    let n = result.len();
+    let bs = 16;
+
+    for i in (0..n).step_by(bs) {
+        if i + bs > n {
+            break;
+        }
+        if direction == 0 {
+            let mut copy = [0u8; 16];
+            copy.copy_from_slice(&result[i..i + bs]);
+            cipher.decrypt_block((&mut copy).into());
+            for j in 0..bs {
+                result[i + j] = copy[j] ^ block_iv[j];
+            }
+        } else {
+            for j in 0..bs {
+                result[i + j] ^= block_iv[j];
+            }
+            cipher.encrypt_block((&mut result[i..i + bs]).into());
+        }
+        block_iv.copy_from_slice(&data[i..i + bs]);
+    }
+
+    result
 }
 
 #[pyfunction]
-fn schema_loaded() -> bool {
-    SCHEMA.get().is_some()
+fn aes_ige_enc(py: Python<'_>, data: Vec<u8>, key: Vec<u8>, iv: Vec<u8>) -> PyResult<Py<PyBytes>> {
+    let out = aes_ige_impl(&data, &key, &iv, 1);
+    Ok(PyBytes::new(py, &out).into())
+}
+
+#[pyfunction]
+fn aes_ige_dec(py: Python<'_>, data: Vec<u8>, key: Vec<u8>, iv: Vec<u8>) -> PyResult<Py<PyBytes>> {
+    let out = aes_ige_impl(&data, &key, &iv, 0);
+    Ok(PyBytes::new(py, &out).into())
+}
+
+#[pyfunction]
+fn aes_ige_enc_raw(data: Vec<u8>, key: Vec<u8>, iv: Vec<u8>) -> PyResult<Vec<u8>> {
+    Ok(aes_ige_impl(&data, &key, &iv, 1))
+}
+
+#[pyfunction]
+fn aes_ige_dec_raw(data: Vec<u8>, key: Vec<u8>, iv: Vec<u8>) -> PyResult<Vec<u8>> {
+    Ok(aes_ige_impl(&data, &key, &iv, 0))
+}
+
+#[pyfunction]
+fn cut(py: Python<'_>, data: Vec<u8>, offset: usize, length: usize) -> PyResult<Py<PyBytes>> {
+    let end = (offset + length).min(data.len());
+    Ok(PyBytes::new(py, &data[offset..end]).into())
+}
+
+#[pyfunction]
+fn pack(py: Python<'_>, parts: Vec<Vec<u8>>) -> PyResult<Py<PyBytes>> {
+    let mut out = Vec::new();
+    for p in parts {
+        out.extend_from_slice(&p);
+    }
+    Ok(PyBytes::new(py, &out).into())
 }
 
 #[pymodule]
-fn ext(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn ext(m: &PyModule) -> PyResult<()> {
+    apply_bootstrap();
+    m.add_function(wrap_pyfunction!(load_schema, m)?)?;
+    m.add_function(wrap_pyfunction!(schema_info, m)?)?;
+    m.add_function(wrap_pyfunction!(serialize_method, m)?)?;
+    m.add_function(wrap_pyfunction!(serialize_constructor, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_enc, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_dec, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_enc_raw, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_dec_raw, m)?)?;
-    m.add_function(wrap_pyfunction!(aes_gcm_encrypt, m)?)?;
-    m.add_function(wrap_pyfunction!(aes_gcm_decrypt, m)?)?;
     m.add_function(wrap_pyfunction!(cut, m)?)?;
     m.add_function(wrap_pyfunction!(pack, m)?)?;
-    m.add_function(wrap_pyfunction!(load_schema, m)?)?;
-    m.add_function(wrap_pyfunction!(serialize_method, m)?)?;
-    m.add_function(wrap_pyfunction!(tl_method_exists, m)?)?;
-    m.add_function(wrap_pyfunction!(schema_loaded, m)?)?;
     Ok(())
 }

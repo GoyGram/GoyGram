@@ -115,14 +115,11 @@ class AppCore:
         self.session_name = session_name
 
     def _init_tl_schema(self) -> None:
-        from pathlib import Path
-        from goygram.vendor.tl_schema import load_schema_into_rust
+        from goygram.schema_manager import init_schema
         from goygram import ext as _ext
-        if _ext is None or _ext.schema_loaded():
+        if _ext is None:
             return
-        api_tl = Path(__file__).resolve().parent.parent / "api.tl"
-        if api_tl.exists():
-            load_schema_into_rust(_ext, api_tl)
+        init_schema(_ext, None)
 
     def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any) -> None:
         import logging
