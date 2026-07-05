@@ -122,10 +122,9 @@ def _is_interactive() -> bool:
         return False
 
 def _rich_menu_sync(title: str, options: list[str]) -> int:
-    from rich.console import Console
-    console = Console()
-    console.print(f"\n[bold cyan]? {title}[/bold cyan]")
-    
+    sys.stdout.write(f"\n\033[1m\033[36m? {title}\033[0m\n")
+    sys.stdout.flush()
+
     selected = 0
     import termios, tty
     fd = sys.stdin.fileno()
@@ -133,14 +132,14 @@ def _rich_menu_sync(title: str, options: list[str]) -> int:
     try:
         tty.setraw(sys.stdin.fileno())
         while True:
-            sys.stdout.write("\r")
+            sys.stdout.write("\r\033[2K")
             for i, opt in enumerate(options):
                 if i == selected:
                     sys.stdout.write(f"\033[32m\033[1m> {opt}\033[0m  ")
                 else:
                     sys.stdout.write(f"  {opt}  ")
             sys.stdout.flush()
-            
+
             ch = sys.stdin.read(1)
             if ch == '\r' or ch == '\n':
                 sys.stdout.write("\n\r")
@@ -154,8 +153,6 @@ def _rich_menu_sync(title: str, options: list[str]) -> int:
                     selected = (selected + 1) % len(options)
                 elif next_ch == '[D' or next_ch == '[A':
                     selected = (selected - 1) % len(options)
-            
-            sys.stdout.write("\r\033[K")
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return selected

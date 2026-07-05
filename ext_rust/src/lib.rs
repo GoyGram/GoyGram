@@ -367,7 +367,10 @@ fn aes_ige_impl(data: &[u8], key: &[u8], iv: &[u8], direction: u8) -> Vec<u8> {
     use aes::Aes256;
 
     let cipher = Aes256::new_from_slice(key).expect("invalid key size");
-    let mut block_iv = iv.to_vec();
+    let mut iv1 = [0u8; 16];
+    let mut iv2 = [0u8; 16];
+    iv1.copy_from_slice(&iv[..16]);
+    iv2.copy_from_slice(&iv[16..32]);
     let mut result = data.to_vec();
     let n = result.len();
     let bs = 16;
@@ -377,19 +380,26 @@ fn aes_ige_impl(data: &[u8], key: &[u8], iv: &[u8], direction: u8) -> Vec<u8> {
             break;
         }
         if direction == 0 {
-            let mut copy = [0u8; 16];
-            copy.copy_from_slice(&result[i..i + bs]);
-            cipher.decrypt_block((&mut copy).into());
             for j in 0..bs {
-                result[i + j] = copy[j] ^ block_iv[j];
+                result[i + j] ^= iv1[j];
             }
+            cipher.decrypt_block((&mut result[i..i + bs]).into());
+            for j in 0..bs {
+                result[i + j] ^= iv2[j];
+            }
+            iv1.copy_from_slice(&data[i..i + bs]);
+            iv2.copy_from_slice(&result[i..i + bs]);
         } else {
             for j in 0..bs {
-                result[i + j] ^= block_iv[j];
+                result[i + j] ^= iv2[j];
             }
             cipher.encrypt_block((&mut result[i..i + bs]).into());
+            for j in 0..bs {
+                result[i + j] ^= iv1[j];
+            }
+            iv1.copy_from_slice(&result[i..i + bs]);
+            iv2.copy_from_slice(&data[i..i + bs]);
         }
-        block_iv.copy_from_slice(&data[i..i + bs]);
     }
 
     result

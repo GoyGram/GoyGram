@@ -65,7 +65,7 @@ def _default_app_version()->str:
     try:
         return "GoyGram " + pkg_version("goygram")
     except PackageNotFoundError:
-        return "GoyGram 0.6.8"
+        return "GoyGram 0.6.9"
 
 
 def _default_device_model()->str:
