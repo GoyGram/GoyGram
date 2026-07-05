@@ -176,7 +176,7 @@ def _skip_tl_object(b:bytes, p:int)->int:
         p += 4
         _, p = _tl_bytes_at(b, p)
         return p
-    if cid in {0xb5757299, 0x44747e9a}:
+    if cid in {0x31774388, 0xd3bc4b7a, 0x44747e9a}:
         flags = int.from_bytes(b[p:p+4], "little", signed=True); p += 4
         p += 8
         _, p = _tl_bytes_at(b, p)
@@ -209,7 +209,7 @@ def _parse_user_obj(b:bytes)->dict[str,Any]|None:
         return None
     cid = int.from_bytes(b[:4], "little")
 
-    if cid in {0x020b1422, 0x8f97c628, 0x5c0d0a2a, 0xd8576e2a, 0x7fe4ab4, 0x2e13f2c3, 0xebe8e785}:
+    if cid in {0x020b1422, 0x8f97c628, 0x5c0d0a2a, 0xd8576e2a, 0x7fe4ab4, 0x2e13f2c3, 0xebe8e785, 0x31774388, 0xd3bc4b7a}:
         return _parse_user_obj_v4(b, cid)
     log.warning("Unsupported user constructor 0x%08x, raw=%s", cid, b[:64].hex())
     return None
@@ -548,9 +548,6 @@ class MTNet:
                 _ = r.i32()
             elif st == 0x5353e5a7:
                 _ = r.tl_bytes()
-            elif st == 0xe57b1432:
-                _, _ = r.tl_bytes(), r.tl_bytes()
-                _ = r.i32()
             elif st == 0x82006484:
                 _ = r.tl_bytes()
                 _ = r.i32()
@@ -675,7 +672,7 @@ class MTNet:
                 except Exception:
                     pass
                 return
-            if cid == 0x1f2b0afd:
+            if cid in {0x1f2b0afd, 0x62ba04d9}:
                 try:
                     msg_obj = inner[4:]
                     parsed = self._parse_new_message(msg_obj)
@@ -693,7 +690,7 @@ class MTNet:
                 except Exception:
                     pass
                 return
-            if cid in {0xf2ebdb4e, 0x62ba04d9, 0xa8cc5c5e, 0xe5e5b5b5, 0xecb9b4a3, 0xe5bdf8de, 0xc32d5b12}:
+            if cid in {0xf2ebdb4e, 0xe5bdf8de, 0xc32d5b12}:
                 return
             if cid == 0xedab447b:
                 try:
@@ -757,7 +754,7 @@ class MTNet:
                 except Exception:
                     pass
                 return
-            if cid == 0xe470cdb6:
+            if cid in {0xd087663a, 0x985d3abb}:
                 try:
                     chat_id = rm.i64()
                     actor_id = rm.i64()
@@ -802,22 +799,6 @@ class MTNet:
         cid = int.from_bytes(result[:4], "little")
         if cid == 0x44747e9a:
             return {"ok": True, "auth_key": self.auth_key or b""}
-        if cid in {0xb5757299, 0x922169ae}:
-            p = 4
-            flags = int.from_bytes(result[p:p+4], "little", signed=True); p += 4
-            if flags & (1 << 4):
-                p += 4
-            if flags & (1 << 0):
-                p += 4
-            if flags & (1 << 7):
-                _, p = _tl_bytes_at(result, p)
-            user = _parse_user_obj(result[p:])
-            out = {"ok": True, "auth_key": self.auth_key or b""}
-            if user is not None:
-                out["user"] = user
-            if user is None:
-                log.warning("auth result: user parse failed, result[%d:]=%s", p, result[p:p+64].hex())
-            return out
         if cid != 0x2ea2c0d4:
             return None
         p = 4
@@ -965,7 +946,7 @@ class MTNet:
                 else:
                     r.p += 4
             return {"ok": True, "updates": updates, "id": msg_id}
-        if cid == 0x9015e014:
+        if cid == 0x9015e101:
             _flags = r.i32()
             mid = r.i32()
             return {"ok": True, "id": mid, "updates": [{"_": "updateMessageID", "id": mid}]}
