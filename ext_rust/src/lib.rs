@@ -123,8 +123,6 @@ fn schema_info() -> PyResult<String> {
 }
 
 fn serialize_tl(name: &str, args_json: &str, cid: u32, fields: &[TlFieldDef], has_flags: bool) -> PyResult<Vec<u8>> {
-    use std::collections::HashSet;
-
     let args: serde_json::Value = serde_json::from_str(args_json)
         .map_err(|e| PyValueError::new_err(format!("args parsing failed: {}", e)))?;
 
@@ -133,25 +131,25 @@ fn serialize_tl(name: &str, args_json: &str, cid: u32, fields: &[TlFieldDef], ha
 
     if has_flags {
         let mut flags_val: u32 = 0;
-        let mut seen: HashSet<String> = HashSet::new();
 
         for f in fields {
             if let Some(bit) = f.flag_bit {
-                let key = format!("flag_{}", bit);
-                if seen.contains(&key) {
-                    continue;
+                let val = args.get(&f.name);
+                let has_val = match val {
+                    Some(serde_json::Value::Null) | None => false,
+                    Some(serde_json::Value::Bool(true)) if f.is_bare => true,
+                    Some(serde_json::Value::Bool(false)) if f.is_bare => false,
+                    _ => val.is_some(),
+                };
+                if has_val {
+                    flags_val |= 1 << bit;
                 }
-                seen.insert(key);
             }
         }
 
-        let mut delay_writes: Vec<(usize, Vec<u8>)> = Vec::new();
-        let mut flags_idx: isize = -1;
-
-        for (idx, f) in fields.iter().enumerate() {
+        for f in fields {
             if f.ftype == "#" {
-                flags_idx = idx as isize;
-                flags_val = 0;
+                buf.extend_from_slice(&flags_val.to_le_bytes());
                 continue;
             }
 
@@ -169,14 +167,12 @@ fn serialize_tl(name: &str, args_json: &str, cid: u32, fields: &[TlFieldDef], ha
                 }
 
                 if f.is_bare {
-                    flags_val |= 1 << f.flag_bit.unwrap();
                     continue;
                 }
 
-                flags_val |= 1 << f.flag_bit.unwrap();
                 let fb = encode_field_value(&f, val.unwrap_or(&serde_json::Value::Null))
                     .map_err(|e| PyValueError::new_err(format!("{}:{}: {}", name, f.name, e)))?;
-                delay_writes.push((idx, fb));
+                buf.extend_from_slice(&fb);
             } else {
                 if let Some(ref val) = args.get(&f.name) {
                     let fb = encode_field_value(&f, val)
@@ -184,15 +180,6 @@ fn serialize_tl(name: &str, args_json: &str, cid: u32, fields: &[TlFieldDef], ha
                     buf.extend_from_slice(&fb);
                 }
             }
-        }
-
-        if flags_idx >= 0 {
-            let flags_bytes = flags_val.to_le_bytes().to_vec();
-            buf.extend_from_slice(&flags_bytes);
-        }
-
-        for (_, fb) in delay_writes {
-            buf.extend_from_slice(&fb);
         }
     } else {
         for f in fields {
