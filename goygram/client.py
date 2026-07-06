@@ -378,12 +378,6 @@ class AppCore:
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
-        def _instant_exit(signum: Any, frame: Any) -> None:
-            print("\nProcess interrupted by user. Exiting...")
-            import os
-            os._exit(0)
-        signal.signal(signal.SIGINT, _instant_exit)
-        signal.signal(signal.SIGTERM, _instant_exit)
         self.log.info("Starting GoyGram core.")
         tasks = []
         try:
@@ -400,13 +394,9 @@ class AppCore:
                 self.log.info("MT transport is enabled.")
                 tasks.append(asyncio.create_task(self.mt.spin(), name="mt"))
                 await bootstrap_session(self, api_id=self.api_id, api_hash=self.api_hash, session_name=self.session_name)
-                try:
-                    await self.mt_req('updates.getState')
-                except Exception:
-                    pass
             await self.stop_ev.wait()
         except (KeyboardInterrupt, asyncio.CancelledError):
-            _instant_exit(None, None)
+            pass
         finally:
             await self.close()
             for task in tasks:

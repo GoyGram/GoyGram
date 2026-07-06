@@ -907,7 +907,15 @@ class MTNet:
         updates = self._parse_updates(result)
         if updates.get("id") or updates.get("updates"):
             return updates
-        return {"ok": True, "raw_result_hex": result.hex()}
+        try:
+            parsed = json.loads(rx.deserialize_constructor(result))
+            if parsed.get("_") == "rpc_result":
+                return {"ok": True, "result": parsed.get("result", parsed)}
+            return {"ok": True, "result": parsed}
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"ok": True, "raw_result_hex": result.hex()}
 
     def _parse_updates(self, result:bytes)->dict[str,Any]:
         if len(result) < 4:
@@ -1040,6 +1048,14 @@ class MTNet:
             if isinstance(v, dict) and '_' in v:
                 ctor_name = v.get('_')
                 inner = {k: _resolve_val(v2) for k, v2 in v.items() if k != '_'}
+                return _ext.serialize_constructor(ctor_name, json.dumps(inner)).hex()
+            if isinstance(v, dict) and len(v) == 1:
+                ctor_name = list(v.keys())[0]
+                inner = v[ctor_name]
+                if isinstance(inner, dict):
+                    inner = {k: _resolve_val(v2) for k, v2 in inner.items()}
+                else:
+                    inner = {}
                 return _ext.serialize_constructor(ctor_name, json.dumps(inner)).hex()
             if isinstance(v, (bytes, bytearray)):
                 return v.hex()
@@ -1241,12 +1257,8 @@ class MTNet:
         self.pending[req_msg_id] = (fut, obj)
         try:
             await self.send(obj, req_msg_id=req_msg_id)
-            while not fut.done() and not self.stop_ev.is_set():
-                pkt = await asyncio.wait_for(self.read_packet(), timeout=30.0)
-                self._handle_encrypted_packet(pkt)
-            if fut.done():
-                return fut.result()
-            raise TimeoutError(f'no response for act={act} msg_id={req_msg_id}')
+            await asyncio.wait_for(fut, timeout=30.0)
+            return fut.result()
         except asyncio.TimeoutError:
             self.pending.pop(req_msg_id, None)
             raise TimeoutError(f'no response for act={act} msg_id={req_msg_id}')

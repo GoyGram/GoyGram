@@ -10,7 +10,7 @@ from typing import Any
 log = logging.getLogger("goygram.tl.schema_loader")
 
 VECTOR_RE = re.compile(r"^Vector<(.*)>$")
-FLAG_RE = re.compile(r"^flags\.(\d+)\?(.+)$")
+FLAG_RE = re.compile(r"^(flags2?)\.(\d+)\?(.+)$")
 
 
 def _parse_field_type(raw: str) -> dict[str, Any]:
@@ -22,10 +22,12 @@ def _parse_field_type(raw: str) -> dict[str, Any]:
 
     m = FLAG_RE.match(raw)
     if m:
-        bit = int(m.group(1))
-        inner_raw = m.group(2)
+        flags_prefix = m.group(1)
+        bit = int(m.group(2))
+        inner_raw = m.group(3)
         inner = _parse_field_type(inner_raw)
         inner["flag_bit"] = bit
+        inner["flags_group"] = flags_prefix
         return inner
 
     if raw in {"true", "True"}:

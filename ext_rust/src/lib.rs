@@ -20,6 +20,8 @@ struct TlFieldDef {
     #[serde(default)]
     flag_bit: Option<u32>,
     #[serde(default)]
+    flags_group: Option<String>,
+    #[serde(default)]
     is_bare: bool,
     #[serde(default)]
     is_vector: bool,
@@ -123,6 +125,218 @@ fn schema_info() -> PyResult<String> {
     }
 }
 
+fn get_ctor_by_cid(cid: u32) -> Option<(String, TlConstructor)> {
+    let c = CTORS.read().unwrap();
+    let ctors = c.as_ref()?;
+    for (name, ctor) in ctors {
+        if ctor.cid == cid {
+            return Some((name.clone(), ctor.clone()));
+        }
+    }
+    None
+}
+
+fn read_u32(data: &[u8], pos: &mut usize) -> Result<u32, String> {
+    if *pos + 4 > data.len() {
+        return Err("unexpected eof".to_string());
+    }
+    let v = u32::from_le_bytes(data[*pos..*pos+4].try_into().unwrap());
+    *pos += 4;
+    Ok(v)
+}
+
+fn read_i32(data: &[u8], pos: &mut usize) -> Result<i32, String> {
+    Ok(read_u32(data, pos)? as i32)
+}
+
+fn read_i64(data: &[u8], pos: &mut usize) -> Result<i64, String> {
+    if *pos + 8 > data.len() {
+        return Err("unexpected eof".to_string());
+    }
+    let v = i64::from_le_bytes(data[*pos..*pos+8].try_into().unwrap());
+    *pos += 8;
+    Ok(v)
+}
+
+fn read_f64(data: &[u8], pos: &mut usize) -> Result<f64, String> {
+    if *pos + 8 > data.len() {
+        return Err("unexpected eof".to_string());
+    }
+    let v = f64::from_le_bytes(data[*pos..*pos+8].try_into().unwrap());
+    *pos += 8;
+    Ok(v)
+}
+
+fn read_bytes(data: &[u8], pos: &mut usize, len: usize) -> Result<Vec<u8>, String> {
+    if *pos + len > data.len() {
+        return Err("unexpected eof".to_string());
+    }
+    let v = data[*pos..*pos+len].to_vec();
+    *pos += len;
+    Ok(v)
+}
+
+fn read_tl_string(data: &[u8], pos: &mut usize) -> Result<String, String> {
+    if *pos >= data.len() {
+        return Err("unexpected eof".to_string());
+    }
+    let len = data[*pos] as usize;
+    *pos += 1;
+    let str_len = if len <= 253 {
+        len
+    } else if len == 254 {
+        if *pos + 3 > data.len() {
+            return Err("unexpected eof".to_string());
+        }
+        let l = u32::from_le_bytes([data[*pos], data[*pos+1], data[*pos+2], 0]) as usize;
+        *pos += 3;
+        l
+    } else {
+        return Err("bad string len".to_string());
+    };
+    let raw = read_bytes(data, pos, str_len)?;
+    let padding = (4 - ((1 + if len <= 253 { 0 } else { 3 } + str_len) % 4)) % 4;
+    *pos += padding;
+    String::from_utf8(raw).map_err(|e| format!("utf8: {}", e))
+}
+
+fn read_tl_bytes_raw(data: &[u8], pos: &mut usize) -> Result<Vec<u8>, String> {
+    if *pos >= data.len() {
+        return Err("unexpected eof".to_string());
+    }
+    let len = data[*pos] as usize;
+    *pos += 1;
+    let byte_len = if len <= 253 {
+        len
+    } else if len == 254 {
+        if *pos + 3 > data.len() {
+            return Err("unexpected eof".to_string());
+        }
+        let l = u32::from_le_bytes([data[*pos], data[*pos+1], data[*pos+2], 0]) as usize;
+        *pos += 3;
+        l
+    } else {
+        return Err("bad bytes len".to_string());
+    };
+    let raw = read_bytes(data, pos, byte_len)?;
+    let padding = (4 - ((1 + if len <= 253 { 0 } else { 3 } + byte_len) % 4)) % 4;
+    *pos += padding;
+    Ok(raw)
+}
+
+fn read_field_value(data: &[u8], pos: &mut usize, f: &TlFieldDef) -> Result<serde_json::Value, String> {
+    match f.ftype.as_str() {
+        "#" => Ok(serde_json::json!(read_u32(data, pos)?)),
+        "int" | "Int" => Ok(serde_json::json!(read_i32(data, pos)?)),
+        "long" | "Long" => Ok(serde_json::json!(read_i64(data, pos)?)),
+        "int128" => {
+            let b = read_bytes(data, pos, 16)?;
+            Ok(serde_json::json!(hex::encode(b)))
+        }
+        "int256" => {
+            let b = read_bytes(data, pos, 32)?;
+            Ok(serde_json::json!(hex::encode(b)))
+        }
+        "string" | "String" => {
+            let s = read_tl_string(data, pos)?;
+            Ok(serde_json::json!(s))
+        }
+        "bytes" | "Bytes" => {
+            let b = read_tl_bytes_raw(data, pos)?;
+            Ok(serde_json::json!(hex::encode(b)))
+        }
+        "double" | "Double" => Ok(serde_json::json!(read_f64(data, pos)?)),
+        "Bool" | "boolTrue" | "boolFalse" => {
+            let cid = read_u32(data, pos)?;
+            Ok(serde_json::json!(cid == 0x997275b5))
+        }
+        "true" | "True" => Ok(serde_json::json!(true)),
+        _ => {
+            if f.is_vector {
+                read_tl_vector(data, pos, f)
+            } else {
+                deserialize_tl(data, pos)
+            }
+        }
+    }
+}
+
+fn read_tl_vector(data: &[u8], pos: &mut usize, f: &TlFieldDef) -> Result<serde_json::Value, String> {
+    let vec_cid = read_u32(data, pos)?;
+    if vec_cid != 0x1cb5c415 {
+        return Err(format!("not a vector: {:08x}", vec_cid));
+    }
+    let count = read_i32(data, pos)? as usize;
+    let inner_type = f.vector_inner.as_deref().unwrap_or("int");
+    let inner_field = TlFieldDef {
+        name: "item".to_string(),
+        ftype: inner_type.to_string(),
+        flag_bit: None,
+        flags_group: None,
+        is_bare: false,
+        is_vector: false,
+        vector_inner: None,
+    };
+    let mut arr = Vec::new();
+    for _ in 0..count {
+        let val = read_field_value(data, pos, &inner_field)?;
+        arr.push(val);
+    }
+    Ok(serde_json::json!(arr))
+}
+
+fn deserialize_fields(data: &[u8], pos: &mut usize, fields: &[TlFieldDef], has_flags: bool, name: &str) -> Result<serde_json::Value, String> {
+    let mut obj = serde_json::Map::new();
+    obj.insert("_".to_string(), serde_json::json!(name));
+    let mut flags_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+
+    for f in fields {
+        if f.ftype == "#" {
+            let val = read_u32(data, pos)?;
+            flags_map.insert(f.name.clone(), val);
+            obj.insert(f.name.clone(), serde_json::json!(val));
+            continue;
+        }
+
+        if has_flags && f.flag_bit.is_some() {
+            let group = f.flags_group.as_deref().unwrap_or("flags");
+            let flags_val = flags_map.get(group).copied().unwrap_or(0);
+            let bit = f.flag_bit.unwrap();
+            if flags_val & (1 << bit) == 0 {
+                continue;
+            }
+            if f.is_bare {
+                continue;
+            }
+        }
+
+        let val = read_field_value(data, pos, f)?;
+        obj.insert(f.name.clone(), val);
+    }
+
+    Ok(serde_json::Value::Object(obj))
+}
+
+fn deserialize_tl(data: &[u8], pos: &mut usize) -> Result<serde_json::Value, String> {
+    let cid = read_u32(data, pos)?;
+    if let Some((name, ctor)) = get_ctor_by_cid(cid) {
+        deserialize_fields(data, pos, &ctor.fields, ctor.has_flags, &name)
+    } else {
+        let start = *pos - 4;
+        let remaining = &data[start..];
+        Err(format!("unknown constructor 0x{:08x} at pos {}: {}",
+            cid, start, hex::encode(if remaining.len() > 64 { &remaining[..64] } else { remaining })))
+    }
+}
+
+#[pyfunction]
+fn deserialize_constructor(data: Vec<u8>) -> PyResult<String> {
+    let mut pos = 0;
+    let result = deserialize_tl(&data, &mut pos)
+        .map_err(|e| PyValueError::new_err(e))?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
 fn serialize_tl(name: &str, args_json: &str, cid: u32, fields: &[TlFieldDef], has_flags: bool) -> PyResult<Vec<u8>> {
     let args: serde_json::Value = serde_json::from_str(args_json)
         .map_err(|e| PyValueError::new_err(format!("args parsing failed: {}", e)))?;
@@ -131,10 +345,11 @@ fn serialize_tl(name: &str, args_json: &str, cid: u32, fields: &[TlFieldDef], ha
     buf.extend_from_slice(&cid.to_le_bytes());
 
     if has_flags {
-        let mut flags_val: u32 = 0;
+        let mut flags_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
 
         for f in fields {
             if let Some(bit) = f.flag_bit {
+                let group = f.flags_group.as_deref().unwrap_or("flags");
                 let val = args.get(&f.name);
                 let has_val = match val {
                     Some(serde_json::Value::Null) | None => false,
@@ -143,14 +358,16 @@ fn serialize_tl(name: &str, args_json: &str, cid: u32, fields: &[TlFieldDef], ha
                     _ => val.is_some(),
                 };
                 if has_val {
-                    flags_val |= 1 << bit;
+                    *flags_map.entry(group.to_string()).or_insert(0) |= 1 << bit;
                 }
             }
         }
 
         for f in fields {
             if f.ftype == "#" {
-                buf.extend_from_slice(&flags_val.to_le_bytes());
+                let group = &f.name;
+                let fv = flags_map.get(group).copied().unwrap_or(0);
+                buf.extend_from_slice(&fv.to_le_bytes());
                 continue;
             }
 
@@ -326,6 +543,7 @@ fn encode_tl_vector(f: &TlFieldDef, val: &serde_json::Value) -> Result<Vec<u8>, 
             name: "item".to_string(),
             ftype: inner_type.to_string(),
             flag_bit: None,
+            flags_group: None,
             is_bare: false,
             is_vector: false,
             vector_inner: None,
@@ -460,6 +678,7 @@ fn ext(m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(schema_info, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_method, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_constructor, m)?)?;
+    m.add_function(wrap_pyfunction!(deserialize_constructor, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_enc, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_dec, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_enc_raw, m)?)?;
