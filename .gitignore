@@ -17,3 +17,4 @@ target/
 .DS_Store
 test_*.py
 *.vault
+.backups/

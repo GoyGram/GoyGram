@@ -304,6 +304,8 @@ class MTNet:
         self._init_done=False
         self._api_id:int|None=None
         self._preferred_dc = int(str(port)[-1]) if 1 <= int(str(port)[-1]) <= 5 else 2
+        self._reader_task: asyncio.Task[None] | None = None
+        self._reader_lock = asyncio.Lock()
 
     def pick(self,obj:dict[str,Any],*keys:str)->Any:
         for k in keys:
@@ -1272,11 +1274,35 @@ class MTNet:
         return msg_id
 
     async def close(self)->None:
+        self.stop_ev.set()
+        task = self._reader_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._reader_task = None
         if self.wr:
             self.wr.close(); await self.wr.wait_closed()
             self.wr=None; self.rd=None
+        for future, _ in self.pending.values():
+            if not future.done():
+                future.cancel()
+        self.pending.clear()
+
+    async def _ensure_reader(self) -> None:
+        async with self._reader_lock:
+            if self._reader_task is None or self._reader_task.done():
+                self.stop_ev.clear()
+                self._reader_task = asyncio.create_task(self.spin(), name="goygram-mt-reader")
+
+    async def start(self) -> None:
+        if self.auth_key is None:
+            await self.ensure_auth_key()
+        await self._ensure_reader()
 
     async def _rpc_call(self, act:str, **kw:Any)->dict[str,Any]:
+        if self.auth_key is None:
+            await self.ensure_auth_key()
+        await self._ensure_reader()
         loop = asyncio.get_running_loop()
         fut:asyncio.Future[dict[str,Any]] = loop.create_future()
         req_msg_id = self.msg_ids.next()
@@ -1284,8 +1310,7 @@ class MTNet:
         self.pending[req_msg_id] = (fut, obj)
         try:
             await self.send(obj, req_msg_id=req_msg_id)
-            await asyncio.wait_for(fut, timeout=30.0)
-            return fut.result()
+            return await asyncio.wait_for(fut, timeout=30.0)
         except asyncio.TimeoutError:
             self.pending.pop(req_msg_id, None)
             raise TimeoutError(f'no response for act={act} msg_id={req_msg_id}')
