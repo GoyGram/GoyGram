@@ -68,6 +68,7 @@ class MsgObj:
         return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
 
     async def reply(self, txt: str, kbd: Any | None = None, topic_id: int | None = None, link_options: Any | None = None, **kw: Any) -> Any:
+        from goygram import ext as rx
         if self.chat_id is None:
             return None
         if self.src == "bot" and self.app.bot is not None:

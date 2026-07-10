@@ -535,6 +535,16 @@ class MTNet:
         self._init_done=False
         self.auth_ready.set()
 
+    def _dispatch_updates(self, result: Any) -> None:
+        if not isinstance(result, dict):
+            return
+        for update in result.get("updates", []):
+            if not isinstance(update, dict) or update.get("_") != "updateNewMessage":
+                continue
+            parsed = self._parse_new_message(update.get("raw", b""))
+            if parsed:
+                asyncio.create_task(self.bus.push("mt", parsed))
+
     def _parse_phone_code_hash(self, result:bytes)->str|None:
         try:
             r = Reader(result)
@@ -594,6 +604,7 @@ class MTNet:
                     return
                 try:
                     parsed = self._parse_rpc_result(result)
+                    self._dispatch_updates(parsed)
                     fut.set_result(parsed)
                 except GoyGramError as exc:
                     fut.set_exception(exc)
@@ -937,7 +948,11 @@ class MTNet:
                     updates.append({"_": "updateMessageID", "id": msg_id})
                 upnm_pos = result.find(upnm_needle, r.p)
                 if upnm_pos >= 0:
-                    updates.append({"_": "updateNewMessage", "id": msg_id})
+                    updates.append({
+                        "_": "updateNewMessage",
+                        "id": msg_id,
+                        "raw": result[upnm_pos:],
+                    })
                 pin_needle = b'\xb5\xea\x85\xed'
                 pin_pos = result.find(pin_needle, r.p)
                 if pin_pos >= 0:
@@ -1107,10 +1122,22 @@ class MTNet:
             return {
                 'kind': 'msg', 'msg_id': msg_id,
                 'chat_id': sid, 'from_id': sid if is_out else None,
-                'text': txt, 'is_me': is_out,
+                'text': txt, 'is_me': is_out or sid in self._extract_user_ids(data),
             }
         except Exception:
             return None
+
+    def _extract_user_ids(self, data: bytes) -> set[int]:
+        ids = set()
+        for offset in range(0, len(data) - 3, 4):
+            value = int.from_bytes(data[offset:offset + 4], "little")
+            if value:
+                ids.add(value)
+        for offset in range(0, len(data) - 7, 4):
+            value = int.from_bytes(data[offset:offset + 8], "little")
+            if value:
+                ids.add(value)
+        return ids
 
     async def send_container(self, calls:list[tuple[str,dict[str,Any]]])->int:
         await self.ensure_auth_key()
