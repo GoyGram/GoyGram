@@ -495,6 +495,9 @@ class GoyGram:
     def on_member(self, fn: MemFn | None = None, *, filt: Filter | None = None):
         return self.core.on_member(fn, filt=filt)
 
+    def on_edit(self, fn: Fn | None = None, filt: Filter | None = None):
+        return self.core.on_edit(fn, filt=filt)
+
     def on_update(self, fn: Callable[[object], Awaitable[Any]] | None = None, *, filt: Filter | None = None):
         return self.core.on_update(fn, filt=filt)
 
