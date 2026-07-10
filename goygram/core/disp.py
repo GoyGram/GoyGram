@@ -48,14 +48,6 @@ class Disp:
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
-            for fn in list(getattr(self.app, "update_hook", [])):
-                try:
-                    await fn(msg)
-                except StopPropagation:
-                    return
-                except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             return
         if kind == "edit":
             msg = MsgObj(pkt.get("src", "sys"), data, self.app)
@@ -78,26 +70,10 @@ class Disp:
                 except Exception as e:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
-            for fn in list(getattr(self.app, "update_hook", [])):
-                try:
-                    await fn(poll)
-                except StopPropagation:
-                    return
-                except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             return
         if kind == "cb":
             cb = CbObj(pkt.get("src", "sys"), data, self.app)
             for fn in list(getattr(self.app, "cb_hook", [])):
-                try:
-                    await fn(cb)
-                except StopPropagation:
-                    return
-                except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
-            for fn in list(getattr(self.app, "update_hook", [])):
                 try:
                     await fn(cb)
                 except StopPropagation:
@@ -121,14 +97,6 @@ class Disp:
             return
         mem = MemberObj(pkt.get("src", "sys"), data, self.app)
         for fn in list(getattr(self.app, "member_hook", [])):
-            try:
-                await fn(mem)
-            except StopPropagation:
-                return
-            except Exception as e:
-                self.log.error("Handler failure: %r", e)
-                await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
-        for fn in list(getattr(self.app, "update_hook", [])):
             try:
                 await fn(mem)
             except StopPropagation:

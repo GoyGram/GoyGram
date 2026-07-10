@@ -547,14 +547,35 @@ class MTNet:
                 raw = bytes.fromhex(raw)
             except ValueError:
                 raw = None
-        if update_type in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"} and isinstance(raw, bytes):
-            parsed = self._parse_new_message(raw)
+        if update_type in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"}:
+            message = update.get("message")
+            if isinstance(raw, bytes):
+                parsed = self._parse_new_message(raw)
+            elif isinstance(message, dict):
+                parsed = self._parse_new_message(bytes.fromhex(message["raw"])) if isinstance(message.get("raw"), str) else None
+                if parsed is None:
+                    peer = message.get("peer_id", {})
+                    peer_kind = peer.get("_") if isinstance(peer, dict) else None
+                    peer_id = peer.get("user_id") if peer_kind == "peerUser" else peer.get("chat_id") if peer_kind == "peerChat" else peer.get("channel_id") if peer_kind == "peerChannel" else None
+                    if peer_id is not None:
+                        from_peer = message.get("from_id", {})
+                        from_id = from_peer.get("user_id") if isinstance(from_peer, dict) else None
+                        is_out = bool(message.get("out"))
+                        parsed = {
+                            "kind": "msg",
+                            "msg_id": message.get("id"),
+                            "chat_id": int(peer_id) if peer_kind == "peerUser" else -int(peer_id) if peer_kind == "peerChat" else -1000000000000 - int(peer_id),
+                            "from_id": self.self_id if is_out else from_id,
+                            "text": message.get("message", ""),
+                            "is_me": is_out,
+                        }
+            else:
+                parsed = None
             if parsed:
                 parsed["kind"] = "edit" if update_type.startswith("updateEdit") else "msg"
                 parsed["update_type"] = update_type
                 parsed["raw_update"] = update
                 asyncio.create_task(self.bus.push("mt", parsed))
-                asyncio.create_task(self.bus.push("mt", {"kind": "update", "update_type": update_type, "raw": update}))
                 return
         asyncio.create_task(self.bus.push("mt", {"kind": "update", "update_type": update_type, "raw": update}))
 

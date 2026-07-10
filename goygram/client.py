@@ -108,7 +108,6 @@ class AppCore:
         self.cb_hook: list[CbFn] = []
         self.poll_hook: list[PollFn] = []
         self.member_hook: list[MemFn] = []
-        self.update_hook: list[Callable[[object], Awaitable[Any]]] = []
         self.stop_ev = asyncio.Event()
         self.log = get_logger("goygram.app")
         self.self_id: int | None = None
@@ -164,14 +163,6 @@ class AppCore:
                     return await inner(msg)
                 return None
             self.hook.append(guarded)
-            return inner
-        if fn is not None:
-            return wrap(fn)
-        return wrap
-
-    def on_update(self, fn: Fn | None = None):
-        def wrap(inner: Fn) -> Fn:
-            self.update_hook.append(inner)
             return inner
         if fn is not None:
             return wrap(fn)
