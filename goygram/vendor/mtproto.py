@@ -664,13 +664,10 @@ class MTNet:
                 return
             if cid in {0x74ae4240, 0x725b04c3}:
                 try:
-                    vec_cid = rm.u32()
-                    if vec_cid == 0x1cb5c415:
-                        upd_cnt = rm.i32()
-                        needle = b'\xfd\x0a\x2b\x1f'
-                        pos = inner.find(needle, rm.p)
-                        if pos >= 0 and pos < len(inner) - 4:
-                            _consume(inner[pos:])
+                    needle = b'\xfd\x0a\x2b\x1f'
+                    pos = inner.find(needle, rm.p)
+                    if pos >= 0 and pos < len(inner) - 4:
+                        _consume(inner[pos:])
                 except Exception:
                     pass
                 return
