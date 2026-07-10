@@ -628,21 +628,9 @@ class MTNet:
                 return
             if cid in {0x313bc7f8, 0x4d6deea5}:
                 try:
-                    flags = rm.i32()
-                    msg_id = rm.i32()
-                    user_id = rm.i64()
-                    msg_text = rm.tl_bytes().decode("utf-8", errors="ignore")
-                    is_out = bool(flags & 2)
-                    sid = getattr(self, 'self_id', 0) or 0
-                    pkt = {
-                        "kind": "msg",
-                        "msg_id": msg_id,
-                        "chat_id": user_id if not is_out else (sid or user_id),
-                        "from_id": user_id if not is_out else (sid or user_id),
-                        "text": msg_text,
-                        "is_me": is_out or (sid != 0 and user_id == sid),
-                    }
-                    asyncio.ensure_future(self.bus.push("mt", pkt))
+                    parsed = self._parse_new_message(inner[4:])
+                    if parsed:
+                        asyncio.ensure_future(self.bus.push("mt", parsed))
                 except Exception:
                     pass
                 return
@@ -664,10 +652,26 @@ class MTNet:
                 return
             if cid in {0x74ae4240, 0x725b04c3}:
                 try:
+                    import json
+                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    for update in decoded.get("updates", []):
+                        if update.get("_") == "updateNewMessage":
+                            parsed = self._parse_new_message(bytes.fromhex(update.get("raw", "")))
+                            if parsed:
+                                asyncio.ensure_future(self.bus.push("mt", parsed))
+                                return
                     needle = b'\xfd\x0a\x2b\x1f'
                     pos = inner.find(needle, rm.p)
                     if pos >= 0 and pos < len(inner) - 4:
                         _consume(inner[pos:])
+                except Exception:
+                    pass
+                return
+            if cid == 0x313bc7f8:
+                try:
+                    parsed = self._parse_new_message(inner[4:])
+                    if parsed:
+                        asyncio.ensure_future(self.bus.push("mt", parsed))
                 except Exception:
                     pass
                 return
@@ -1087,10 +1091,20 @@ class MTNet:
         return bytes(_ext.serialize_method(tl_name, json.dumps(data)))
 
     def _parse_new_message(self, data:bytes)->dict[str,Any]|None:
+        try:
+            import json
+            decoded = json.loads(rx.deserialize_constructor(data))
+            if decoded.get("_") in {"updateShortMessage", "message"}:
+                return {
+                    "kind": "msg", "msg_id": decoded["id"], "chat_id": getattr(self, "self_id", 0) or 0,
+                    "from_id": getattr(self, "self_id", 0) or 0, "text": decoded.get("message", ""),
+                    "is_me": bool(decoded.get("out")),
+                }
+        except Exception:
+            pass
         if len(data) < 20:
             return None
         try:
-
             search_end = min(len(data), 120)
             txt = ''
             for i in range(search_end - 2, 0, -1):
