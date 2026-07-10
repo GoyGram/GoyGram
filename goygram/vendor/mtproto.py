@@ -1094,11 +1094,36 @@ class MTNet:
         try:
             import json
             decoded = json.loads(rx.deserialize_constructor(data))
-            if decoded.get("_") in {"updateShortMessage", "message"}:
+            kind = decoded.get("_")
+            is_out = bool(decoded.get("out"))
+            self_id = getattr(self, "self_id", 0) or 0
+            if kind == "updateShortMessage":
+                peer_id = decoded.get("user_id")
                 return {
-                    "kind": "msg", "msg_id": decoded["id"], "chat_id": getattr(self, "self_id", 0) or 0,
-                    "from_id": getattr(self, "self_id", 0) or 0, "text": decoded.get("message", ""),
-                    "is_me": bool(decoded.get("out")),
+                    "kind": "msg", "msg_id": decoded["id"], "chat_id": peer_id,
+                    "from_id": self_id if is_out else peer_id, "text": decoded.get("message", ""),
+                    "is_me": is_out,
+                }
+            if kind == "updateShortChatMessage":
+                chat_id = decoded.get("chat_id")
+                return {
+                    "kind": "msg", "msg_id": decoded["id"], "chat_id": -int(chat_id),
+                    "from_id": self_id if is_out else decoded.get("from_id"), "text": decoded.get("message", ""),
+                    "is_me": is_out,
+                }
+            if kind == "message":
+                peer = decoded.get("peer_id", {})
+                peer_kind = peer.get("_")
+                peer_id = peer.get("user_id") if peer_kind == "peerUser" else peer.get("chat_id") if peer_kind == "peerChat" else peer.get("channel_id")
+                if peer_id is None:
+                    return None
+                chat_id = int(peer_id) if peer_kind == "peerUser" else -int(peer_id) if peer_kind == "peerChat" else -1000000000000 - int(peer_id)
+                from_peer = decoded.get("from_id", {})
+                from_id = from_peer.get("user_id") if isinstance(from_peer, dict) else None
+                return {
+                    "kind": "msg", "msg_id": decoded["id"], "chat_id": chat_id,
+                    "from_id": self_id if is_out else from_id, "text": decoded.get("message", ""),
+                    "is_me": is_out,
                 }
         except Exception:
             pass
