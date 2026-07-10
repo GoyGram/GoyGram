@@ -4,5 +4,6 @@ from goygram.types.kbd import KbdBuilder
 from goygram.types.member import MemberObj
 from goygram.types.msg import MsgObj
 from goygram.types.poll import PollObj
+from goygram.types.update import UpdateObj
 
-__all__ = ["MsgObj", "CbObj", "PollObj", "MemberObj", "KbdBuilder"]
+__all__ = ["MsgObj", "CbObj", "PollObj", "MemberObj", "UpdateObj", "KbdBuilder"]

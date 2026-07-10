@@ -318,9 +318,14 @@ fn deserialize_fields(data: &[u8], pos: &mut usize, fields: &[TlFieldDef], has_f
 }
 
 fn deserialize_tl(data: &[u8], pos: &mut usize) -> Result<serde_json::Value, String> {
+    let start = *pos;
     let cid = read_u32(data, pos)?;
     if let Some((name, ctor)) = get_ctor_by_cid(cid) {
-        deserialize_fields(data, pos, &ctor.fields, ctor.has_flags, &name)
+        let mut result = deserialize_fields(data, pos, &ctor.fields, ctor.has_flags, &name)?;
+        if let Some(obj) = result.as_object_mut() {
+            obj.insert("raw".to_string(), serde_json::json!(hex::encode(&data[start..*pos])));
+        }
+        Ok(result)
     } else {
         let start = *pos - 4;
         let remaining = &data[start..];

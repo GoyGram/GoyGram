@@ -12,6 +12,7 @@ from goygram.types.cb import CbObj
 from goygram.types.member import MemberObj
 from goygram.types.msg import MsgObj
 from goygram.types.poll import PollObj
+from goygram.types.update import UpdateObj
 
 Fn = Callable[[MsgObj], Awaitable[Any]]
 CbFn = Callable[[CbObj], Awaitable[Any]]
@@ -56,6 +57,17 @@ class Disp:
                     self.log.error("Handler failure: %r", e)
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
             return
+        if kind == "edit":
+            msg = MsgObj(pkt.get("src", "sys"), data, self.app)
+            for fn in list(getattr(self.app, "edit_hook", [])):
+                try:
+                    await fn(msg)
+                except StopPropagation:
+                    return
+                except Exception as e:
+                    self.log.error("Handler failure: %r", e)
+                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+            return
         if kind == "poll":
             poll = PollObj(pkt.get("src", "sys"), data, self.app)
             for fn in list(getattr(self.app, "poll_hook", [])):
@@ -88,6 +100,17 @@ class Disp:
             for fn in list(getattr(self.app, "update_hook", [])):
                 try:
                     await fn(cb)
+                except StopPropagation:
+                    return
+                except Exception as e:
+                    self.log.error("Handler failure: %r", e)
+                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+            return
+        if kind == "update":
+            update = UpdateObj(pkt.get("src", "sys"), data, self.app)
+            for fn in list(getattr(self.app, "update_hook", [])):
+                try:
+                    await fn(update)
                 except StopPropagation:
                     return
                 except Exception as e:

@@ -537,15 +537,32 @@ class MTNet:
         self._init_done=False
         self.auth_ready.set()
 
+    def _dispatch_update(self, update: Any) -> None:
+        if not isinstance(update, dict):
+            return
+        update_type = str(update.get("_", "unknown"))
+        raw = update.get("raw")
+        if isinstance(raw, str):
+            try:
+                raw = bytes.fromhex(raw)
+            except ValueError:
+                raw = None
+        if update_type in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"} and isinstance(raw, bytes):
+            parsed = self._parse_new_message(raw)
+            if parsed:
+                parsed["kind"] = "edit" if update_type.startswith("updateEdit") else "msg"
+                parsed["update_type"] = update_type
+                parsed["raw_update"] = update
+                asyncio.create_task(self.bus.push("mt", parsed))
+                asyncio.create_task(self.bus.push("mt", {"kind": "update", "update_type": update_type, "raw": update}))
+                return
+        asyncio.create_task(self.bus.push("mt", {"kind": "update", "update_type": update_type, "raw": update}))
+
     def _dispatch_updates(self, result: Any) -> None:
         if not isinstance(result, dict):
             return
         for update in result.get("updates", []):
-            if not isinstance(update, dict) or update.get("_") != "updateNewMessage":
-                continue
-            parsed = self._parse_new_message(update.get("raw", b""))
-            if parsed:
-                asyncio.create_task(self.bus.push("mt", parsed))
+            self._dispatch_update(update)
 
     def _parse_phone_code_hash(self, result:bytes)->str|None:
         try:
@@ -630,6 +647,7 @@ class MTNet:
                 try:
                     parsed = self._parse_new_message(inner[4:])
                     if parsed:
+                        parsed["update_type"] = "updateShortMessage" if cid == 0x313bc7f8 else "updateShortChatMessage"
                         asyncio.ensure_future(self.bus.push("mt", parsed))
                 except Exception:
                     pass
@@ -654,12 +672,7 @@ class MTNet:
                 try:
                     import json
                     decoded = json.loads(rx.deserialize_constructor(inner))
-                    for update in decoded.get("updates", []):
-                        if update.get("_") == "updateNewMessage":
-                            parsed = self._parse_new_message(bytes.fromhex(update.get("raw", "")))
-                            if parsed:
-                                asyncio.ensure_future(self.bus.push("mt", parsed))
-                                return
+                    self._dispatch_updates(decoded)
                     needle = b'\xfd\x0a\x2b\x1f'
                     pos = inner.find(needle, rm.p)
                     if pos >= 0 and pos < len(inner) - 4:
@@ -1095,6 +1108,9 @@ class MTNet:
             import json
             decoded = json.loads(rx.deserialize_constructor(data))
             kind = decoded.get("_")
+            if kind in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"}:
+                decoded = decoded.get("message", {})
+                kind = decoded.get("_")
             is_out = bool(decoded.get("out"))
             self_id = getattr(self, "self_id", 0) or 0
             if kind == "updateShortMessage":

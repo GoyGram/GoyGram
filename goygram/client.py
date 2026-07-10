@@ -103,6 +103,8 @@ class AppCore:
         self.fsm = FSMEngine()
         self.disp = Disp(self, self.bus)
         self.hook: list[Fn] = []
+        self.edit_hook: list[Fn] = []
+        self.update_hook: list[Fn] = []
         self.cb_hook: list[CbFn] = []
         self.poll_hook: list[PollFn] = []
         self.member_hook: list[MemFn] = []
@@ -162,6 +164,32 @@ class AppCore:
                     return await inner(msg)
                 return None
             self.hook.append(guarded)
+            return inner
+        if fn is not None:
+            return wrap(fn)
+        return wrap
+
+    def on_update(self, fn: Fn | None = None):
+        def wrap(inner: Fn) -> Fn:
+            self.update_hook.append(inner)
+            return inner
+        if fn is not None:
+            return wrap(fn)
+        return wrap
+
+    def on_edit(self, fn: Fn | None = None, filt: Filter | None = None):
+        if isinstance(fn, Filter):
+            filt = fn
+            fn = None
+        def wrap(inner: Fn) -> Fn:
+            if filt is None:
+                self.edit_hook.append(inner)
+                return inner
+            async def guarded(msg: MsgObj) -> Any:
+                if filt(msg):
+                    return await inner(msg)
+                return None
+            self.edit_hook.append(guarded)
             return inner
         if fn is not None:
             return wrap(fn)
