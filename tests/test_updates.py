@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from goygram.core.bus import Bus
 from goygram.vendor.botapi import BotNet
 from goygram.vendor.mtproto import MTNet
+import goygram.vendor.mtproto as mtproto
 
 
 def make_net() -> BotNet:
@@ -102,3 +104,24 @@ def test_bot_polling_requests_all_update_families() -> None:
 
     assert requests[0][0] == "getUpdates"
     assert requests[0][1]["allowed_updates"] == []
+
+
+def test_structured_sent_code_is_preferred_over_heuristic_parser(monkeypatch) -> None:
+    net = MTNet("127.0.0.1", 443, Bus())
+
+    class FakeRx:
+        @staticmethod
+        def deserialize_constructor(data: bytes) -> str:
+            return json.dumps(
+                {
+                    "_": "auth.sentCode",
+                    "phone_code_hash": "hash-from-schema",
+                    "type": {"_": "auth.sentCodeTypeEmailCode"},
+                }
+            )
+
+    monkeypatch.setattr(mtproto, "rx", FakeRx)
+
+    result = net._parse_rpc_result(b"\x02\x25\x00\x5e")
+
+    assert result == {"ok": True, "phone_code_hash": "hash-from-schema"}
