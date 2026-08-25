@@ -1,7 +1,7 @@
 # GoyGram
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/sepiol026-wq/GoyGram/refs/heads/main/GoyGram.png" alt="GoyGram Logo" width="650">
+  <img src="https://raw.githubusercontent.com/GoyGram/GoyGram/main/GoyGram.png" alt="GoyGram Logo" width="650">
 </p>
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg?style=for-the-badge&logo=python)](https://www.python.org)
@@ -132,7 +132,7 @@ Choose QR code (scan with any Telegram client) or phone number (SMS code). 2FA p
 - **Algorithm**: AES-256-GCM (authenticated encryption via Rust's `aes-gcm` crate)
 - **Key derivation**: PBKDF2-HMAC-SHA256, 600,000 iterations, key material = `{machine-id}:{session_name}`
 - **Override**: `GOYGRAM_VAULT_KEY` env var (base64-encoded 32 bytes) bypasses PBKDF2 entirely
-- **Plain JSON fallback**: if decryption fails, tries reading as plain JSON (auto-re-encrypts on next save)
+The vault does not fall back to silently accepting plaintext after a failed decryption.
 
 ### Session Migration
 Telethon/Pyrogram `.session` files are auto-detected, read from SQLite, migrated to `.vault`, and securely zeroized (overwrite + fsync + unlink).
