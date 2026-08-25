@@ -98,7 +98,7 @@ def _merge_schema_text(api_text: str, mtproto_text: str | None) -> str:
 
 
 def init_schema(ext_module, bundled_api_tl_path: str | None = None):
-    from goygram.vendor.tl_schema import parse_api_tl
+    from goygram.protocol.tl_schema import parse_api_tl
     import tempfile
 
     bootstrap_loaded = False
@@ -160,7 +160,7 @@ def init_schema(ext_module, bundled_api_tl_path: str | None = None):
 
 
 def _background_update(ext_module):
-    from goygram.vendor.tl_schema import parse_api_tl
+    from goygram.protocol.tl_schema import parse_api_tl
     import tempfile
 
     log.debug("Background schema update started")

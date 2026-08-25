@@ -76,12 +76,12 @@ class AppCore:
         self.mt = None
         self.api = None
         if cfg.bot:
-            from goygram.vendor.botapi import BotNet
+            from goygram.transports.botapi import BotNet
 
             self.bot = BotNet(cfg.bot.token, self.bus, cfg.bot.timeout, cfg.bot.base)
             self.api = BotAPI(self.bot)
         if cfg.mt:
-            from goygram.vendor.mtproto import MTNet
+            from goygram.transports.mtproto import MTNet
 
             self.mt = MTNet(
                 cfg.mt.host,

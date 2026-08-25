@@ -64,7 +64,7 @@ def _html_to_entities(text:str)->tuple[str, list[tuple[int,int,int,str|None]]]:
 
 log = logging.getLogger("goygram.mtproto")
 
-from .tl_core import IntermediateTransport, MTMessage, MsgIdGen, Reader, build_msg_container, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
+from goygram.protocol.tl_core import IntermediateTransport, MTMessage, MsgIdGen, Reader, build_msg_container, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
 
 try:
     from goygram import ext as rx
@@ -1438,7 +1438,7 @@ class MTNet:
         except Exception as exc:
             import traceback; traceback.print_exc()
             return {"ok": False, "error": "PASSWORD_SRP_BUILD_FAILED", "error_message": str(exc)}
-        from goygram.vendor.tl_core import u32, i64, tl_bytes
+        from goygram.protocol.tl_core import u32, i64, tl_bytes
         srp = u32(0xd27ff082) + i64(srp_id) + tl_bytes(a_pub) + tl_bytes(m1)
         return await self._rpc_call('auth.checkPassword', password=srp)
 

@@ -9,9 +9,9 @@ from types import SimpleNamespace
 from goygram.client import AppCore
 from goygram.core.bus import Bus
 from goygram.core.fsm import FSMEngine
-from goygram.vendor.botapi import BotNet
-from goygram.vendor.mtproto import MTNet
-import goygram.vendor.mtproto as mtproto
+from goygram.transports.botapi import BotNet
+from goygram.transports.mtproto import MTNet
+import goygram.transports.mtproto as mtproto
 
 
 def make_net() -> BotNet:
