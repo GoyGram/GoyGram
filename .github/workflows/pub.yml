@@ -60,7 +60,7 @@ jobs:
           docker run --rm \
             -v "$GITHUB_WORKSPACE:/src" \
             termux/termux-docker:x86_64 \
-            /data/data/com.termux/files/usr/bin/bash -lc 'pkg update -y && pkg install -y python rust clang && export CARGO_TARGET_DIR="$PREFIX/tmp/goygram-target" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 && pyver=$(python -c "import sys; print(str(sys.version_info[0])+'.'+str(sys.version_info[1]))") && ln -sf "$PREFIX/lib/libpython$pyver.so" "$PREFIX/tmp/libpython3.11.so" && export RUSTFLAGS="-L$PREFIX/tmp" && cd /src && cargo build --release --manifest-path ext_rust/Cargo.toml'
+            /data/data/com.termux/files/usr/bin/bash -lc 'pkg update -y && pkg install -y python rust clang && export CARGO_TARGET_DIR="$PREFIX/tmp/goygram-target" PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 && py_lib=$(printf "%s\\n" "$PREFIX"/lib/libpython3.*.so | head -n 1) && test -f "$py_lib" && ln -sf "$py_lib" "$PREFIX/tmp/libpython3.11.so" && export RUSTFLAGS="-L$PREFIX/tmp" && cd /src && cargo build --release --manifest-path ext_rust/Cargo.toml'
 
   src:
     runs-on: ubuntu-latest
