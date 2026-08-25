@@ -166,22 +166,42 @@ class BotNet:
                 "text": (msg.get("text") or msg.get("caption") or ""),
                 "raw": upd,
             }
-        msg = upd.get("message") or upd.get("edited_message")
-        if not isinstance(msg, dict):
-            return None
-        chat = msg.get("chat") or {}
-        usr = msg.get("from") or {}
-        txt = msg.get("text")
-        if txt is None:
-            txt = msg.get("caption") or ""
+        message_key = next(
+            (
+                key
+                for key in (
+                    "message",
+                    "edited_message",
+                    "channel_post",
+                    "edited_channel_post",
+                )
+                if isinstance(upd.get(key), dict)
+            ),
+            None,
+        )
+        if message_key is not None:
+            msg = upd[message_key]
+            chat = msg.get("chat") or {}
+            usr = msg.get("from") or {}
+            txt = msg.get("text")
+            if txt is None:
+                txt = msg.get("caption") or ""
+            return {
+                "kind": "edit" if message_key.startswith("edited_") else "msg",
+                "src": "bot",
+                "upd_id": upd.get("update_id"),
+                "msg_id": msg.get("message_id"),
+                "chat_id": chat.get("id"),
+                "from_id": usr.get("id"),
+                "text": txt,
+                "raw": upd,
+            }
+        update_type = next((key for key in upd if key != "update_id"), "unknown")
         return {
-            "kind": "msg",
+            "kind": "update",
             "src": "bot",
             "upd_id": upd.get("update_id"),
-            "msg_id": msg.get("message_id"),
-            "chat_id": chat.get("id"),
-            "from_id": usr.get("id"),
-            "text": txt,
+            "update_type": update_type,
             "raw": upd,
         }
 
@@ -227,7 +247,7 @@ class BotNet:
                     {
                         "offset": self.off,
                         "timeout": self.timeout,
-                        "allowed_updates": ["message", "edited_message", "callback_query", "poll", "chat_member", "my_chat_member"],
+                        "allowed_updates": [],
                     },
                 )
                 for upd in res:

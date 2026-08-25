@@ -582,8 +582,17 @@ class MTNet:
     def _dispatch_updates(self, result: Any) -> None:
         if not isinstance(result, dict):
             return
-        for update in result.get("updates", []):
-            self._dispatch_update(update)
+        nested = result.get("result")
+        if isinstance(nested, dict):
+            self._dispatch_updates(nested)
+            return
+        updates = result.get("updates")
+        if isinstance(updates, list):
+            for update in updates:
+                self._dispatch_update(update)
+            return
+        if str(result.get("_", "")).startswith("update"):
+            self._dispatch_update(result)
 
     def _parse_phone_code_hash(self, result:bytes)->str|None:
         try:
@@ -693,7 +702,12 @@ class MTNet:
                 try:
                     import json
                     decoded = json.loads(rx.deserialize_constructor(inner))
-                    self._dispatch_updates(decoded)
+                    if isinstance(decoded, dict) and (
+                        isinstance(decoded.get("updates"), list)
+                        or str(decoded.get("_", "")).startswith("update")
+                    ):
+                        self._dispatch_updates(decoded)
+                        return
                     needle = b'\xfd\x0a\x2b\x1f'
                     pos = inner.find(needle, rm.p)
                     if pos >= 0 and pos < len(inner) - 4:
