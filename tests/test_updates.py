@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from types import SimpleNamespace
 
 from goygram.client import AppCore
@@ -224,6 +225,45 @@ def test_mt_builder_serializes_vectors_of_bytes() -> None:
     init_schema(mtproto.rx, "api.tl")
     refs = [b"input-message"]
 
-    body = net._build_body("messages.getMessages", {"ids": refs})
+    body = net._build_body("messages.getMessages", {"id": refs})
 
     assert int.from_bytes(body[:4], "little") == 0x63C66506
+
+
+def test_all_schema_update_constructors_reach_generic_dispatch() -> None:
+    net = MTNet("127.0.0.1", 443, Bus())
+    names = re.findall(r"^((?:update|updates)[A-Za-z0-9]+)#", open("api.tl").read(), re.MULTILINE)
+    seen: list[str] = []
+    net._dispatch_update = lambda item: seen.append(str(item["_"]))
+
+    net._dispatch_updates({"updates": [{"_": name} for name in names]})
+
+    assert len(names) == 152
+    assert seen == names
+
+
+def test_mt_message_and_edit_updates_are_separated() -> None:
+    net = MTNet("127.0.0.1", 443, Bus())
+    captured: list[dict[str, object]] = []
+
+    async def collect(_src: str, item: dict[str, object]) -> None:
+        captured.append(item)
+
+    net.bus.push = collect
+    message = {
+        "_": "message",
+        "id": 10,
+        "peer_id": {"_": "peerUser", "user_id": 20},
+        "from_id": {"_": "peerUser", "user_id": 20},
+        "message": "hello",
+        "out": False,
+    }
+    async def run() -> None:
+        net._dispatch_update({"_": "updateNewMessage", "message": message})
+        net._dispatch_update({"_": "updateEditMessage", "message": {**message, "message": "edited"}})
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+
+    assert [item["kind"] for item in captured] == ["msg", "edit"]
+    assert captured[1]["msg_id"] == 10
