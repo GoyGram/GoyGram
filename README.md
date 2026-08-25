@@ -37,7 +37,17 @@ Under the hood: a Python orchestration layer drives two completely independent n
 pip install goygram
 ```
 
-Requires Python 3.11+. Rust is **not** required — pre-built wheels ship for Linux, Windows, and macOS (x86-64 + ARM64). Installs `aiohttp`, `pydantic`, `rich`, and `qrcode` as dependencies.
+Requires Python 3.11+. Pre-built wheels ship for Linux, Windows, macOS, and FreeBSD where the corresponding runner build succeeds. Termux is natively validated in a Termux environment; install the Python package from source there because Android/Termux wheels are not interchangeable with manylinux wheels. Rust is not required for the standard Linux, Windows, and macOS wheels. Installs `aiohttp`, `pydantic`, `rich`, and `qrcode` as dependencies.
+
+### FreeBSD and Termux
+
+FreeBSD packages are built by the release workflow inside a FreeBSD 15 VM. The Rust core is also built in the official `termux/termux-docker` environment. On a real Termux device, install the Termux toolchain and build from the source distribution:
+
+```bash
+pkg update
+pkg install python rust clang
+python -m pip install --no-build-isolation .
+```
 
 ## Quick Start
 

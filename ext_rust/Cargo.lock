@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "goygram_ext"
-version = "0.7.35"
+version = "0.7.36"
 dependencies = [
  "aes",
  "aes-gcm",
