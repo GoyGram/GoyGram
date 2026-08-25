@@ -954,6 +954,22 @@ class MTNet:
                     result = _gz.decompress(compressed)
                 except Exception:
                     pass
+        try:
+            deserializer = getattr(rx, "deserialize_constructor", None)
+            if deserializer is None:
+                raise RuntimeError("structured TL deserializer is unavailable")
+            structured = json.loads(deserializer(result))
+            payload = structured.get("result", structured) if isinstance(structured, dict) else None
+            if isinstance(payload, dict) and payload.get("_") in {
+                "auth.sentCode",
+                "auth.sentCodeSuccess",
+                "auth.sentCodePaymentRequired",
+            }:
+                phone_code_hash = payload.get("phone_code_hash")
+                if phone_code_hash:
+                    return {"ok": True, "phone_code_hash": str(phone_code_hash)}
+        except Exception:
+            pass
         auth = self._parse_auth_result(result)
         if auth is not None:
             return auth
