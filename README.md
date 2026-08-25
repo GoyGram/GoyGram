@@ -8,7 +8,7 @@
 [![Rust Core](https://img.shields.io/badge/Rust_Core-Blazing_Fast-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-red.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
 [![Telegram API](https://img.shields.io/badge/Telegram-MTProto_%7C_BotAPI-2CA5E0.svg?style=for-the-badge&logo=telegram)](https://telegram.org)
-[![Security](https://img.shields.io/badge/OpSec-Vault_Encrypted-black.svg?style=for-the-badge&logo=security)](https://github.com/sepiol026-wq/GoyGram)
+[![Security](https://img.shields.io/badge/OpSec-Vault_Encrypted-black.svg?style=for-the-badge&logo=security)](https://github.com/GoyGram/GoyGram)
 [![Docs & Wiki](https://img.shields.io/badge/Docs-Read_the_Wiki-blue.svg?style=for-the-badge&logo=readthedocs)](https://goygram.github.io/docs)
 
 ## What is this?
@@ -99,7 +99,7 @@ asyncio.run(app.run())
 - If `farm_worker_1.session` exists, it is migrated to `farm_worker_1.vault` during bootstrap (securely zeroized after).
 
 ## Dynamic API & Methods
-GoyGram now supports **all Telegram methods out of the box** with dynamic dispatch:
+GoyGram can route Bot API method names dynamically, including methods that are not hardcoded as convenience methods:
 
 - Call Bot API methods directly even if they are not explicitly hardcoded:
   - `await app.sendDocument(chat_id=..., document=...)`
@@ -256,8 +256,8 @@ Logger hierarchy: `goygram.app`, `goygram.botapi`, `goygram.mtproto`, `goygram.d
 ```
 
 ## Wiki
-> 📚 **55 pages of documentation...** Every line of GoyGram, explained.
-> 👉 **[Check out the Official GoyGram Docs!](https://goygram.github.io/docs)**
+> 📚 **Official documentation and Wiki.** There are separate pages for using the client, Bot API, MTProto, events, bytes and TL data.
+> 👉 **[Open GoyGram Pages](https://goygram.github.io/docs)** · **[Open GitHub Wiki](https://github.com/GoyGram/GoyGram/wiki)**
 
 ## License
 See [LICENSE](./LICENSE).
