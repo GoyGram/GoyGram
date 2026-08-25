@@ -6,20 +6,7 @@ on:
 permissions:
   contents: read
 jobs:
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: python -m venv .venv
-      - run: .venv/bin/pip install pytest maturin
-      - run: .venv/bin/maturin develop --release --manifest-path ext_rust/Cargo.toml
-      - run: .venv/bin/python -m pytest -q
-      - run: .venv/bin/python -m compileall -q goygram ext_rust
   build:
-    needs: verify
     strategy:
       matrix:
         include:
@@ -44,7 +31,6 @@ jobs:
           path: d
 
   src:
-    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -8,17 +8,16 @@ Never include API hashes, bot tokens, phone numbers, auth keys, session files, v
 
 ## Development checks
 
-Use a Python 3.11+ virtual environment. Run:
+Use a Python 3.11+ virtual environment. Keep the private regression suite outside this public repository. Run the local checks from that private checkout together with:
 
 ```bash
-uv run --no-sync pytest -q
 python -m compileall -q goygram ext_rust
 cargo test --manifest-path ext_rust/Cargo.toml
 
 git diff --check
 ```
 
-For native changes, rebuild the extension with maturin and run the focused regression tests again. A successful local unit test does not replace a live MTProto check for transport changes.
+For native changes, rebuild the extension with maturin and run the focused private regression tests again. A successful local unit test does not replace a live MTProto check for transport changes. Do not commit the private suite, local harnesses, caches, or credentials.
 
 ## MTProto changes
 
