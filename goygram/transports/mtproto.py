@@ -303,6 +303,7 @@ class MTNet:
         self.qr_update_ev=asyncio.Event()
         self._init_done=False
         self._api_id:int|None=None
+        self.layer = 229
         self._preferred_dc = int(str(port)[-1]) if 1 <= int(str(port)[-1]) <= 5 else 2
         self._reader_task: asyncio.Task[None] | None = None
         self._reader_lock = asyncio.Lock()
@@ -1107,7 +1108,7 @@ class MTNet:
             'query': query.hex(),
         })))
         return bytes(rx.serialize_method('invokeWithLayer', json.dumps({
-            'layer': 211,
+            'layer': self.layer,
             'query': inner.hex(),
         })))
 

@@ -103,6 +103,36 @@ def parse_api_tl(path: str | Path) -> dict[str, Any]:
     return {"methods": methods, "constructors": constructors}
 
 
+def parse_api_json(raw: str) -> dict[str, Any]:
+    document = json.loads(raw)
+    result: dict[str, dict[str, dict[str, Any]]] = {"methods": {}, "constructors": {}}
+    for source, target in (("methods", "methods"), ("constructors", "constructors")):
+        for item in document.get(source, []):
+            if not isinstance(item, dict):
+                continue
+            name_key = "method" if source == "methods" else "predicate"
+            name = item.get(name_key)
+            if not isinstance(name, str):
+                continue
+            try:
+                cid = int(str(item["id"])) & 0xFFFFFFFF
+            except (KeyError, TypeError, ValueError):
+                continue
+            fields: list[dict[str, Any]] = []
+            has_flags = False
+            for param in item.get("params", []):
+                if not isinstance(param, dict) or not isinstance(param.get("name"), str):
+                    continue
+                field = _parse_field_type(str(param.get("type", "")))
+                field["name"] = param["name"]
+                if field.get("type") == "#":
+                    has_flags = True
+                fields.append(field)
+            result[target][name] = {"cid": cid, "fields": fields, "has_flags": has_flags}
+    log.info("Parsed %d methods + %d constructors from official JSON", len(result["methods"]), len(result["constructors"]))
+    return result
+
+
 def load_schema_into_rust(ext_module: Any, api_tl_path: str | Path) -> dict[str, Any]:
     schema = parse_api_tl(api_tl_path)
     schema_json = json.dumps(schema, separators=(",", ":"), ensure_ascii=False)
