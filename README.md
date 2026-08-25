@@ -174,6 +174,41 @@ await app.send_msg("mt:123456789", "via mt", via="mt")
 
 Chat ID prefixes (`bot:` / `mt:`) are auto-resolved. When replying, the transport source is preserved automatically — reply to a Bot API message, it goes back via Bot API.
 
+## FSM Persistence
+
+The default FSM remains in memory:
+
+```python
+app = GoyGram(bot_token="123456:ABC_TOKEN")
+```
+
+For an external store, pass an object with `load()` and `save(snapshot)` methods:
+
+```python
+class RedisFSM:
+    def __init__(self, redis):
+        self.redis = redis
+
+    def load(self):
+        return self.redis.json().get("goygram:fsm") or []
+
+    def save(self, snapshot):
+        self.redis.json().set("goygram:fsm", ".", snapshot)
+
+app = GoyGram(bot_token="123456:ABC_TOKEN", fsm_backend=RedisFSM(redis))
+```
+
+For complete control, use `fsm_on_change`. It receives a JSON-compatible snapshot after every state change and can write it to Redis, PostgreSQL, a file, or another service:
+
+```python
+def persist_fsm(snapshot):
+    external_store.write(snapshot)
+
+app = GoyGram(bot_token="123456:ABC_TOKEN", fsm_on_change=persist_fsm)
+```
+
+The active core object is also available as `app.fsm`. It exposes `snapshot()` and `restore(snapshot)` for explicit checkpoints and migrations. Existing `set_state`, `get_state`, `get_state_data`, and `clear_state` behavior is unchanged.
+
 ## Event Pipeline
 
 ```

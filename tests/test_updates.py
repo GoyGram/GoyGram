@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from goygram.client import AppCore
 from goygram.core.bus import Bus
+from goygram.core.fsm import FSMEngine
 from goygram.vendor.botapi import BotNet
 from goygram.vendor.mtproto import MTNet
 import goygram.vendor.mtproto as mtproto
@@ -157,3 +158,72 @@ def test_vault_restore_loads_server_salt(monkeypatch, tmp_path) -> None:
 
     assert app.mt.server_salt == bytes.fromhex("0102030405060708")
     assert app.mt.host == "149.154.167.91"
+
+
+def test_fsm_backend_loads_and_saves_json_snapshot() -> None:
+    backend = {
+        "items": [{"chat_id": 1, "user_id": 2, "state": "loaded", "data": {"x": 1}, "expiry": 4102444800}],
+        "saved": [],
+    }
+
+    class Storage:
+        def load(self):
+            return backend["items"]
+
+        def save(self, snapshot):
+            backend["saved"].append(snapshot)
+
+    fsm = FSMEngine(backend=Storage())
+
+    assert fsm.get(1, 2) == "loaded"
+    fsm.set(1, 2, "next", {"y": 2})
+
+    assert backend["saved"][-1][0]["state"] == "next"
+    assert backend["saved"][-1][0]["data"] == {"x": 1, "y": 2}
+
+
+def test_fsm_on_change_receives_snapshot_for_external_persistence() -> None:
+    snapshots = []
+    fsm = FSMEngine(on_change=snapshots.append)
+
+    fsm.set("10", "20", "waiting", {"step": 1})
+    fsm.clear("10", "20")
+
+    assert snapshots[0][0] == {
+        "chat_id": 10,
+        "user_id": 20,
+        "state": "waiting",
+        "data": {"step": 1},
+        "expiry": snapshots[0][0]["expiry"],
+    }
+    assert snapshots[-1] == []
+
+
+def test_public_client_accepts_fsm_backend() -> None:
+    class Storage:
+        def load(self):
+            return []
+
+        def save(self, snapshot):
+            self.snapshot = snapshot
+
+    storage = Storage()
+    from goygram import GoyGram
+
+    app = GoyGram(bot_token="token", fsm_backend=storage)
+    app.set_state(1, 2, "ready", {"step": 1})
+
+    assert app.get_state(1, 2) == "ready"
+    assert storage.snapshot[0]["state"] == "ready"
+
+
+def test_mt_builder_serializes_vectors_of_bytes() -> None:
+    net = MTNet("127.0.0.1", 443, Bus())
+    from goygram.schema_manager import init_schema
+
+    init_schema(mtproto.rx, "api.tl")
+    refs = [b"input-message"]
+
+    body = net._build_body("messages.getMessages", {"ids": refs})
+
+    assert int.from_bytes(body[:4], "little") == 0x63C66506

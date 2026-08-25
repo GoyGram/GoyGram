@@ -1127,6 +1127,8 @@ class MTNet:
         if _ext is None:
             raise RuntimeError('rx (goygram.ext._ext) is not available')
         def _resolve_val(v: Any) -> Any:
+            if isinstance(v, (list, tuple)):
+                return [_resolve_val(item) for item in v]
             if isinstance(v, dict) and '_' in v:
                 ctor_name = v.get('_')
                 inner = {k: _resolve_val(v2) for k, v2 in v.items() if k != '_'}

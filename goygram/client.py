@@ -67,6 +67,8 @@ class AppCore:
         system_lang_code: str = "en",
         lang_pack: str = "",
         lang_code: str = "en",
+        fsm_backend: Any | None = None,
+        fsm_on_change: Callable[[list[dict[str, Any]]], Any] | None = None,
     ) -> None:
         self.cfg = cfg
         self.bus = Bus(cfg.bus_max)
@@ -100,7 +102,7 @@ class AppCore:
                 self.mt._api_id = int(api_id)
             self._init_tl_schema()
             self._load_vault_from_disk(session_name, api_id, api_hash)
-        self.fsm = FSMEngine()
+        self.fsm = FSMEngine(backend=fsm_backend, on_change=fsm_on_change)
         self.disp = Disp(self, self.bus)
         self.hook: list[Fn] = []
         self.edit_hook: list[Fn] = []
@@ -453,6 +455,8 @@ class GoyGram:
         system_lang_code: str = "en",
         lang_pack: str = "",
         lang_code: str = "en",
+        fsm_backend: Any | None = None,
+        fsm_on_change: Callable[[list[dict[str, Any]]], Any] | None = None,
     ) -> None:
         bot = BotCfg(token=bot_token, timeout=bot_timeout, base=bot_base) if bot_token is not None else None
         log = get_logger("goygram.dc")
@@ -484,6 +488,8 @@ class GoyGram:
             system_lang_code=system_lang_code,
             lang_pack=lang_pack,
             lang_code=lang_code,
+            fsm_backend=fsm_backend,
+            fsm_on_change=fsm_on_change,
         )
 
     def on_msg(self, fn: Fn | None = None, filt: Filter | None = None):
