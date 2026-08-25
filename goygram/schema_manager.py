@@ -7,20 +7,15 @@ from pathlib import Path
 
 log = logging.getLogger("goygram.schema_manager")
 
-SCHEMA_URL = (
-    "https://raw.githubusercontent.com/telegramdesktop/tdesktop/dev/"
-    "Telegram/SourceFiles/mtproto/scheme/api.tl"
-)
-MTPROTO_SCHEMA_URL = (
-    "https://raw.githubusercontent.com/telegramdesktop/tdesktop/dev/"
-    "Telegram/SourceFiles/mtproto/scheme/mtproto.tl"
-)
+SCHEMA_REF = "e94c20aa033c73fc614ef727913ca35305162ffc"
+SCHEMA_URL = f"https://raw.githubusercontent.com/GoyGram/GoyGram/{SCHEMA_REF}/api.tl"
+MTPROTO_SCHEMA_URL = f"https://raw.githubusercontent.com/GoyGram/GoyGram/{SCHEMA_REF}/mtproto.tl"
 
 CACHE_DIR = Path.home() / ".goygram" / "cache"
-CACHE_SCHEMA_PATH = CACHE_DIR / "api.tl"
-CACHE_ETAG_PATH = CACHE_DIR / "api.tl.etag"
-CACHE_MTPROTO_PATH = CACHE_DIR / "mtproto.tl"
-CACHE_MTPROTO_ETAG_PATH = CACHE_DIR / "mtproto.tl.etag"
+CACHE_SCHEMA_PATH = CACHE_DIR / "api-211.tl"
+CACHE_ETAG_PATH = CACHE_DIR / "api-211.tl.etag"
+CACHE_MTPROTO_PATH = CACHE_DIR / "mtproto-211.tl"
+CACHE_MTPROTO_ETAG_PATH = CACHE_DIR / "mtproto-211.tl.etag"
 
 _fetch_lock = threading.Lock()
 
@@ -72,25 +67,6 @@ def _fetch_and_cache_schema() -> tuple[str | None, str | None]:
     return body, mtproto_body
 
 
-def _find_bundled_schema() -> tuple[str | None, str | None]:
-    pkg_dir = Path(__file__).resolve().parent
-    candidates = [
-        pkg_dir.parent / "api.tl",
-        pkg_dir / "api.tl",
-        Path.cwd() / "api.tl",
-        Path("/usr/share/goygram/api.tl"),
-    ]
-    for p in candidates:
-        if p.exists():
-            api = p.read_text()
-            mtp = None
-            mtp_candidate = p.with_name("mtproto.tl")
-            if mtp_candidate.exists():
-                mtp = mtp_candidate.read_text()
-            return api, mtp
-    return None, None
-
-
 def _merge_schema_text(api_text: str, mtproto_text: str | None) -> str:
     if mtproto_text:
         return mtproto_text + "\n---types---\n" + api_text
@@ -101,59 +77,34 @@ def init_schema(ext_module, bundled_api_tl_path: str | None = None):
     from goygram.protocol.tl_schema import parse_api_tl
     import tempfile
 
-    bootstrap_loaded = False
     try:
         info = json.loads(ext_module.schema_info())
-        if info.get("methods", 0) > 0:
-            bootstrap_loaded = True
-            log.info("Bootstrap schema active: %s methods, %s ctors",
-                     info["methods"], info["constructors"])
+        log.info("Bootstrap schema active: %s methods, %s ctors",
+                 info.get("methods", 0), info.get("constructors", 0))
     except Exception:
-        pass
-
-    if not bootstrap_loaded:
         log.warning("No bootstrap schema available, schema_manager may fail")
 
-    cached_available = CACHE_SCHEMA_PATH.exists()
-    bundled_api, bundled_mtp = _find_bundled_schema()
+    api_text = CACHE_SCHEMA_PATH.read_text() if CACHE_SCHEMA_PATH.exists() else None
+    mtp_text = CACHE_MTPROTO_PATH.read_text() if CACHE_MTPROTO_PATH.exists() else None
+    if api_text is None:
+        api_text, mtp_text = _fetch_and_cache_schema()
+    if api_text is None:
+        raise RuntimeError("Unable to load Telegram TL schema from the network or cache")
 
-    if not cached_available and bundled_api is None and bundled_api_tl_path:
-        bundled_api = Path(bundled_api_tl_path).read_text()
-
-    if bundled_api is not None:
-        merged = _merge_schema_text(bundled_api, bundled_mtp)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".tl", delete=False) as f:
-            f.write(merged)
-            tmp_path = f.name
+    merged = _merge_schema_text(api_text, mtp_text)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".tl", delete=False) as f:
+        f.write(merged)
+        tmp_path = f.name
+    try:
+        schema = parse_api_tl(tmp_path)
+        schema_json = json.dumps(schema, separators=(",", ":"), ensure_ascii=False)
+        info = ext_module.load_schema(schema_json)
+        log.info("Loaded network schema: %s", info)
+    finally:
         try:
-            schema = parse_api_tl(tmp_path)
-            schema_json = json.dumps(schema, separators=(",", ":"), ensure_ascii=False)
-            info = ext_module.load_schema(schema_json)
-            log.info("Loaded bundled schema: %s", info)
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-    elif cached_available:
-        api_text = CACHE_SCHEMA_PATH.read_text()
-        mtp_text = None
-        if CACHE_MTPROTO_PATH.exists():
-            mtp_text = CACHE_MTPROTO_PATH.read_text()
-        merged = _merge_schema_text(api_text, mtp_text)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".tl", delete=False) as f:
-            f.write(merged)
-            tmp_path = f.name
-        try:
-            schema = parse_api_tl(tmp_path)
-            schema_json = json.dumps(schema, separators=(",", ":"), ensure_ascii=False)
-            info = ext_module.load_schema(schema_json)
-            log.info("Loaded cached schema: %s", info)
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
     bg = threading.Thread(target=_background_update, args=(ext_module,), daemon=True)
     bg.start()

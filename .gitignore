@@ -18,3 +18,11 @@ target/
 test_*.py
 *.vault
 .backups/
+api.tl
+api.tl.bak
+mtproto.tl
+goygram/api.tl
+goygram/api.tl.bak
+goygram/mtproto.tl
+goygram/schema.tl
+tests/
