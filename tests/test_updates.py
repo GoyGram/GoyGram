@@ -147,6 +147,7 @@ def test_vault_restore_loads_server_salt(monkeypatch, tmp_path) -> None:
         lambda path, session_name: {
             "auth_key": "00" * 256,
             "server_salt": "0102030405060708",
+            "dc": 4,
             "user": {"id": 123},
         },
     )
@@ -154,3 +155,4 @@ def test_vault_restore_loads_server_salt(monkeypatch, tmp_path) -> None:
     app._load_vault_from_disk("live", None, None)
 
     assert app.mt.server_salt == bytes.fromhex("0102030405060708")
+    assert app.mt.host == "149.154.167.91"

@@ -251,6 +251,23 @@ def _field(obj: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _current_dc_id(app: Any) -> int | None:
+    mt = getattr(app, "mt", None)
+    if mt is None:
+        return None
+    try:
+        dc_map = get_dynamic_dc_config()
+        for dc_id, endpoints in dc_map.items():
+            if dc_id == 0:
+                continue
+            if any(endpoint.host == mt.host and endpoint.port == mt.port for endpoint in endpoints):
+                return int(dc_id)
+    except Exception:
+        pass
+    preferred = getattr(mt, "_preferred_dc", None)
+    return int(preferred) if preferred in {1, 2, 3, 4, 5} else None
+
+
 def _extract_error(obj: dict[str, Any]) -> str | None:
     val = _field(obj, "error", "error_message", "error_code", "status", "state", "kind")
     if val is None:
@@ -324,6 +341,7 @@ async def _mt_req_with_migrate(app: Any, act: str, **kw: Any) -> dict[str, Any]:
         app.mt.stop_ev.clear()
         app.mt.host = endpoint.host
         app.mt.port = endpoint.port
+        app.mt._preferred_dc = dc_id
         app.mt.auth_key = None
         app.mt.seq = 0
         app.mt._init_done = False
@@ -470,7 +488,7 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                             "user": user,
                             "auth_key": auth_blob.hex(),
                             "server_salt": app.mt.server_salt.hex(),
-                            "dc": _field(final, "dc_id", "dc") or app.mt.host,
+                            "dc": _field(final, "dc_id", "dc") or _current_dc_id(app),
                             "api_id": api_id,
                             "api_hash": api_hash,
                         }
@@ -503,6 +521,7 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                     app.mt.stop_ev.clear()
                     app.mt.host = endpoint.host
                     app.mt.port = endpoint.port
+                    app.mt._preferred_dc = dc_id
                     app.mt.auth_key = None
                     app.mt.seq = 0
                     app.mt._init_done = False
@@ -768,7 +787,7 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
                 "user": user,
                 "auth_key": auth_blob.hex(),
                 "server_salt": app.mt.server_salt.hex(),
-                "dc": _field(final, "dc_id", "dc"),
+                "dc": _field(final, "dc_id", "dc") or _current_dc_id(app),
                 "api_id": api_id,
                 "api_hash": api_hash,
             }
