@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
+from goygram.client import AppCore
 from goygram.core.bus import Bus
 from goygram.vendor.botapi import BotNet
 from goygram.vendor.mtproto import MTNet
@@ -125,3 +127,30 @@ def test_structured_sent_code_is_preferred_over_heuristic_parser(monkeypatch) ->
     result = net._parse_rpc_result(b"\x02\x25\x00\x5e")
 
     assert result == {"ok": True, "phone_code_hash": "hash-from-schema"}
+
+
+def test_vault_restore_loads_server_salt(monkeypatch, tmp_path) -> None:
+    vault = tmp_path / "live.vault"
+    vault.write_bytes(b"vault")
+    app = object.__new__(AppCore)
+    app.mt = SimpleNamespace(
+        auth_key=None,
+        server_salt=b"\x00" * 8,
+        host="127.0.0.1",
+        port=443,
+        self_id=None,
+    )
+    app.self_id = None
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "goygram.security._read_vault",
+        lambda path, session_name: {
+            "auth_key": "00" * 256,
+            "server_salt": "0102030405060708",
+            "user": {"id": 123},
+        },
+    )
+
+    app._load_vault_from_disk("live", None, None)
+
+    assert app.mt.server_salt == bytes.fromhex("0102030405060708")

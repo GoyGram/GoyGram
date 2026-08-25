@@ -468,6 +468,7 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                             "phone": user.get("phone", ""),
                             "user": user,
                             "auth_key": auth_blob.hex(),
+                            "server_salt": app.mt.server_salt.hex(),
                             "dc": _field(final, "dc_id", "dc") or app.mt.host,
                             "api_id": api_id,
                             "api_hash": api_hash,
@@ -559,6 +560,7 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                             "phone": user.get("phone", ""),
                             "user": user,
                             "auth_key": auth_blob.hex(),
+                            "server_salt": app.mt.server_salt.hex(),
                             "dc": dc_id,
                             "api_id": api_id,
                             "api_hash": api_hash,
@@ -764,6 +766,7 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
                 "phone": phone,
                 "user": user,
                 "auth_key": auth_blob.hex(),
+                "server_salt": app.mt.server_salt.hex(),
                 "dc": _field(final, "dc_id", "dc"),
                 "api_id": api_id,
                 "api_hash": api_hash,
@@ -793,6 +796,9 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
             auth_key = data.get("auth_key")
             if isinstance(auth_key, str) and auth_key:
                 app.mt.auth_key = _extract_auth_blob({"auth_key": auth_key})
+            server_salt = data.get("server_salt")
+            if server_salt:
+                app.mt.server_salt = _extract_auth_blob({"auth_key": server_salt}) or app.mt.server_salt
             dc = data.get("dc")
             if dc is not None:
                 if isinstance(dc, str) and "." in str(dc):

@@ -136,6 +136,12 @@ class AppCore:
             auth_key = data.get("auth_key")
             if auth_key and self.mt is not None:
                 self.mt.auth_key = _extract_auth_blob({"auth_key": auth_key})
+            server_salt = data.get("server_salt")
+            if server_salt and self.mt is not None:
+                try:
+                    self.mt.server_salt = _extract_auth_blob({"auth_key": server_salt}) or self.mt.server_salt
+                except Exception:
+                    pass
             dc = data.get("dc")
             if dc is not None and self.mt is not None:
                 dc_map = get_dynamic_dc_config()
