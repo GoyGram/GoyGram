@@ -41,7 +41,7 @@ Requires Python 3.11+. Pre-built wheels ship for Linux, Windows, macOS, and Free
 
 ### FreeBSD and Termux
 
-FreeBSD packages are built by the release workflow inside a FreeBSD 15 VM. The Rust core is also built in the official `termux/termux-docker` environment. On a real Termux device, install the Termux toolchain and build from the source distribution:
+FreeBSD packages are built by the release workflow inside a FreeBSD 15 VM and attached to the GitHub Release because PyPI rejects FreeBSD's nonstandard wheel platform tag. The Rust core is built in the official `termux/termux-docker` environment and attached as a native validation asset; Termux users should build locally from the source distribution. On a real Termux device, install the Termux toolchain and build from the source distribution:
 
 ```bash
 pkg update
