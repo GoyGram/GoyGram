@@ -81,6 +81,7 @@ def _write_vault(path: Path, payload: dict[str, Any], session_name: str) -> None
     except Exception as e:
         log.warning("Vault encryption failed (%r), writing plain JSON as fallback.", e)
         path.write_bytes(raw_json)
+    path.chmod(0o600)
 
 
 def _read_vault(path: Path, session_name: str) -> dict[str, Any] | None:
