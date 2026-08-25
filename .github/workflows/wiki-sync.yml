@@ -11,7 +11,7 @@ jobs:
       - name: Trigger docs rebuild
         run: |
           curl -X POST \
-            -H "Authorization: token ${{ secrets.PAGES_TOKEN }}" \
+            -H "Authorization: Bearer ${{ secrets.PAGES_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/GoyGram/goygram-docs/dispatches \
             -d '{"event_type":"wiki-updated"}'

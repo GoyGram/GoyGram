@@ -74,14 +74,21 @@ def _decrypt_vault_data(raw: bytes, session_name: str) -> bytes:
 
 def _write_vault(path: Path, payload: dict[str, Any], session_name: str) -> None:
     raw_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    encrypted = _encrypt_vault_data(raw_json, session_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
     try:
-        encrypted = _encrypt_vault_data(raw_json, session_name)
-        path.write_bytes(encrypted)
+        with tmp_path.open("wb") as handle:
+            handle.write(encrypted)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp_path.chmod(0o600)
+        os.replace(tmp_path, path)
+        path.chmod(0o600)
         log.debug("Vault %s written (AES-256-GCM encrypted).", path.name)
-    except Exception as e:
-        log.warning("Vault encryption failed (%r), writing plain JSON as fallback.", e)
-        path.write_bytes(raw_json)
-    path.chmod(0o600)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _read_vault(path: Path, session_name: str) -> dict[str, Any] | None:
@@ -89,20 +96,12 @@ def _read_vault(path: Path, session_name: str) -> dict[str, Any] | None:
     if not raw:
         return None
     if raw[0] == 0x7B:
-        log.info("Vault %s is in plain JSON format, re-encrypting now.", path.name)
-        data = json.loads(raw.decode())
-        _write_vault(path, data, session_name)
-        log.info("Vault %s re-encrypted successfully.", path.name)
-        return data
+        raise ValueError(f"Plaintext vault {path.name} is not accepted")
     try:
         plain = _decrypt_vault_data(raw, session_name)
         return json.loads(plain.decode())
     except Exception as e:
-        log.warning("Vault %s decrypt failed (%r), trying plain JSON fallback.", path.name, e)
-        try:
-            return json.loads(raw.decode())
-        except Exception:
-            raise ValueError(f"Cannot read vault {path.name}: {e}") from e
+        raise ValueError(f"Cannot decrypt vault {path.name}") from e
 
 
 def _zeroize_and_remove(path: Path) -> None:
@@ -574,28 +573,30 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                     auth_blob = _extract_auth_blob(final)
                     if auth_blob is None and getattr(app, "mt", None) is not None:
                         auth_blob = getattr(app.mt, "auth_key", None)
-                        if _is_interactive() and qr_lines_printed > 0:
-                            sys.stdout.write("\n")
-                        payload = {
-                            "phone": user.get("phone", ""),
-                            "user": user,
-                            "auth_key": auth_blob.hex(),
-                            "server_salt": app.mt.server_salt.hex(),
-                            "dc": dc_id,
-                            "api_id": api_id,
-                            "api_hash": api_hash,
-                        }
-                        _write_vault(vault, payload, session_name)
-                        uid = user.get("id", 0)
-                        if uid and uid != 0:
-                            app.self_id = uid
-                            app.mt.self_id = uid
-                        if _is_interactive():
-                            from rich.console import Console
-                            Console().print(f"[bold green]Success! Session saved to {vault.name}[/bold green]")
-                        else:
-                            print(f"Success! Session saved to {vault.name}")
-                        return {"source": "qr"}
+                    if auth_blob is None:
+                        continue
+                    if _is_interactive() and qr_lines_printed > 0:
+                        sys.stdout.write("\n")
+                    payload = {
+                        "phone": user.get("phone", ""),
+                        "user": user,
+                        "auth_key": auth_blob.hex(),
+                        "server_salt": app.mt.server_salt.hex(),
+                        "dc": dc_id,
+                        "api_id": api_id,
+                        "api_hash": api_hash,
+                    }
+                    _write_vault(vault, payload, session_name)
+                    uid = user.get("id", 0)
+                    if uid and uid != 0:
+                        app.self_id = uid
+                        app.mt.self_id = uid
+                    if _is_interactive():
+                        from rich.console import Console
+                        Console().print(f"[bold green]Success! Session saved to {vault.name}[/bold green]")
+                    else:
+                        print(f"Success! Session saved to {vault.name}")
+                    return {"source": "qr"}
             
             if _is_interactive():
 
@@ -877,6 +878,10 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
             }
             _write_vault(vault, payload, session_name)
             _zeroize_and_remove(sess)
+            for suffix in ("-wal", "-shm", "-journal"):
+                sidecar = Path(f"{sess}{suffix}")
+                if sidecar.exists() and sidecar.is_file():
+                    _zeroize_and_remove(sidecar)
             log.info("Session migrated into %s and source file securely deleted.", vault.name)
             return {"source": "session_migrated"}
         except Exception as e:

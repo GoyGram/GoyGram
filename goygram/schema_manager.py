@@ -68,26 +68,38 @@ def _cached_layer() -> int | None:
         return None
 
 
-def _fetch_and_cache_schema(layer: int) -> tuple[str | None, str | None]:
+def _atomic_write(path: Path, text: str) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    api_etag = CACHE_ETAG_PATH.read_text().strip() if CACHE_ETAG_PATH.exists() else None
-    mtp_etag = CACHE_MTPROTO_ETAG_PATH.read_text().strip() if CACHE_MTPROTO_ETAG_PATH.exists() else None
-    api_text, api_new_etag = _http_get(SCHEMA_URL, api_etag)
-    mtp_text, mtp_new_etag = _http_get(MTPROTO_SCHEMA_URL, mtp_etag)
-    if api_text is not None:
-        CACHE_SCHEMA_PATH.write_text(api_text)
+    with tempfile.NamedTemporaryFile(mode="w", dir=CACHE_DIR, delete=False) as handle:
+        handle.write(text)
+        temp_path = Path(handle.name)
+    os.replace(temp_path, path)
+
+
+def _fetch_and_cache_schema(layer: int) -> tuple[str | None, str | None]:
+    with _fetch_lock:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        api_etag = CACHE_ETAG_PATH.read_text().strip() if CACHE_ETAG_PATH.exists() else None
+        mtp_etag = CACHE_MTPROTO_ETAG_PATH.read_text().strip() if CACHE_MTPROTO_ETAG_PATH.exists() else None
+        api_text, api_new_etag = _http_get(SCHEMA_URL, api_etag)
+        mtp_text, mtp_new_etag = _http_get(MTPROTO_SCHEMA_URL, mtp_etag)
+        if api_text is None and CACHE_SCHEMA_PATH.exists():
+            api_text = CACHE_SCHEMA_PATH.read_text()
+        if mtp_text is None and CACHE_MTPROTO_PATH.exists():
+            mtp_text = CACHE_MTPROTO_PATH.read_text()
+        if api_text is None or mtp_text is None:
+            return api_text, mtp_text
+        _atomic_write(CACHE_SCHEMA_PATH, api_text)
+        _atomic_write(CACHE_MTPROTO_PATH, mtp_text)
         if api_new_etag:
-            CACHE_ETAG_PATH.write_text(api_new_etag)
-    if mtp_text is not None:
-        CACHE_MTPROTO_PATH.write_text(mtp_text)
+            _atomic_write(CACHE_ETAG_PATH, api_new_etag)
         if mtp_new_etag:
-            CACHE_MTPROTO_ETAG_PATH.write_text(mtp_new_etag)
-    if api_text is not None and mtp_text is not None:
-        CACHE_LAYER_PATH.write_text(str(layer))
-    return api_text, mtp_text
+            _atomic_write(CACHE_MTPROTO_ETAG_PATH, mtp_new_etag)
+        _atomic_write(CACHE_LAYER_PATH, str(layer))
+        return api_text, mtp_text
 
 
-def _load_schema(ext_module, api_text: str, mtproto_text: str | None) -> None:
+def _load_schema(ext_module, api_text: str, mtproto_text: str | None, layer: int) -> None:
     from goygram.protocol.tl_schema import parse_api_tl
 
     merged = mtproto_text + "\n---types---\n" + api_text if mtproto_text else api_text
@@ -96,6 +108,7 @@ def _load_schema(ext_module, api_text: str, mtproto_text: str | None) -> None:
         path = handle.name
     try:
         schema = parse_api_tl(path)
+        schema["layer"] = layer
         info = ext_module.load_schema(json.dumps(schema, separators=(",", ":"), ensure_ascii=False))
         log.info("Loaded official Telegram schema: %s", info)
     finally:
@@ -105,7 +118,7 @@ def _load_schema(ext_module, api_text: str, mtproto_text: str | None) -> None:
             pass
 
 
-def init_schema(ext_module, bundled_api_tl_path: str | None = None, on_layer=None):
+def init_schema(ext_module, bundled_api_tl_path: str | None = None, on_layer=None, can_reload=None):
     try:
         info = json.loads(ext_module.schema_info())
         log.info("Bootstrap schema active: %s methods, %s ctors", info.get("methods", 0), info.get("constructors", 0))
@@ -113,37 +126,35 @@ def init_schema(ext_module, bundled_api_tl_path: str | None = None, on_layer=Non
         log.warning("No bootstrap schema available, schema_manager may fail")
 
     cached_layer = _cached_layer()
-    latest_layer = _latest_layer()
     api_text = CACHE_SCHEMA_PATH.read_text() if CACHE_SCHEMA_PATH.exists() else None
     mtproto_text = CACHE_MTPROTO_PATH.read_text() if CACHE_MTPROTO_PATH.exists() else None
-    refresh = api_text is None or mtproto_text is None or cached_layer is None or cached_layer != latest_layer
-    if refresh:
-        fresh_api, fresh_mtp = _fetch_and_cache_schema(latest_layer)
-        if fresh_api is not None:
-            api_text, mtproto_text = fresh_api, fresh_mtp
-            cached_layer = latest_layer
-    if api_text is None:
+    if api_text is None or mtproto_text is None:
+        latest_layer = _latest_layer()
+        api_text, mtproto_text = _fetch_and_cache_schema(latest_layer)
+        cached_layer = latest_layer
+    if api_text is None or mtproto_text is None:
         raise RuntimeError("Unable to load official Telegram schema from the network or cache")
     if cached_layer is None:
-        cached_layer = latest_layer
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        CACHE_LAYER_PATH.write_text(str(cached_layer))
-    _load_schema(ext_module, api_text, mtproto_text)
-    threading.Thread(target=_background_update, args=(ext_module, on_layer), daemon=True).start()
+        cached_layer = CURRENT_LAYER_FLOOR
+        _atomic_write(CACHE_LAYER_PATH, str(cached_layer))
+    _load_schema(ext_module, api_text, mtproto_text, cached_layer)
+    threading.Thread(target=_background_update, args=(ext_module, on_layer, can_reload), daemon=True).start()
     return cached_layer
 
 
-def _background_update(ext_module, on_layer=None):
+def _background_update(ext_module, on_layer=None, can_reload=None):
     log.debug("Background schema update started")
     layer = _latest_layer()
     api_text, mtproto_text = _fetch_and_cache_schema(layer)
     if api_text is None:
         log.debug("No schema update available")
         return
+    if callable(can_reload) and not can_reload():
+        log.info("Schema update cached; runtime reload deferred while RPCs are pending")
+        return
     try:
-        _load_schema(ext_module, api_text, mtproto_text)
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        CACHE_LAYER_PATH.write_text(str(layer))
+        _load_schema(ext_module, api_text, mtproto_text, layer)
+        _atomic_write(CACHE_LAYER_PATH, str(layer))
         if callable(on_layer):
             on_layer(layer)
         log.info("Schema hot-reloaded layer=%s", layer)

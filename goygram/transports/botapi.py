@@ -52,7 +52,7 @@ class BotNet:
             return
         await self.sess.close()
 
-    async def req(self, m: str, data: dict[str, Any] | None = None) -> Any:
+    async def req(self, m: str, data: dict[str, Any] | None = None, _attempt: int = 0) -> Any:
         await self.boot()
         assert self.sess is not None
         body = self.body(data or {})
@@ -71,6 +71,10 @@ class BotNet:
                 await self.req("deleteWebhook", {"drop_pending_updates": False})
                 self.log.error("Webhook conflict detected. Webhook deleted and polling will retry.")
                 return []
+            if r.status == 429 and _attempt < 5:
+                retry_after = raw.get("parameters", {}).get("retry_after", 1) if isinstance(raw, dict) else 1
+                await asyncio.sleep(max(1, min(int(retry_after), 300)))
+                return await self.req(m, data, _attempt + 1)
             raise RuntimeError(f"botapi {m} http {r.status}: {raw}")
         if not raw.get("ok"):
             raise RuntimeError(f"botapi {m} fail: {raw}")
@@ -252,13 +256,13 @@ class BotNet:
                 )
                 for upd in res:
                     uid = int(upd.get("update_id", 0))
-                    if uid >= self.off:
-                        self.off = uid + 1
-                    pkt = self.norm(upd)
-                    if not pkt:
+                    if uid < self.off:
                         continue
-                    self.log.debug("Incoming packet: %s", pkt)
-                    await self.bus.push("bot", pkt)
+                    pkt = self.norm(upd)
+                    if pkt:
+                        self.log.debug("Incoming packet: %s", pkt)
+                        await self.bus.push("bot", pkt)
+                    self.off = uid + 1
             except asyncio.CancelledError:
                 raise
             except Exception as e:

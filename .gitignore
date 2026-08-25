@@ -14,6 +14,7 @@ target/
 *.so
 *.dylib
 *.dll
+*.so.bak
 .DS_Store
 test_*.py
 *.vault

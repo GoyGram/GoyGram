@@ -211,7 +211,7 @@ def _parse_user_obj(b:bytes)->dict[str,Any]|None:
 
     if cid in {0x020b1422, 0x8f97c628, 0x5c0d0a2a, 0xd8576e2a, 0x7fe4ab4, 0x2e13f2c3, 0xebe8e785, 0x31774388, 0xd3bc4b7a}:
         return _parse_user_obj_v4(b, cid)
-    log.warning("Unsupported user constructor 0x%08x, raw=%s", cid, b[:64].hex())
+    log.warning("Unsupported user constructor 0x%08x, raw_length=%s", cid, len(b))
     return None
 
 
@@ -265,10 +265,10 @@ def _parse_user_obj_v4(b:bytes, cid:int)->dict[str,Any]|None:
         if result is None:
             result = _try_parse(False)
         if result is None:
-            log.warning("User parse: both modes failed for cid=0x%08x: %s", cid, b[:128].hex())
+            log.warning("User parse: both modes failed for cid=0x%08x, raw_length=%s", cid, len(b))
         return result
     except Exception:
-        log.warning("User parse exception for cid=0x%08x: %s", cid, b[:128].hex())
+        log.warning("User parse exception for cid=0x%08x, raw_length=%s", cid, len(b))
         return None
 
 class ProxyCfg:
@@ -295,10 +295,18 @@ class MTNet:
     )->None:
         self.host=host; self.port=port; self.bus=bus; self.key=key; self.iv=iv
         self.proxy_url = proxy
+        self.app_name = app_name
+        self.app_version = app_version
+        self.device_model = device_model
+        self.system_version = system_version
+        self.system_lang_code = system_lang_code
+        self.lang_pack = lang_pack
+        self.lang_code = lang_code
         self.rd=None; self.wr=None; self.buf=bytearray(); self.stop_ev=asyncio.Event(); self.seq=0
         self.pending:dict[int,tuple[asyncio.Future[dict[str,Any]],dict[str,Any]]]={}
         self.transport=IntermediateTransport(); self.msg_ids=MsgIdGen(); self.wrote_tag=False
         self.auth_key:bytes|None=None; self.server_salt:bytes=b'\x00'*8; self.session_id=secrets.token_bytes(8)
+        self._seen_server_msg_ids: set[int] = set()
         self.auth_ready=asyncio.Event()
         self.qr_update_ev=asyncio.Event()
         self._init_done=False
@@ -307,6 +315,10 @@ class MTNet:
         self._preferred_dc = int(str(port)[-1]) if 1 <= int(str(port)[-1]) <= 5 else 2
         self._reader_task: asyncio.Task[None] | None = None
         self._reader_lock = asyncio.Lock()
+
+    def update_layer(self, layer: int) -> None:
+        self.layer = int(layer)
+        self._init_done = False
 
     def pick(self,obj:dict[str,Any],*keys:str)->Any:
         for k in keys:
@@ -443,7 +455,7 @@ class MTNet:
 
     def _log_socket_close(self)->None:
         if self.buf:
-            log.debug(f"[RX] Socket closed. Left in buffer: {self.buf.hex()}")
+            log.debug(f"[RX] Socket closed. Left in buffer: {len(self.buf)} bytes")
             if len(self.buf) >= 4:
                 err = int.from_bytes(self.buf[:4], 'little', signed=True)
                 log.debug(f"[RX] Possible Telegram int32 error: {err}")
@@ -455,13 +467,13 @@ class MTNet:
             if not raw:
                 self._log_socket_close()
                 raise ConnectionError('mt socket closed')
-            log.debug(f"[RX] <<< {raw.hex()}")
+            log.debug(f"[RX] <<< {len(raw)} bytes")
             self.buf.extend(raw)
 
     async def invoke_unencrypted(self, body:bytes)->bytes:
         await self.boot(); assert self.wr
         pkt=self.pack(MTMessage.unencrypted(self.msg_ids.next(), body))
-        log.debug(f"[TX] >>> {pkt.hex()}")
+        log.debug(f"[TX] >>> {len(pkt)} bytes")
         self.wr.write(pkt); await self.wr.drain()
         resp=await self.read_packet(); return resp
 
@@ -627,14 +639,32 @@ class MTNet:
             return
         if len(pkt) < 24:
             return
-        _auth_key_id = pkt[:8]
+        expected_key_id = sha1(self.auth_key).digest()[-8:]
+        if pkt[:8] != expected_key_id:
+            log.warning("MTProto packet rejected: auth key id mismatch")
+            return
         msg_key = pkt[8:24]
         enc = pkt[24:]
-        aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, False)
-        dec = bytes(rx.aes_ige_dec_raw(enc, aes_key, aes_iv))
-        r = Reader(dec)
-        _salt = r.take(8); _sid = r.take(8); _msg_id = r.i64(); _seq = r.i32(); ln = r.i32()
-        msg = r.take(ln)
+        if len(enc) % 16:
+            log.warning("MTProto packet rejected: encrypted length is not aligned")
+            return
+        try:
+            aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, False)
+            dec = bytes(rx.aes_ige_dec_raw(enc, aes_key, aes_iv))
+            r = Reader(dec)
+            salt = r.take(8); sid = r.take(8); msg_id = r.i64(); _seq = r.i32(); ln = r.i32()
+            msg = r.take(ln)
+        except Exception as exc:
+            log.warning("MTProto packet rejected: %s", exc)
+            return
+        if sid != self.session_id:
+            log.warning("MTProto packet rejected: session id mismatch")
+            return
+        if msg_id in self._seen_server_msg_ids:
+            return
+        self._seen_server_msg_ids.add(msg_id)
+        if len(self._seen_server_msg_ids) > 4096:
+            self._seen_server_msg_ids = set(list(self._seen_server_msg_ids)[-2048:])
 
         def _consume(inner: bytes) -> None:
             if len(inner) < 4:
@@ -656,6 +686,10 @@ class MTNet:
                     parsed = self._parse_rpc_result(result)
                     self._dispatch_updates(parsed)
                     fut.set_result(parsed)
+                    for container_id, container in list(self.pending.items()):
+                        if isinstance(container, dict) and container.get("type") == "container":
+                            if all(sub_id not in self.pending for sub_id in container.get("msg_ids", [])):
+                                self.pending.pop(container_id, None)
                 except GoyGramError as exc:
                     fut.set_exception(exc)
                 except Exception as exc:
@@ -991,10 +1025,9 @@ class MTNet:
             if parsed.get("_") == "rpc_result":
                 return {"ok": True, "result": parsed.get("result", parsed)}
             return {"ok": True, "result": parsed}
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return {"ok": True, "raw_result_hex": result.hex()}
+        except Exception as exc:
+            log.warning("MTProto schema decode failed: %s", exc)
+            return {"ok": False, "error": "SCHEMA_DECODE_FAILED", "error_message": str(exc), "raw_result_hex": result.hex()}
 
     def _parse_updates(self, result:bytes)->dict[str,Any]:
         if len(result) < 4:
@@ -1099,12 +1132,12 @@ class MTNet:
         inner = bytes(rx.serialize_method('initConnection', json.dumps({
             'flags': 0,
             'api_id': api_id,
-            'device_model': 'Unknown',
-            'system_version': 'Unknown',
-            'app_version': '1.0',
-            'system_lang_code': 'en',
-            'lang_pack': '',
-            'lang_code': 'en',
+            'device_model': self.device_model or 'Unknown',
+            'system_version': self.system_version or 'Unknown',
+            'app_version': self.app_version or '1.0',
+            'system_lang_code': self.system_lang_code,
+            'lang_pack': self.lang_pack,
+            'lang_code': self.lang_code,
             'query': query.hex(),
         })))
         return bytes(rx.serialize_method('invokeWithLayer', json.dumps({
@@ -1295,7 +1328,7 @@ class MTNet:
         aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, True)
         enc = bytes(rx.aes_ige_enc_raw(m + pad, aes_key, aes_iv))
         pkt = self.pack(int.from_bytes(sha1(self.auth_key).digest()[-8:], 'little').to_bytes(8, 'little') + msg_key + enc)
-        log.debug('[TX] container msg_ids=%s', sub_ids)
+        log.debug('[TX] container packet sent, message_count=%s', len(sub_ids))
         self.wr.write(pkt)
         await self.wr.drain()
         self.pending[container_msg_id] = {'type': 'container', 'msg_ids': sub_ids}
@@ -1375,7 +1408,7 @@ class MTNet:
         aes_key,aes_iv=kdf_msg(self.auth_key,msg_key,True)
         enc=bytes(rx.aes_ige_enc_raw(m+pad,aes_key,aes_iv))
         pkt=self.pack(int.from_bytes(sha1(self.auth_key).digest()[-8:],'little').to_bytes(8,'little')+msg_key+enc)
-        log.debug(f"[TX] >>> {pkt.hex()}")
+        log.debug(f"[TX] >>> {len(pkt)} bytes")
         self.wr.write(pkt); await self.wr.drain()
         return msg_id
 
@@ -1389,9 +1422,11 @@ class MTNet:
         if self.wr:
             self.wr.close(); await self.wr.wait_closed()
             self.wr=None; self.rd=None
-        for future, _ in self.pending.values():
-            if not future.done():
-                future.cancel()
+        for entry in self.pending.values():
+            if isinstance(entry, tuple):
+                future = entry[0]
+                if not future.done():
+                    future.cancel()
         self.pending.clear()
 
     async def _ensure_reader(self) -> None:
@@ -1473,9 +1508,10 @@ class MTNet:
             except ConnectionError:
                 log.error("MTProto connection lost, reconnecting in %.1fs", backoff)
                 for entry in self.pending.values():
-                    fut = entry[0] if isinstance(entry, tuple) else entry
-                    if not fut.done():
-                        fut.set_exception(ConnectionClosedError("MTProto connection lost"))
+                    if isinstance(entry, tuple):
+                        fut = entry[0]
+                        if not fut.done():
+                            fut.set_exception(ConnectionClosedError("MTProto connection lost"))
                 self.pending.clear()
                 try:
                     if self.wr:
@@ -1494,3 +1530,5 @@ class MTNet:
                     log.error("MTProto reconnect failed: %r", e)
                     backoff = min(backoff * 2, max_backoff)
                     continue
+            except Exception as exc:
+                log.warning("MTProto packet handling failed: %s", exc)

@@ -24,7 +24,7 @@ Under the hood: a Python orchestration layer drives two completely independent n
 - **TUI auth flow**: terminal-first authorization workflow — phone login with SMS code, QR code scanning in ASCII art, 2FA/SRP password challenges. All Rich-styled when a TTY is present.
 - **Proxy support**: SOCKS5 (with user/pass auth) and HTTP CONNECT tunneling for MTProto connections. Also respects `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` env vars.
 - **Dual transport**: Bot API (HTTP long-polling via aiohttp, multipart uploads, auto-webhook-clear on 409) + MTProto (raw TCP with AES-256-IGE, dynamic salt recovery on `bad_server_salt`, auto-DC migration on `PHONE_MIGRATE_N`) — in one app runtime.
-- **Dynamic DC Routing**: MTProto nodes are resolved at startup from a built-in DC map (5 Telegram DCs). Falls back to `149.154.167.50:443` (DC 2) if resolution fails.
+- **DC Routing**: MTProto uses a built-in map of the five Telegram DC endpoints and selects the preferred DC, falling back to `149.154.167.50:443` (DC 2).
 - **Dynamic API dispatch**: every Bot API method works via `__getattr__` — `sendAnimation`, `getUserProfilePhotos`, `setMyCommands`, whatever. Snake_case auto-converts to CamelCase. `mt_` prefix routes to MTProto.
 - **Keyboard system**: inline keyboards, reply keyboards, force reply, reply removal. All with `to_dict()` serialization that adapts per transport.
 - **Forum topic management**: full create/edit/close/reopen/delete lifecycle for forum topics and the General topic. Both transports supported.

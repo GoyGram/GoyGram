@@ -9,16 +9,16 @@ from typing import Any
 
 log = logging.getLogger("goygram.tl.schema_loader")
 
-VECTOR_RE = re.compile(r"^Vector<(.*)>$")
+VECTOR_RE = re.compile(r"^(?:Vector|vector)<(.*)>$")
 FLAG_RE = re.compile(r"^(flags2?)\.(\d+)\?(.+)$")
 
 
 def _parse_field_type(raw: str) -> dict[str, Any]:
-    raw = raw.strip()
+    raw = raw.strip().lstrip("%")
     m = VECTOR_RE.match(raw)
     if m:
         inner = _parse_field_type(m.group(1))
-        return {"type": "Vector", "is_vector": True, "vector_inner": inner["type"]}
+        return {"type": "Vector", "is_vector": True, "vector_inner": inner["type"].lstrip("%")}
 
     m = FLAG_RE.match(raw)
     if m:

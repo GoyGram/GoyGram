@@ -122,7 +122,12 @@ class AppCore:
         from goygram import ext as _ext
         if _ext is None:
             return
-        self.mt.layer = init_schema(_ext, None, lambda layer: setattr(self.mt, "layer", layer)) or 229
+        self.mt.layer = init_schema(
+            _ext,
+            None,
+            lambda layer: self.mt.update_layer(layer),
+            lambda: not self.mt.pending,
+        ) or 229
 
     def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any) -> None:
         import logging
