@@ -49,5 +49,19 @@ async def help_command(msg) -> None:
     await msg.reply("!ping\n!echo text\n!id\n!state\n!help")
 
 
+@app.on_edit
+async def edited_message(msg) -> None:
+    if not msg.is_me and msg.chat_id != app.core.self_id:
+        return
+    text = (msg.text or "").strip()
+    if text == "!ping":
+        await msg.reply("pong (edited)")
+        return
+    if text.startswith("!echo "):
+        await msg.reply(text[6:].strip() or "echo: empty")
+        return
+    await msg.reply(f"edited: {text}")
+
+
 if __name__ == "__main__":
     asyncio.run(app.run())
