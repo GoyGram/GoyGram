@@ -1,4 +1,4 @@
-// Rust extension: dynamic TL serialization with hot-reload
+// CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3::exceptions::PyRuntimeError;
