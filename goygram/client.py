@@ -483,7 +483,10 @@ class AppCore:
                 await bootstrap_session(self, api_id=self.api_id, api_hash=self.api_hash, session_name=self.session_name)
                 await self.mt.start()
                 tasks.append(self.mt._reader_task)
-                await self.mt.call("updates.getState", api_id=self.api_id)
+                try:
+                    await self.mt.call("updates.getState", api_id=self.api_id)
+                except Exception as exc:
+                    self.log.debug("Initial MTProto state request failed: %s", type(exc).__name__)
             await self.stop_ev.wait()
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass

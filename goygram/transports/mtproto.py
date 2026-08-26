@@ -1614,8 +1614,10 @@ class MTNet:
             await self.send(obj, req_msg_id=req_msg_id)
             return await asyncio.wait_for(fut, timeout=30.0)
         except asyncio.TimeoutError:
-            self.pending.pop(req_msg_id, None)
-            raise TimeoutError(f'no response for act={act} msg_id={req_msg_id}')
+            for pending_id, pending_entry in list(self.pending.items()):
+                if isinstance(pending_entry, tuple) and pending_entry[0] is fut:
+                    self.pending.pop(pending_id, None)
+            raise TimeoutError(f"no response for act={act} msg_id={req_msg_id}")
 
     async def _auth_check_password_flow(self, password:str, api_id:int)->dict[str,Any]:
         state = await self._rpc_call('account.getPassword')
@@ -1704,5 +1706,5 @@ class MTNet:
                     backoff = min(backoff * 2, max_backoff)
                     continue
             except Exception as exc:
-                log.exception("MTProto packet handling failed: %s", exc)
+                log.debug("MTProto packet handling failed: %s", type(exc).__name__)
                 await asyncio.sleep(0.1)
