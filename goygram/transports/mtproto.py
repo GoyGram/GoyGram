@@ -630,7 +630,7 @@ class MTNet:
                     if peer_id is not None:
                         from_peer = message.get("from_id", {})
                         from_id = from_peer.get("user_id") if isinstance(from_peer, dict) else None
-                        is_out = bool(message.get("out")) or from_id == self.self_id
+                        is_out = bool(message.get("out")) or from_id == self.self_id or (peer_kind == "peerUser" and int(peer_id) == self.self_id)
                         parsed = {
                             "kind": "msg",
                             "msg_id": message.get("id"),
@@ -1364,7 +1364,7 @@ class MTNet:
                 chat_id = int(peer_id) if peer_kind == "peerUser" else -int(peer_id) if peer_kind == "peerChat" else -1000000000000 - int(peer_id)
                 from_peer = decoded.get("from_id", {})
                 from_id = from_peer.get("user_id") if isinstance(from_peer, dict) else None
-                is_out = is_out or from_id == self_id
+                is_out = is_out or from_id == self_id or (peer_kind == "peerUser" and int(peer_id) == self_id)
                 return {
                     "kind": "msg", "msg_id": decoded["id"], "chat_id": chat_id,
                     "from_id": self_id if is_out else from_id, "text": decoded.get("message", ""),
