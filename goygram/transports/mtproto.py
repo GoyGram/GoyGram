@@ -1418,9 +1418,28 @@ class MTNet:
             target = None
             handle = destination
         total = 0
+        migration_attempted = False
         try:
             while True:
-                response = await self.call("upload.getFile", location=location, offset=offset + total, limit=limit)
+                try:
+                    response = await self.call("upload.getFile", location=location, offset=offset + total, limit=limit)
+                except GoyGramError as exc:
+                    match = _re.search(r"FILE_MIGRATE_(\d+)", str(exc).upper())
+                    if match is None or migration_attempted:
+                        raise
+                    from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+                    endpoint = pick_dc_endpoint(get_dynamic_dc_config(), preferred_dc=int(match.group(1)))
+                    await self.close()
+                    self.stop_ev.clear()
+                    self.host, self.port = endpoint.host, endpoint.port
+                    self._preferred_dc = endpoint.dc_id
+                    self.auth_key = None
+                    self.seq = 0
+                    self._init_done = False
+                    await self.boot()
+                    await self.ensure_auth_key()
+                    migration_attempted = True
+                    continue
                 payload = response.get("bytes") if isinstance(response, dict) else None
                 if not isinstance(payload, (bytes, bytearray)):
                     raise RuntimeError("upload.getFile returned no bytes")
