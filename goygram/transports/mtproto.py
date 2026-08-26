@@ -638,6 +638,8 @@ class MTNet:
                             "from_id": self.self_id if is_out else from_id,
                             "text": message.get("message", ""),
                             "is_me": is_out,
+                            "media": message.get("media"),
+                            "reply_to": message.get("reply_to"),
                         }
             else:
                 parsed = None
@@ -1339,7 +1341,7 @@ class MTNet:
                 return {
                     "kind": "msg", "msg_id": decoded["id"], "chat_id": self_id,
                     "from_id": self_id, "text": decoded.get("message", ""),
-                    "is_me": True,
+                    "is_me": True, "media": decoded.get("media"), "reply_to": decoded.get("reply_to"),
                 }
             if kind == "updateShortMessage":
                 peer_id = decoded.get("user_id")
@@ -1368,7 +1370,7 @@ class MTNet:
                 return {
                     "kind": "msg", "msg_id": decoded["id"], "chat_id": chat_id,
                     "from_id": self_id if is_out else from_id, "text": decoded.get("message", ""),
-                    "is_me": is_out,
+                    "is_me": is_out, "media": decoded.get("media"), "reply_to": decoded.get("reply_to"),
                 }
         except Exception:
             pass
