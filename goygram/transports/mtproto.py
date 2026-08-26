@@ -1442,6 +1442,11 @@ class MTNet:
                     continue
                 body = response.get("result") if isinstance(response, dict) and isinstance(response.get("result"), dict) else response
                 payload = body.get("bytes") if isinstance(body, dict) else None
+                if isinstance(payload, str):
+                    try:
+                        payload = bytes.fromhex(payload)
+                    except ValueError:
+                        payload = None
                 if not isinstance(payload, (bytes, bytearray)):
                     raise RuntimeError("upload.getFile returned no bytes")
                 chunk = bytes(payload)
