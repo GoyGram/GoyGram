@@ -628,8 +628,11 @@ class MTNet:
                     peer_kind = peer.get("_") if isinstance(peer, dict) else None
                     peer_id = peer.get("user_id") if peer_kind == "peerUser" else peer.get("chat_id") if peer_kind == "peerChat" else peer.get("channel_id") if peer_kind == "peerChannel" else None
                     if peer_id is not None:
-                        from_peer = message.get("from_id", {})
-                        from_id = from_peer.get("user_id") if isinstance(from_peer, dict) else None
+                        from_peer = message.get("from_id")
+                        if isinstance(from_peer, dict):
+                            from_id = from_peer.get("user_id")
+                        else:
+                            from_id = from_peer if isinstance(from_peer, int) else None
                         is_out = bool(message.get("out")) or from_id == self.self_id or (peer_kind == "peerUser" and int(peer_id) == self.self_id)
                         parsed = {
                             "kind": "msg",
@@ -831,6 +834,10 @@ class MTNet:
                     return
                 try:
                     parsed = self._parse_rpc_result(result)
+                    dispatch_chat_id = entry[2] if isinstance(entry, tuple) and len(entry) > 2 else None
+                    dispatch_message_text = entry[3] if isinstance(entry, tuple) and len(entry) > 3 else None
+                    if dispatch_chat_id is not None or dispatch_message_text is not None:
+                        self._annotate_short_sent(parsed, dispatch_chat_id, dispatch_message_text)
                     self._dispatch_updates(parsed)
                     fut.set_result(parsed)
                     for container_id, container in list(self.pending.items()):
@@ -1339,7 +1346,7 @@ class MTNet:
             self_id = getattr(self, "self_id", 0) or 0
             if kind == "updateShortSentMessage":
                 return {
-                    "kind": "msg", "msg_id": decoded["id"], "chat_id": self_id,
+                    "kind": "msg", "msg_id": decoded["id"], "chat_id": decoded.get("chat_id", self_id),
                     "from_id": self_id, "text": decoded.get("message", ""),
                     "is_me": True, "media": decoded.get("media"), "reply_to": decoded.get("reply_to"),
                 }
@@ -1364,8 +1371,11 @@ class MTNet:
                 if peer_id is None:
                     return None
                 chat_id = int(peer_id) if peer_kind == "peerUser" else -int(peer_id) if peer_kind == "peerChat" else -1000000000000 - int(peer_id)
-                from_peer = decoded.get("from_id", {})
-                from_id = from_peer.get("user_id") if isinstance(from_peer, dict) else None
+                from_peer = decoded.get("from_id")
+                if isinstance(from_peer, dict):
+                    from_id = from_peer.get("user_id")
+                else:
+                    from_id = from_peer if isinstance(from_peer, int) else None
                 is_out = is_out or from_id == self_id or (peer_kind == "peerUser" and int(peer_id) == self_id)
                 return {
                     "kind": "msg", "msg_id": decoded["id"], "chat_id": chat_id,
@@ -1375,6 +1385,22 @@ class MTNet:
         except Exception:
             pass
         return None
+
+    def _annotate_short_sent(self, value: Any, chat_id: int | str | None, message_text: str | None) -> None:
+        if isinstance(value, list):
+            for item in value:
+                self._annotate_short_sent(item, chat_id, message_text)
+            return
+        if not isinstance(value, dict):
+            return
+        if value.get("_") == "updateShortSentMessage":
+            if chat_id is not None:
+                value["chat_id"] = chat_id
+            if message_text is not None:
+                value["message"] = message_text
+        for item in value.values():
+            self._annotate_short_sent(item, chat_id, message_text)
+
     async def upload_file(self, source: Any, *, file_name: str | None = None, part_size: int = 524288) -> dict[str, Any]:
         if part_size < 1024 or part_size > 524288 or part_size % 1024:
             raise ValueError("part_size must be a multiple of 1024 between 1024 and 524288")
@@ -1635,8 +1661,10 @@ class MTNet:
         loop = asyncio.get_running_loop()
         fut:asyncio.Future[dict[str,Any]] = loop.create_future()
         req_msg_id = self.msg_ids.next()
+        dispatch_chat_id = kw.pop("_dispatch_chat_id", None)
+        dispatch_message_text = kw.pop("_dispatch_message_text", None)
         obj={'act':act}; obj.update({k:v for k,v in kw.items() if v is not None})
-        self.pending[req_msg_id] = (fut, obj)
+        self.pending[req_msg_id] = (fut, obj, dispatch_chat_id, dispatch_message_text)
         try:
             await self.send(obj, req_msg_id=req_msg_id)
             return await asyncio.wait_for(fut, timeout=30.0)
@@ -1671,6 +1699,8 @@ class MTNet:
     async def call(self, act:str, **kw:Any)->dict[str,Any]:
         normalized = self._norm_act(act)
         retry_budget = int(kw.pop("retry", 3))
+        dispatch_chat_id = kw.pop("_dispatch_chat_id", None)
+        dispatch_message_text = kw.pop("_dispatch_message_text", None)
         if normalized.startswith("messages.") and "peer" in kw and not isinstance(kw["peer"], (bytes, bytearray, memoryview, dict)):
             kw = dict(kw)
             kw["peer"] = await self.resolve_peer(kw["peer"])
@@ -1679,6 +1709,10 @@ class MTNet:
         attempt = 0
         while True:
             try:
+                if dispatch_chat_id is not None:
+                    kw["_dispatch_chat_id"] = dispatch_chat_id
+                if dispatch_message_text is not None:
+                    kw["_dispatch_message_text"] = dispatch_message_text
                 return await self._rpc_call(act, **kw)
             except FloodWaitError as exc:
                 if attempt >= retry_budget:

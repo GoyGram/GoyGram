@@ -424,6 +424,8 @@ class AppCore:
             data["reply_to"] = reply_to
         if kbd is not None:
             data["kbd"] = kbd
+        data["_dispatch_chat_id"] = target
+        data["_dispatch_message_text"] = text
         return await self.mt_req("messages.sendMessage", peer=peer, message=text, random_id=secrets.randbits(63), **data)
 
     async def mt_req(self, act: str, **kw: Any) -> Any:
