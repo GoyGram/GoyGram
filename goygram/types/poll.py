@@ -15,3 +15,18 @@ class PollObj:
         self.question = raw.get("question", "")
         self.closed = bool(raw.get("is_closed", False))
         self.kind = raw.get("kind", "poll")
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.raw.get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        return self.raw[key]
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self.raw[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.raw

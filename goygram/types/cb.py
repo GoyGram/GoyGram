@@ -21,6 +21,21 @@ class CbObj:
         self.payload = None
         self.json_data = None
 
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.raw.get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        return self.raw[key]
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self.raw[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.raw
+
     async def answer(self, text: str | None = None, alert: bool = False, url: str | None = None, cache_time: int = 0) -> Any:
         if self.id is None:
             return None

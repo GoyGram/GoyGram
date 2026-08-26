@@ -262,6 +262,9 @@ class AppCore:
         return wrap
 
     def on_member(self, fn: MemFn | None = None, *, filt: Filter | None = None):
+        if isinstance(fn, Filter):
+            filt = fn
+            fn = None
         def wrap(inner: MemFn) -> MemFn:
             if filt is None:
                 self.member_hook.append(inner)

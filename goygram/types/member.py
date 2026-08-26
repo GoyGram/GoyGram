@@ -17,3 +17,18 @@ class MemberObj:
         self.old = raw.get("old_status")
         self.new = raw.get("new_status")
         self.kind = raw.get("kind", "member")
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.raw.get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        return self.raw[key]
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self.raw[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.raw

@@ -38,6 +38,16 @@ class Disp:
         if kind == "err":
             self.log.warning("Disp error event: %s", data.get("text", ""))
             return
+        if kind != "update":
+            update = UpdateObj(pkt.get("src", "sys"), data, self.app)
+            for fn in list(getattr(self.app, "update_hook", [])):
+                try:
+                    await fn(update)
+                except StopPropagation:
+                    return
+                except Exception as e:
+                    self.log.error("Handler failure: %r", e)
+                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
         if kind == "msg":
             msg = MsgObj(pkt.get("src", "sys"), data, self.app)
             for fn in list(self.app.hook):

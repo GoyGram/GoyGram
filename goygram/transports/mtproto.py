@@ -594,9 +594,32 @@ class MTNet:
                 raw = bytes.fromhex(raw)
             except ValueError:
                 raw = None
-        if update_type in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"}:
+        if update_type in {"updateChatParticipant", "updateChannelParticipant"}:
+            chat_id = update.get("chat_id")
+            if update_type == "updateChannelParticipant" and chat_id is None:
+                channel_id = update.get("channel_id")
+                chat_id = -1000000000000 - int(channel_id) if channel_id is not None else None
+            member = {
+                "kind": "member",
+                "chat_id": chat_id,
+                "from_id": update.get("actor_id"),
+                "user_id": update.get("user_id"),
+                "old_status": update.get("prev_participant"),
+                "new_status": update.get("new_participant"),
+                "invite": update.get("invite"),
+                "date": update.get("date"),
+                "qts": update.get("qts"),
+                "via_chatlist": update.get("via_chatlist", False),
+                "update_type": update_type,
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", member))
+            return
+        if update_type in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage", "updateShortMessage", "updateShortChatMessage", "updateShortSentMessage"}:
             message = update.get("message")
-            if isinstance(raw, bytes):
+            if update_type in {"updateShortMessage", "updateShortChatMessage", "updateShortSentMessage"}:
+                parsed = self._parse_new_message(update)
+            elif isinstance(raw, bytes):
                 parsed = self._parse_new_message(raw)
             elif isinstance(message, dict):
                 parsed = self._parse_new_message(bytes.fromhex(message["raw"])) if isinstance(message.get("raw"), str) else None
@@ -630,7 +653,25 @@ class MTNet:
         if not isinstance(result, dict):
             return
         self.update_cursor(result)
+        state = result.get("state")
+        if isinstance(state, dict):
+            self.update_cursor(state)
         self._ingest_entities(result)
+        recovered = result.get("new_messages")
+        if isinstance(recovered, list):
+            for message in recovered:
+                if not isinstance(message, dict):
+                    continue
+                parsed = self._parse_new_message(message)
+                if parsed is None:
+                    continue
+                parsed["update_type"] = "updateNewMessage"
+                parsed["raw_update"] = message
+                asyncio.create_task(self.bus.push("mt", parsed))
+        other = result.get("other_updates")
+        if isinstance(other, list):
+            for update in other:
+                self._dispatch_update(update)
         if result.get("_") == "updatesTooLong":
             asyncio.create_task(self._recover_difference())
             return
@@ -642,6 +683,9 @@ class MTNet:
         if isinstance(updates, list):
             for update in updates:
                 self._dispatch_update(update)
+            return
+        if result.get("_") == "updateShort" and isinstance(result.get("update"), dict):
+            self._dispatch_update(result["update"])
             return
         if str(result.get("_", "")).startswith("update"):
             self._dispatch_update(result)
@@ -809,28 +853,12 @@ class MTNet:
                         return
                     _consume(chunk)
                 return
-            if cid in {0x313bc7f8, 0x4d6deea5}:
+            if cid in {0x313bc7f8, 0x4d6deea5, 0x9015e101}:
                 try:
-                    parsed = self._parse_new_message(inner[4:])
-                    if parsed:
-                        parsed["update_type"] = "updateShortMessage" if cid == 0x313bc7f8 else "updateShortChatMessage"
-                        asyncio.ensure_future(self.bus.push("mt", parsed))
-                except Exception:
-                    pass
-                return
-            if cid == 0x9015e101:
-                try:
-                    _flags = rm.i32()
-                    _msg_id = rm.i32()
-                    _pts = rm.i32()
-                    _pts_count = rm.i32()
-                    _date = rm.i32()
-                    if _flags & (1 << 2):
-                        _ = rm.tl_bytes()
-                    if _flags & (1 << 9):
-                        _cnt = rm.i32()
-                        for _ in range(_cnt):
-                            _ = rm.i32() if rm.i32() else None
+                    import json
+                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    if isinstance(decoded, dict):
+                        self._dispatch_update(decoded)
                 except Exception:
                     pass
                 return
@@ -857,7 +885,10 @@ class MTNet:
                 return
             if cid == 0x78d4dec1:
                 try:
-                    _consume(inner[4:])
+                    import json
+                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    if isinstance(decoded, dict):
+                        self._dispatch_updates(decoded)
                 except Exception:
                     pass
                 return
@@ -880,6 +911,13 @@ class MTNet:
                     pass
                 return
             if cid in {0xf2ebdb4e, 0xe5bdf8de, 0xc32d5b12, 0xc01e857f}:
+                try:
+                    import json
+                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    if isinstance(decoded, dict):
+                        self._dispatch_update(decoded)
+                except Exception:
+                    pass
                 return
             if cid == 0xedab447b:
                 try:
@@ -945,18 +983,10 @@ class MTNet:
                 return
             if cid in {0xd087663a, 0x985d3abb}:
                 try:
-                    chat_id = rm.i64()
-                    actor_id = rm.i64()
-                    date = rm.i32()
-                    rm.u32()
-                    rm.i64()
-                    rm.i64()
-                    rm.i32()
-                    rm.u32()
-                    rm.i64()
-                    rm.i64()
-                    rm.i32()
-                    asyncio.ensure_future(self.bus.push("mt", {"kind": "member", "chat_id": chat_id}))
+                    import json
+                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    if isinstance(decoded, dict):
+                        self._dispatch_update(decoded)
                 except Exception:
                     pass
                 return
@@ -977,6 +1007,14 @@ class MTNet:
                 except Exception:
                     pass
                 return
+            try:
+                import json
+                decoded = json.loads(rx.deserialize_constructor(inner))
+                if isinstance(decoded, dict) and str(decoded.get("_", "")).startswith("update"):
+                    self._dispatch_update(decoded)
+                    return
+            except Exception:
+                pass
             log.debug("Unhandled update cid=0x%08x", cid)
             return
 
@@ -1282,16 +1320,22 @@ class MTNet:
             data["settings"] = _ext.serialize_constructor("codeSettings", json.dumps({"flags": 0})).hex()
         return bytes(_ext.serialize_method(tl_name, json.dumps(data)))
 
-    def _parse_new_message(self, data:bytes)->dict[str,Any]|None:
+    def _parse_new_message(self, data:bytes|dict[str,Any])->dict[str,Any]|None:
         try:
             import json
-            decoded = json.loads(rx.deserialize_constructor(data))
+            decoded = data if isinstance(data, dict) else json.loads(rx.deserialize_constructor(data))
             kind = decoded.get("_")
             if kind in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"}:
                 decoded = decoded.get("message", {})
                 kind = decoded.get("_")
             is_out = bool(decoded.get("out"))
             self_id = getattr(self, "self_id", 0) or 0
+            if kind == "updateShortSentMessage":
+                return {
+                    "kind": "msg", "msg_id": decoded["id"], "chat_id": self_id,
+                    "from_id": self_id, "text": decoded.get("message", ""),
+                    "is_me": True,
+                }
             if kind == "updateShortMessage":
                 peer_id = decoded.get("user_id")
                 return {

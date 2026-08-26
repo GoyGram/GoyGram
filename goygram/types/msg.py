@@ -42,6 +42,45 @@ class MsgObj:
     def msg_id(self) -> int | None:
         return self.id
 
+    def _value(self, key: str, default: Any = None) -> Any:
+        if key in self.raw:
+            return self.raw[key]
+        source = self.raw.get("raw")
+        if isinstance(source, dict):
+            if key in source:
+                return source[key]
+            for name in ("message", "edited_message", "channel_post", "edited_channel_post"):
+                obj = source.get(name)
+                if isinstance(obj, dict) and key in obj:
+                    return obj[key]
+        update = self.raw.get("raw_update")
+        if isinstance(update, dict):
+            obj = update.get("message")
+            if isinstance(obj, dict) and key in obj:
+                return obj[key]
+            if key in update:
+                return update[key]
+        return default
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._value(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        value = self._value(key)
+        if value is None and key not in self.raw:
+            raise KeyError(key)
+        return value
+
+    def __getattr__(self, name: str) -> Any:
+        key = "from" if name == "from_user" else name
+        value = self._value(key)
+        if value is None:
+            raise AttributeError(name)
+        return value
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.raw
+
     def net(self) -> Any:
         if self.src == "bot":
             if self.app.bot is None:
