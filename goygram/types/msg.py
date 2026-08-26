@@ -57,15 +57,17 @@ class MsgObj:
             raise RuntimeError('rx (goygram.ext) is not available')
         if isinstance(chat_id, int):
             if chat_id > 0:
-                return bytes(rx.serialize_constructor('inputPeerUser',
-                    json.dumps({'user_id': chat_id, 'access_hash': 0})))
+                if chat_id == getattr(self.app, "self_id", None):
+                    return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
+                raise ValueError("user peer requires a resolved access_hash")
+            if chat_id == 0:
+                return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
             raw = -chat_id
             if raw > 1000000000000:
-                return bytes(rx.serialize_constructor('inputPeerChannel',
-                    json.dumps({'channel_id': raw - 1000000000000, 'access_hash': 0})))
+                raise ValueError("channel peer requires a resolved access_hash")
             return bytes(rx.serialize_constructor('inputPeerChat',
                 json.dumps({'chat_id': raw})))
-        return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
+        raise ValueError("peer must be resolved before sending")
 
     async def reply(self, txt: str, kbd: Any | None = None, topic_id: int | None = None, link_options: Any | None = None, **kw: Any) -> Any:
         from goygram import ext as rx

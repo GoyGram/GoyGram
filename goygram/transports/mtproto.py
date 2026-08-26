@@ -307,6 +307,8 @@ class MTNet:
         self.transport=IntermediateTransport(); self.msg_ids=MsgIdGen(); self.wrote_tag=False
         self.auth_key:bytes|None=None; self.server_salt:bytes=b'\x00'*8; self.session_id=secrets.token_bytes(8)
         self._seen_server_msg_ids: set[int] = set()
+        self.entities: dict[tuple[str, int], dict[str, Any]] = {}
+        self.entity_usernames: dict[str, dict[str, Any]] = {}
         self.auth_ready=asyncio.Event()
         self.qr_update_ev=asyncio.Event()
         self._init_done=False
@@ -595,6 +597,7 @@ class MTNet:
     def _dispatch_updates(self, result: Any) -> None:
         if not isinstance(result, dict):
             return
+        self._ingest_entities(result)
         nested = result.get("result")
         if isinstance(nested, dict):
             self._dispatch_updates(nested)
@@ -606,6 +609,20 @@ class MTNet:
             return
         if str(result.get("_", "")).startswith("update"):
             self._dispatch_update(result)
+
+    def _ingest_entities(self, result: dict[str, Any]) -> None:
+        for key, kind in (("users", "user"), ("chats", "chat")):
+            values = result.get(key)
+            if not isinstance(values, list):
+                continue
+            for entity in values:
+                if not isinstance(entity, dict) or not isinstance(entity.get("id"), int):
+                    continue
+                item = dict(entity)
+                self.entities[(kind, int(item["id"]))] = item
+                username = item.get("username")
+                if isinstance(username, str) and username:
+                    self.entity_usernames[username.casefold()] = item
 
     def _parse_phone_code_hash(self, result:bytes)->str|None:
         try:
@@ -743,10 +760,6 @@ class MTNet:
                     ):
                         self._dispatch_updates(decoded)
                         return
-                    needle = b'\xfd\x0a\x2b\x1f'
-                    pos = inner.find(needle, rm.p)
-                    if pos >= 0 and pos < len(inner) - 4:
-                        _consume(inner[pos:])
                 except Exception:
                     pass
                 return
@@ -1030,51 +1043,7 @@ class MTNet:
             return {"ok": False, "error": "SCHEMA_DECODE_FAILED", "error_message": str(exc), "raw_result_hex": result.hex()}
 
     def _parse_updates(self, result:bytes)->dict[str,Any]:
-        if len(result) < 4:
-            return {"ok": True}
-        r = Reader(result)
-        cid = r.u32()
-        if cid == 0x74ae4240:
-            vec_cid = r.u32()
-            updates = []
-            msg_id = None
-            if vec_cid == 0x1cb5c415:
-                count = r.i32()
-                upmid_needle = b'\xd6\xbf\x90\x4e'
-                upnm_needle = b'\xfd\x0a\x2b\x1f'
-                mid_pos = result.find(upmid_needle, r.p)
-                if mid_pos >= 0 and mid_pos + 8 <= len(result):
-                    msg_id = int.from_bytes(result[mid_pos+4:mid_pos+8], 'little')
-                if msg_id:
-                    updates.append({"_": "updateMessageID", "id": msg_id})
-                upnm_pos = result.find(upnm_needle, r.p)
-                if upnm_pos >= 0:
-                    updates.append({
-                        "_": "updateNewMessage",
-                        "id": msg_id,
-                        "raw": result[upnm_pos:],
-                    })
-                pin_needle = b'\xb5\xea\x85\xed'
-                pin_pos = result.find(pin_needle, r.p)
-                if pin_pos >= 0:
-                    ids = []
-                    try:
-                        tr = Reader(result[pin_pos+4:])
-                        tr.i32()
-                        tr.i32()
-                        if tr.i32() > 0:
-                            tr = Reader(result[pin_pos+4+4+8:])
-                        cnt2 = tr.i32()
-                        ids = [tr.i32() for _ in range(min(cnt2, 20))]
-                    except Exception:
-                        pass
-                    updates.append({"_": "updatePinnedMessages", "ids": ids})
-            return {"ok": True, "updates": updates, "id": msg_id}
-        if cid == 0x9015e101:
-            _flags = r.i32()
-            mid = r.i32()
-            return {"ok": True, "id": mid, "updates": [{"_": "updateMessageID", "id": mid}]}
-        return {"ok": True}
+        return {"ok": False, "error": "SCHEMA_DECODE_FAILED", "error_message": "structured update decoding failed", "raw_result_hex": result.hex()}
     def _resolve_peer(self, obj:dict[str,Any])->bytes:
         chat_id = obj.get('chat_id') or obj.get('peer')
         access_hash = obj.get('access_hash', 0)
@@ -1088,15 +1057,31 @@ class MTNet:
             if chat_id.lstrip('-').isdigit():
                 chat_id = int(chat_id)
             else:
-                return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
+                entity = self.entity_usernames.get(chat_id.casefold())
+                if entity is None:
+                    raise ValueError('username peer requires explicit entity resolution')
+                chat_id = int(entity["id"])
+                access_hash = entity.get("access_hash", 0)
         if isinstance(chat_id, int):
             if chat_id == 0:
                 return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
             if chat_id > 0:
+                if chat_id == getattr(self, 'self_id', None):
+                    return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
+                entity = self.entities.get(("user", chat_id))
+                if entity is not None:
+                    access_hash = access_hash or entity.get("access_hash", 0)
+                if not access_hash:
+                    raise ValueError('user peer requires a non-zero access_hash')
                 return bytes(rx.serialize_constructor('inputPeerUser', json.dumps({'user_id': chat_id, 'access_hash': int(access_hash)})))
             raw = -chat_id
             if raw > 1000000000000:
                 channel_id = raw - 1000000000000
+                entity = self.entities.get(("chat", channel_id))
+                if entity is not None:
+                    access_hash = access_hash or entity.get("access_hash", 0)
+                if not access_hash:
+                    raise ValueError('channel peer requires a non-zero access_hash')
                 return bytes(rx.serialize_constructor('inputPeerChannel', json.dumps({'channel_id': channel_id, 'access_hash': int(access_hash)})))
             return bytes(rx.serialize_constructor('inputPeerChat', json.dumps({'chat_id': raw})))
         return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
@@ -1116,7 +1101,7 @@ class MTNet:
             else:
                 channel_id = chat_id
             return bytes(rx.serialize_constructor('inputChannel', json.dumps({'channel_id': channel_id, 'access_hash': int(access_hash)})))
-        return bytes(rx.serialize_constructor('inputChannel', json.dumps({'channel_id': 0, 'access_hash': 0})))
+        raise ValueError('channel peer requires an integer channel_id and a non-zero access_hash')
 
     def _resolve_user(self, obj:dict[str,Any])->bytes:
         user_id = obj.get('user_id')
@@ -1230,55 +1215,8 @@ class MTNet:
                 }
         except Exception:
             pass
-        if len(data) < 20:
-            return None
-        try:
-            search_end = min(len(data), 120)
-            txt = ''
-            for i in range(search_end - 2, 0, -1):
-                n0 = data[i]
-                if n0 == 0 or n0 == 254:
-                    continue
-                if n0 < 254 and i + 1 + n0 <= len(data):
-                    candidate = data[i+1:i+1+n0]
-                    try:
-                        decoded = candidate.decode('utf-8')
-                        if not decoded.isprintable() or len(decoded) < 1:
-                            continue
+        return None
 
-                        if decoded.isdigit():
-                            continue
-                        txt = decoded
-                        break
-                    except Exception:
-                        continue
-            if not txt:
-                return None
-            r = Reader(data)
-            r.u32(); flags = r.i32()
-            r.i32()
-            msg_id = r.i32()
-            sid = getattr(self, 'self_id', 0) or 0
-            is_out = bool(flags & 2)
-            return {
-                'kind': 'msg', 'msg_id': msg_id,
-                'chat_id': sid, 'from_id': sid if is_out else None,
-                'text': txt, 'is_me': is_out or sid in self._extract_user_ids(data),
-            }
-        except Exception:
-            return None
-
-    def _extract_user_ids(self, data: bytes) -> set[int]:
-        ids = set()
-        for offset in range(0, len(data) - 3, 4):
-            value = int.from_bytes(data[offset:offset + 4], "little")
-            if value:
-                ids.add(value)
-        for offset in range(0, len(data) - 7, 4):
-            value = int.from_bytes(data[offset:offset + 8], "little")
-            if value:
-                ids.add(value)
-        return ids
 
     async def send_container(self, calls:list[tuple[str,dict[str,Any]]])->int:
         await self.ensure_auth_key()

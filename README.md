@@ -37,7 +37,7 @@ Under the hood: a Python orchestration layer drives two completely independent n
 pip install goygram
 ```
 
-Requires Python 3.11+. Pre-built wheels ship for Linux, Windows, macOS, and FreeBSD where the corresponding runner build succeeds. Termux is natively validated in a Termux environment; install the Python package from source there because Android/Termux wheels are not interchangeable with manylinux wheels. Rust is not required for the standard Linux, Windows, and macOS wheels. Installs `aiohttp`, `pydantic`, `rich`, and `qrcode` as dependencies.
+Requires Python 3.11+. Pre-built wheels ship for Linux, Windows, macOS, and FreeBSD where the corresponding runner build succeeds. Termux is natively validated in a Termux environment; install the Python package from source there because Android/Termux wheels are not interchangeable with manylinux wheels. Rust is not required for the standard Linux, Windows, and macOS wheels. Installs `aiohttp`, `rich`, and `qrcode` as dependencies.
 
 ### FreeBSD and Termux
 

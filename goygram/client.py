@@ -4,10 +4,9 @@ from __future__ import annotations
 import asyncio
 import signal
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 import logging
 from typing import Any, Literal
-
-from pydantic import BaseModel, ConfigDict
 
 from goygram.api.methods import BotAPI
 from goygram.core.bus import Bus
@@ -29,8 +28,8 @@ PollFn = Callable[[PollObj], Awaitable[Any]]
 MemFn = Callable[[MemberObj], Awaitable[Any]]
 
 
-class BotCfg(BaseModel):
-    model_config = ConfigDict(frozen=True)
+@dataclass(frozen=True, slots=True)
+class BotCfg:
     token: str
     timeout: int = 25
     base: str = "https://api.telegram.org"
@@ -43,16 +42,16 @@ class BotCfg(BaseModel):
     webhook_drop_pending_updates: bool = False
 
 
-class MtCfg(BaseModel):
-    model_config = ConfigDict(frozen=True)
+@dataclass(frozen=True, slots=True)
+class MtCfg:
     host: str
     port: int
     key: bytes | None = None
     iv: bytes | None = None
 
 
-class AppCfg(BaseModel):
-    model_config = ConfigDict(frozen=True)
+@dataclass(frozen=True, slots=True)
+class AppCfg:
     bot: BotCfg | None = None
     mt: MtCfg | None = None
     bus_max: int = 0
@@ -82,6 +81,7 @@ class AppCore:
         self.bot = None
         self.mt = None
         self.api = None
+        self.self_id: int | None = None
         if cfg.bot:
             from goygram.transports.botapi import BotNet
 
@@ -131,7 +131,6 @@ class AppCore:
         self.member_hook: list[MemFn] = []
         self.stop_ev = asyncio.Event()
         self.log = get_logger("goygram.app")
-        self.self_id: int | None = None
         self.api_id = api_id
         self.api_hash = api_hash
         self.session_name = session_name
