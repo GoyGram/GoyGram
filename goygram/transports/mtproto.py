@@ -1240,6 +1240,17 @@ class MTNet:
             obj["access_hash"] = entity.get("access_hash", 0)
         if isinstance(chat_id, int) and chat_id > 0 and chat_id != getattr(self, "self_id", None):
             entity = self.entities.get(("user", chat_id))
+            if entity is None:
+                refreshed = await self.call(
+                    "messages.getDialogs",
+                    limit=100,
+                    offset_date=0,
+                    offset_id=0,
+                    offset_peer={"_": "inputPeerEmpty"},
+                    hash=0,
+                )
+                self._ingest_entities(refreshed.get("result", refreshed) if isinstance(refreshed, dict) else {})
+                entity = self.entities.get(("user", chat_id))
             if entity is not None:
                 obj = dict(obj)
                 obj["access_hash"] = obj.get("access_hash") or entity.get("access_hash", 0)
@@ -1352,6 +1363,7 @@ class MTNet:
                 }
             if kind == "updateShortMessage":
                 peer_id = decoded.get("user_id")
+                is_out = is_out or bool(int(decoded.get("flags") or 0) & 2)
                 return {
                     "kind": "msg", "msg_id": decoded["id"], "chat_id": peer_id,
                     "from_id": self_id if is_out else peer_id, "text": decoded.get("message", ""),
