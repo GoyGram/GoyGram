@@ -676,28 +676,63 @@ class MTNet:
         try:
             r = Reader(result)
             cid = r.u32()
+            if cid == 0xf8827ebf:
+                _ = r.tl_bytes()
+                return r.tl_string()
+            if cid == 0xd7cef980:
+                _ = r.tl_bytes()
+                return r.tl_string()
             if cid != 0x5e002502:
                 return None
-            _flags = r.i32()
+            flags = r.u32()
             st = r.u32()
 
-            if st in {0x3dbb5986, 0xc000bba2, 0xab03c6d9}:
+            if st in {0x3dbb5986, 0xc000bba2, 0x5353e5a7}:
                 _ = r.i32()
-            elif st == 0x5353e5a7:
-                _ = r.tl_bytes()
+            elif st == 0xab03c6d9:
+                _ = r.tl_string()
             elif st == 0x82006484:
                 _ = r.tl_bytes()
                 _ = r.i32()
-            elif st == 0xa5491dea:
-                _, _ = r.i32(), r.i32()
-            elif st == 0xd9565c39:
+            elif st == 0xf450f59b:
+                type_flags = r.u32()
+                if type_flags & (1 << 0) or type_flags & (1 << 1):
+                    pass
+                _ = r.tl_string()
                 _ = r.i32()
-            v = r.tl_bytes().decode("utf-8", errors="ignore")
-            if v:
-                return v
-        except Exception:
-            pass
-        return None
+                if type_flags & (1 << 3):
+                    _ = r.i32()
+                if type_flags & (1 << 4):
+                    _ = r.i32()
+            elif st == 0xa5491dea:
+                _ = r.u32()
+            elif st == 0xd9565c39:
+                _ = r.tl_string()
+                _ = r.i32()
+            elif st == 0x9fd736:
+                type_flags = r.u32()
+                if type_flags & (1 << 0):
+                    _ = r.tl_bytes()
+                if type_flags & (1 << 2):
+                    _ = r.i64()
+                    _ = r.tl_bytes()
+                if type_flags & (1 << 1):
+                    _ = r.tl_string()
+                    _ = r.i32()
+                _ = r.i32()
+            elif st in {0xa416ac81, 0xb37794af}:
+                type_flags = r.u32()
+                if type_flags & 1:
+                    _ = r.tl_string()
+            else:
+                return None
+            if flags & (1 << 1):
+                _ = r.u32()
+            if flags & (1 << 2):
+                _ = r.i32()
+            return r.tl_string()
+        except (IndexError, struct.error, UnicodeError, ValueError):
+            return None
 
     def _handle_encrypted_packet(self, pkt:bytes)->None:
         if not self.auth_key or rx is None:
