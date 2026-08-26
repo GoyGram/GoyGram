@@ -1440,7 +1440,8 @@ class MTNet:
                     await self.ensure_auth_key()
                     migration_attempted = True
                     continue
-                payload = response.get("bytes") if isinstance(response, dict) else None
+                body = response.get("result") if isinstance(response, dict) and isinstance(response.get("result"), dict) else response
+                payload = body.get("bytes") if isinstance(body, dict) else None
                 if not isinstance(payload, (bytes, bytearray)):
                     raise RuntimeError("upload.getFile returned no bytes")
                 chunk = bytes(payload)
