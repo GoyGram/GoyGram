@@ -432,6 +432,11 @@ class BotNet:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                message = str(e)
+                if "botapi getUpdates http 401" in message or "botapi getUpdates http 404" in message:
+                    self.log.critical("Bot API authentication or endpoint failure; polling stopped.")
+                    self.stop_ev.set()
+                    break
                 self.log.error("Polling error: %r", e)
                 await self.bus.push("sys", {"kind": "err", "src": "bot", "text": repr(e)})
                 await asyncio.sleep(1.0)
