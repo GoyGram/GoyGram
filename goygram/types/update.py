@@ -12,3 +12,12 @@ class UpdateObj:
         self.raw = raw
         self.app = app
         self.type = str(raw.get("update_type") or raw.get("_") or "unknown")
+
+    @property
+    def update_type(self) -> str:
+        return self.type
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key == "update_type":
+            return self.type
+        return self.raw.get(key, default)
