@@ -31,6 +31,8 @@ Under the hood: a Python orchestration layer drives two completely independent n
 - **Zero-copy event objects**: `MsgObj`, `CbObj`, `PollObj`, `MemberObj` with `__slots__` — no per-message dict overhead.
 - **Composable filters**: boolean AND/OR/NOT on `Filter` (`filters.text & ~filters.me`).
 - **Multi-session**: named vaults (`session_name="worker_1"`) for farming multiple accounts from the same process. Separate auth keys, separate TCP connections, separate `self_id`.
+- **Durable delivery state**: Bot API offsets and MTProto `pts/qts/date/seq` cursors are persisted atomically with restrictive permissions.
+- **Direct media primitives**: chunked MTProto `upload_file()`/`download_file()` and Bot API `download_file()` without a heavyweight media framework.
 
 ## Installation
 ```bash
@@ -112,6 +114,8 @@ GoyGram can route Bot API method names dynamically, including methods that are n
   - `await app.mt_get_chat_full(chat_id=...)`
 
 This behavior is implemented through dynamic method resolution in the client core (`__getattr__`) and transport-aware request routing.
+
+For Bot API files, `await app.download_file(file_id, destination)` downloads a Telegram file to memory or atomically to a local path. MTProto exposes the same low-level chunk control through `app.core.mt.upload_file(...)` and `app.core.mt.download_file(...)`.
 
 ## Authentication & Security
 

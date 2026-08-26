@@ -79,11 +79,11 @@ class FSMEngine:
         now = time.time()
         if existing is not None:
             if data is not None:
-                existing.data.update(data)
+                existing.data.update(copy.deepcopy(data))
             existing.state = state
             existing.expiry = now + (ttl if ttl is not None else self._ttl)
         else:
-            merged_data = data if data is not None else {}
+            merged_data = copy.deepcopy(data) if data is not None else {}
             expiry = now + (ttl if ttl is not None else self._ttl)
             self._states[key] = StateItem(state, merged_data, expiry)
         self._changed()
@@ -108,7 +108,7 @@ class FSMEngine:
             del self._states[key]
             self._changed()
             return None
-        return dict(item.data)
+        return copy.deepcopy(item.data)
 
     def clear(self, chat_id: int | str, user_id: int | str) -> None:
         self._states.pop((int(chat_id), int(user_id)), None)

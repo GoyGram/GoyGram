@@ -86,7 +86,7 @@ class MsgObj:
             return await self.app.bot_req("sendMessage", chat_id=self.chat_id, text=txt, **data)
         if self.app.mt is not None:
             data = dict(kw)
-            peer = self._resolve_peer(self.chat_id)
+            peer = await self.app.mt.resolve_peer(self.chat_id)
             if self.id is not None:
                 data["reply_to"] = bytes(rx.serialize_constructor('inputReplyToMessage',
                     json.dumps({'reply_to_msg_id': int(self.id)})))

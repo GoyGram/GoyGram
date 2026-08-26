@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
+import os
 import re
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from goygram.logging import get_logger
+from goygram.errors import FloodWaitError
 
 try:
     import aiohttp
@@ -31,13 +36,20 @@ class BotNet:
         webhook_secret_token: str | None = None,
         webhook_max_body: int = 1024 * 1024,
         webhook_drop_pending_updates: bool = False,
+        offset_path: str | Path | None = None,
     ) -> None:
         self.token = token
         self.bus = bus
         self.timeout = timeout
         self.base = f"{base}/bot{token}"
         self.sess: Any | None = None
-        self.off = 0
+        if offset_path is None:
+            offset_path = Path.home() / ".goygram" / "offsets" / f"{hashlib.sha256(token.encode()).hexdigest()[:24]}.offset"
+        self.offset_path = Path(offset_path)
+        try:
+            self.off = max(0, int(self.offset_path.read_text().strip()))
+        except (OSError, ValueError):
+            self.off = 0
         self.stop_ev = asyncio.Event()
         self.log = get_logger("goygram.botapi")
         self.webhook_url = webhook_url
@@ -60,6 +72,14 @@ class BotNet:
         self.web_site: Any | None = None
         self.webhook_seen: set[int] = set()
         self.webhook_highest_update_id = -1
+
+    def _save_offset(self, offset: int) -> None:
+        self.offset_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=self.offset_path.parent, delete=False) as handle:
+            handle.write(str(offset))
+            temp_path = Path(handle.name)
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, self.offset_path)
 
     def mod(self) -> Any:
         if aiohttp is None:
@@ -193,10 +213,34 @@ class BotNet:
                 retry_after = raw.get("parameters", {}).get("retry_after", 1) if isinstance(raw, dict) else 1
                 await asyncio.sleep(max(1, min(int(retry_after), 300)))
                 return await self.req(m, data, _attempt + 1)
+            if r.status == 429:
+                retry_after = raw.get("parameters", {}).get("retry_after", 1) if isinstance(raw, dict) else 1
+                raise FloodWaitError(429, "BOT_API_RATE_LIMIT", max(1, int(retry_after)))
             raise RuntimeError(f"botapi {m} http {r.status}: {raw}")
         if not raw.get("ok"):
             raise RuntimeError(f"botapi {m} fail: {raw}")
         return raw["result"]
+
+    async def download_file(self, file_id: str, destination: str | Path | None = None) -> bytes | Path:
+        info = await self.req("getFile", {"file_id": file_id})
+        if not isinstance(info, dict) or not isinstance(info.get("file_path"), str):
+            raise RuntimeError("botapi getFile returned no file_path")
+        await self.boot()
+        assert self.sess is not None
+        url = f"https://api.telegram.org/file/bot{self.token}/{info['file_path']}"
+        async with self.sess.get(url) as response:
+            if response.status >= 400:
+                raise RuntimeError(f"botapi download file http {response.status}")
+            if destination is None:
+                return await response.read()
+            target = Path(destination)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as handle:
+                temp_path = Path(handle.name)
+                async for chunk in response.content.iter_chunked(1024 * 1024):
+                    handle.write(chunk)
+            os.replace(temp_path, target)
+            return target
 
     def body(self, data: dict[str, Any]) -> dict[str, Any]:
         mod = self.mod()
@@ -381,6 +425,7 @@ class BotNet:
                         self.log.debug("Incoming packet: %s", pkt)
                         await self.bus.push("bot", pkt)
                     self.off = uid + 1
+                    self._save_offset(self.off)
             except asyncio.CancelledError:
                 raise
             except Exception as e:

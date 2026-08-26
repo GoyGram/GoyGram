@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import logging
+from pathlib import Path
 from typing import Any, Literal
 
 from goygram.api.methods import BotAPI
@@ -40,6 +42,7 @@ class BotCfg:
     webhook_secret_token: str | None = None
     webhook_max_body: int = 1024 * 1024
     webhook_drop_pending_updates: bool = False
+    offset_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +100,7 @@ class AppCore:
                 webhook_secret_token=cfg.bot.webhook_secret_token,
                 webhook_max_body=cfg.bot.webhook_max_body,
                 webhook_drop_pending_updates=cfg.bot.webhook_drop_pending_updates,
+                offset_path=cfg.bot.offset_path,
             )
             self.api = BotAPI(self.bot)
         if cfg.mt:
@@ -116,6 +120,7 @@ class AppCore:
                 system_lang_code=system_lang_code,
                 lang_pack=lang_pack,
                 lang_code=lang_code,
+                cursor_path=Path.home() / ".goygram" / "cursors" / f"{hashlib.sha256(session_name.encode()).hexdigest()[:24]}.json",
             )
             if api_id is not None:
                 self.mt._api_id = int(api_id)
@@ -391,6 +396,11 @@ class AppCore:
             return await self.bot.call(meth, **data)
         return await self.bot.req(meth, data)
 
+    async def download_file(self, file_id: str, destination: str | None = None) -> Any:
+        if self.bot is None:
+            raise RuntimeError("bot net is not configured")
+        return await self.bot.download_file(file_id, destination)
+
     async def mt_req(self, act: str, **kw: Any) -> Any:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
@@ -490,6 +500,7 @@ class GoyGram:
         webhook_secret_token: str | None = None,
         webhook_max_body: int = 1024 * 1024,
         webhook_drop_pending_updates: bool = False,
+        bot_offset_path: str | None = None,
     ) -> None:
         if webhook_url is not None and bot_token is None:
             raise ValueError("webhook_url requires bot_token")
@@ -504,6 +515,7 @@ class GoyGram:
             webhook_secret_token=webhook_secret_token,
             webhook_max_body=webhook_max_body,
             webhook_drop_pending_updates=webhook_drop_pending_updates,
+            offset_path=bot_offset_path,
         ) if bot_token is not None else None
         log = get_logger("goygram.dc")
         resolved_host = mt_host

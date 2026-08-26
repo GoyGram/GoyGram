@@ -1,9 +1,10 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
-import asyncio, hashlib, json, os, secrets, struct, urllib.parse, logging
+import asyncio, hashlib, json, os, secrets, struct, tempfile, urllib.parse, logging
 from hashlib import sha1, sha256
+from pathlib import Path
 from typing import Any
-from goygram.errors import ConnectionClosedError, GoyGramError, RPCError
+from goygram.errors import ConnectionClosedError, FloodWaitError, GoyGramError, RPCError
 
 import re as _re
 
@@ -292,6 +293,7 @@ class MTNet:
         system_lang_code:str="en",
         lang_pack:str="",
         lang_code:str="en",
+        cursor_path: str | Path | None = None,
     )->None:
         self.host=host; self.port=port; self.bus=bus; self.key=key; self.iv=iv
         self.proxy_url = proxy
@@ -309,6 +311,16 @@ class MTNet:
         self._seen_server_msg_ids: set[int] = set()
         self.entities: dict[tuple[str, int], dict[str, Any]] = {}
         self.entity_usernames: dict[str, dict[str, Any]] = {}
+        self.cursor_path = Path(cursor_path) if cursor_path is not None else None
+        self.cursor: dict[str, int] = {}
+        self._difference_lock = asyncio.Lock()
+        if self.cursor_path is not None:
+            try:
+                loaded = json.loads(self.cursor_path.read_text())
+                if isinstance(loaded, dict):
+                    self.cursor = {key: int(value) for key, value in loaded.items() if key in {"pts", "qts", "date", "seq"}}
+            except (OSError, TypeError, ValueError):
+                self.cursor = {}
         self.auth_ready=asyncio.Event()
         self.qr_update_ev=asyncio.Event()
         self._init_done=False
@@ -321,6 +333,25 @@ class MTNet:
     def update_layer(self, layer: int) -> None:
         self.layer = int(layer)
         self._init_done = False
+
+    def get_cursor(self) -> dict[str, int]:
+        return dict(self.cursor)
+
+    def update_cursor(self, cursor: dict[str, Any]) -> None:
+        changed = False
+        for key in ("pts", "qts", "date", "seq"):
+            value = cursor.get(key)
+            if isinstance(value, int) and value > self.cursor.get(key, -1):
+                self.cursor[key] = value
+                changed = True
+        if not changed or self.cursor_path is None:
+            return
+        self.cursor_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", dir=self.cursor_path.parent, delete=False) as handle:
+            json.dump(self.cursor, handle, separators=(",", ":"))
+            temp_path = Path(handle.name)
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, self.cursor_path)
 
     def pick(self,obj:dict[str,Any],*keys:str)->Any:
         for k in keys:
@@ -597,7 +628,11 @@ class MTNet:
     def _dispatch_updates(self, result: Any) -> None:
         if not isinstance(result, dict):
             return
+        self.update_cursor(result)
         self._ingest_entities(result)
+        if result.get("_") == "updatesTooLong":
+            asyncio.create_task(self._recover_difference())
+            return
         nested = result.get("result")
         if isinstance(nested, dict):
             self._dispatch_updates(nested)
@@ -609,6 +644,19 @@ class MTNet:
             return
         if str(result.get("_", "")).startswith("update"):
             self._dispatch_update(result)
+
+    async def _recover_difference(self) -> None:
+        if self._difference_lock.locked():
+            return
+        async with self._difference_lock:
+            kwargs = {key: self.cursor[key] for key in ("pts", "qts", "date", "seq") if key in self.cursor}
+            if "pts" not in kwargs:
+                return
+            try:
+                result = await self.call("updates.getDifference", **kwargs)
+                self._dispatch_updates(result)
+            except Exception as exc:
+                log.warning("MTProto update difference recovery failed: %s", exc)
 
     def _ingest_entities(self, result: dict[str, Any]) -> None:
         for key, kind in (("users", "user"), ("chats", "chat")):
@@ -1086,6 +1134,29 @@ class MTNet:
             return bytes(rx.serialize_constructor('inputPeerChat', json.dumps({'chat_id': raw})))
         return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
 
+    async def resolve_peer(self, value: Any) -> bytes:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return bytes(value)
+        obj = value if isinstance(value, dict) else {"chat_id": value}
+        chat_id = obj.get("chat_id") or obj.get("peer")
+        if isinstance(chat_id, str) and not chat_id.lstrip("-").isdigit() and chat_id not in {"self", "me"}:
+            entity = self.entity_usernames.get(chat_id.casefold())
+            if entity is None:
+                result = await self.call("contacts.resolveUsername", username=chat_id, api_id=self._api_id)
+                self._ingest_entities(result.get("result", result) if isinstance(result, dict) else {})
+                entity = self.entity_usernames.get(chat_id.casefold())
+            if entity is None:
+                raise ValueError('username resolution returned no entity')
+            obj = dict(obj)
+            obj["chat_id"] = int(entity["id"])
+            obj["access_hash"] = entity.get("access_hash", 0)
+        if isinstance(chat_id, int) and chat_id > 0 and chat_id != getattr(self, "self_id", None):
+            entity = self.entities.get(("user", chat_id))
+            if entity is not None:
+                obj = dict(obj)
+                obj["access_hash"] = obj.get("access_hash") or entity.get("access_hash", 0)
+        return self._resolve_peer(obj)
+
     def _resolve_channel(self, obj:dict[str,Any])->bytes:
         chat_id = obj.get('chat_id') or obj.get('channel')
         access_hash = obj.get('access_hash', 0)
@@ -1216,7 +1287,73 @@ class MTNet:
         except Exception:
             pass
         return None
+    async def upload_file(self, source: Any, *, file_name: str | None = None, part_size: int = 524288) -> dict[str, Any]:
+        if part_size < 1024 or part_size > 524288 or part_size % 1024:
+            raise ValueError("part_size must be a multiple of 1024 between 1024 and 524288")
+        close_source = False
+        if isinstance(source, (str, os.PathLike)):
+            path = Path(source)
+            handle = path.open("rb")
+            close_source = True
+            file_name = file_name or path.name
+        else:
+            handle = source
+            file_name = file_name or "file"
+        file_id = secrets.randbits(63)
+        parts = 0
+        try:
+            while True:
+                chunk = handle.read(part_size)
+                if not chunk:
+                    break
+                result = await self.call("upload.saveFilePart", file_id=file_id, file_part=parts, bytes=chunk)
+                if result is False or (isinstance(result, dict) and result.get("ok") is False):
+                    raise RuntimeError("upload.saveFilePart failed")
+                parts += 1
+        finally:
+            if close_source:
+                handle.close()
+        return {"id": file_id, "parts": parts, "name": file_name}
 
+    async def download_file(self, location: Any, destination: Any, *, offset: int = 0, limit: int = 524288) -> int:
+        if limit < 1024 or limit > 524288 or limit % 1024:
+            raise ValueError("limit must be a multiple of 1024 between 1024 and 524288")
+        close_target = False
+        temp_path: Path | None = None
+        if isinstance(destination, (str, os.PathLike)):
+            target = Path(destination)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            handle = tempfile.NamedTemporaryFile(dir=target.parent, delete=False)
+            temp_path = Path(handle.name)
+            close_target = True
+        else:
+            target = None
+            handle = destination
+        total = 0
+        try:
+            while True:
+                response = await self.call("upload.getFile", location=location, offset=offset + total, limit=limit)
+                payload = response.get("bytes") if isinstance(response, dict) else None
+                if not isinstance(payload, (bytes, bytearray)):
+                    raise RuntimeError("upload.getFile returned no bytes")
+                chunk = bytes(payload)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                total += len(chunk)
+                if len(chunk) < limit:
+                    break
+        except Exception:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            raise
+        finally:
+            if close_target:
+                handle.close()
+        if temp_path is not None and target is not None:
+            os.chmod(temp_path, 0o600)
+            os.replace(temp_path, target)
+        return total
 
     async def send_container(self, calls:list[tuple[str,dict[str,Any]]])->int:
         await self.ensure_auth_key()
@@ -1418,9 +1555,21 @@ class MTNet:
 
     async def call(self, act:str, **kw:Any)->dict[str,Any]:
         normalized = self._norm_act(act)
+        retry_budget = int(kw.pop("retry", 3))
+        if normalized.startswith("messages.") and "peer" in kw and not isinstance(kw["peer"], (bytes, bytearray, memoryview, dict)):
+            kw = dict(kw)
+            kw["peer"] = await self.resolve_peer(kw["peer"])
         if normalized == 'auth.checkPassword' and 'srp_id' not in kw and 'password' in kw and isinstance(kw['password'], str):
             return await self._auth_check_password_flow(kw['password'], int(kw.get('api_id', 0)))
-        return await self._rpc_call(act, **kw)
+        attempt = 0
+        while True:
+            try:
+                return await self._rpc_call(act, **kw)
+            except FloodWaitError as exc:
+                if attempt >= retry_budget:
+                    raise
+                attempt += 1
+                await asyncio.sleep(max(1, min(int(exc.seconds), 300)))
 
     async def _connect(self) -> None:
         from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
