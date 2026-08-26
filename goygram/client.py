@@ -465,6 +465,7 @@ class AppCore:
         loop = asyncio.get_running_loop()
         self.log.info("Starting GoyGram core.")
         tasks = []
+        stop_wait = None
         try:
             tasks.append(asyncio.create_task(self.disp.consume(), name="disp"))
             await self.fsm.start()
@@ -487,11 +488,16 @@ class AppCore:
                     await self.mt.call("updates.getState", api_id=self.api_id)
                 except Exception as exc:
                     self.log.debug("Initial MTProto state request failed: %s", type(exc).__name__)
-            await self.stop_ev.wait()
+            stop_wait = asyncio.create_task(self.stop_ev.wait(), name="stop-wait")
+            done, _ = await asyncio.wait({stop_wait, *tasks}, return_when=asyncio.FIRST_COMPLETED)
+            if stop_wait not in done:
+                self.stop_ev.set()
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
         finally:
             await self.close()
+            if stop_wait is not None:
+                stop_wait.cancel()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
