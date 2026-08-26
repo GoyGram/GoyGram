@@ -137,15 +137,19 @@ def _rext(e: object, path: str, default: Any = None) -> Any:
 
 
 def _rget(e: object, *keys: str) -> Any:
-    raw = getattr(e, "raw", None)
-    if not isinstance(raw, dict):
+    if not keys:
         return None
-    d = raw
-    for k in keys[:-1]:
-        d = d.get(k)
-        if not isinstance(d, dict):
+    value: Any = e
+    for key in keys:
+        if isinstance(value, dict):
+            value = value.get(key)
+        elif hasattr(value, "get"):
+            value = value.get(key)
+        else:
+            value = getattr(value, key, None)
+        if value is None:
             return None
-    return d.get(keys[-1]) if isinstance(d, dict) else None
+    return value
 
 
 def _ct(e: object) -> str | None:
@@ -170,34 +174,25 @@ def _ct(e: object) -> str | None:
 
 
 def _mkey(e: object) -> str | None:
-    raw = getattr(e, "raw", None)
-    if not isinstance(raw, dict):
-        return None
     for k in ("photo", "video", "audio", "document", "sticker", "animation",
               "voice", "video_note", "location", "contact", "venue", "dice",
               "game", "invoice", "story", "giveaway"):
-        if raw.get(k):
+        if _rget(e, k):
             return k
     return None
 
 
 def _mdur(e: object) -> float:
-    raw = getattr(e, "raw", None)
-    if not isinstance(raw, dict):
-        return 0
     for k in ("video", "audio", "animation", "voice", "video_note"):
-        obj = raw.get(k)
+        obj = _rget(e, k)
         if isinstance(obj, dict):
             return float(obj.get("duration", 0))
     return 0
 
 
 def _msize(e: object) -> int:
-    raw = getattr(e, "raw", None)
-    if not isinstance(raw, dict):
-        return 0
     for k in ("photo", "video", "audio", "document", "animation", "voice", "video_note", "sticker"):
-        obj = raw.get(k)
+        obj = _rget(e, k)
         sz = 0
         if isinstance(obj, dict):
             sz = int(obj.get("file_size", 0))
@@ -209,22 +204,16 @@ def _msize(e: object) -> int:
 
 
 def _mime(e: object) -> str:
-    raw = getattr(e, "raw", None)
-    if not isinstance(raw, dict):
-        return ""
     for k in ("document", "video", "audio", "animation", "voice", "video_note", "sticker"):
-        obj = raw.get(k)
+        obj = _rget(e, k)
         if isinstance(obj, dict):
             return str(obj.get("mime_type", ""))
     return ""
 
 
 def _has_entity(e: object, etype: str) -> bool:
-    raw = getattr(e, "raw", None)
-    if not isinstance(raw, dict):
-        return False
     for src in ("entities", "caption_entities"):
-        lst = raw.get(src)
+        lst = _rget(e, src)
         if isinstance(lst, list):
             for ent in lst:
                 if isinstance(ent, dict):
@@ -571,7 +560,7 @@ story = Filter(lambda e: _mkey(e) == "story", _name="story")
 giveaway = Filter(lambda e: _mkey(e) == "giveaway", _name="giveaway")
 media = Filter(lambda e: _mkey(e) is not None, _name="media")
 media_group = Filter(lambda e: bool(_rget(e, "media_group_id")), _name="media_group")
-caption = Filter(lambda e: bool(getattr(getattr(e, "raw", {}), "get", lambda _: None)("caption")), _name="caption")
+caption = Filter(lambda e: bool(_rget(e, "caption")), _name="caption")
 
 
 class media_size(Filter):
@@ -624,11 +613,8 @@ class media_width(Filter):
         super().__init__(fn=self._chk, _name=f"media_width({min_w},{max_w})")
 
     def _chk(self, e: object) -> bool:
-        raw = getattr(e, "raw", None)
-        if not isinstance(raw, dict):
-            return False
         for k in ("photo", "video", "animation", "sticker", "video_note"):
-            obj = raw.get(k)
+            obj = _rget(e, k)
             w = 0
             if isinstance(obj, dict):
                 w = int(obj.get("width", 0))
@@ -650,11 +636,8 @@ class media_height(Filter):
         super().__init__(fn=self._chk, _name=f"media_height({min_h},{max_h})")
 
     def _chk(self, e: object) -> bool:
-        raw = getattr(e, "raw", None)
-        if not isinstance(raw, dict):
-            return False
         for k in ("photo", "video", "animation", "sticker", "video_note"):
-            obj = raw.get(k)
+            obj = _rget(e, k)
             h = 0
             if isinstance(obj, dict):
                 h = int(obj.get("height", 0))
@@ -675,11 +658,8 @@ class file_name(Filter):
         super().__init__(fn=self._chk, _name=f"file_name({pattern!r})")
 
     def _chk(self, e: object) -> bool:
-        raw = getattr(e, "raw", None)
-        if not isinstance(raw, dict):
-            return False
         for k in ("document", "audio", "video", "animation", "voice", "video_note", "sticker"):
-            obj = raw.get(k)
+            obj = _rget(e, k)
             if isinstance(obj, dict):
                 fn = obj.get("file_name", "")
                 if fn and self._rx.search(fn):
@@ -704,10 +684,7 @@ class album_len(Filter):
         super().__init__(fn=self._chk, _name=f"album_len({min_n},{max_n})")
 
     def _chk(self, e: object) -> bool:
-        raw = getattr(e, "raw", None)
-        if not isinstance(raw, dict):
-            return False
-        arr = raw.get("photo") or raw.get("media") or []
+        arr = _rget(e, "photo") or _rget(e, "media") or []
         if not isinstance(arr, list):
             return False
         n = len(arr)

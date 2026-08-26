@@ -307,6 +307,7 @@ class BotNet:
             return {
                 "kind": "member",
                 "src": "bot",
+                "update_type": "chat_member" if "chat_member" in upd else "my_chat_member",
                 "upd_id": upd.get("update_id"),
                 "chat_id": chat.get("id"),
                 "from_id": usr.get("id"),
@@ -323,6 +324,7 @@ class BotNet:
             return {
                 "kind": "cb",
                 "src": "bot",
+                "update_type": "callback_query",
                 "upd_id": upd.get("update_id"),
                 "query_id": cb.get("id"),
                 "msg_id": msg.get("message_id"),
@@ -355,6 +357,7 @@ class BotNet:
             return {
                 "kind": "edit" if message_key.startswith("edited_") else "msg",
                 "src": "bot",
+                "update_type": message_key,
                 "upd_id": upd.get("update_id"),
                 "msg_id": msg.get("message_id"),
                 "chat_id": chat.get("id"),

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import secrets
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -406,6 +407,24 @@ class AppCore:
         if self.bot is None:
             raise RuntimeError("bot net is not configured")
         return await self.bot.download_file(file_id, destination)
+
+    async def upload_file(self, source: Any, **kw: Any) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        return await self.mt.upload_file(source, **kw)
+
+    async def send_msg(self, chat_id: int | str, text: str, *, via: str | None = None, reply_to: int | None = None, kbd: Any | None = None, **kw: Any) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        if transport == "bot":
+            return await self.bot.send_msg(target, text, reply_to=reply_to, kbd=kbd, **kw)
+        peer = await self.mt.resolve_peer(target)
+        data = dict(kw)
+        if reply_to is not None:
+            data["reply_to"] = reply_to
+        if kbd is not None:
+            data["kbd"] = kbd
+        return await self.mt_req("messages.sendMessage", peer=peer, message=text, random_id=secrets.randbits(63), **data)
 
     async def mt_req(self, act: str, **kw: Any) -> Any:
         if self.mt is None:

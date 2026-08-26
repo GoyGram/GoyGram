@@ -81,6 +81,61 @@ class MsgObj:
     def to_dict(self) -> dict[str, Any]:
         return self.raw
 
+    async def respond(self, text: str, **kw: Any) -> Any:
+        return await self.app.send_msg(self.chat_id, text, via=self.src, **kw)
+
+    async def edit(self, text: str, **kw: Any) -> Any:
+        if self.chat_id is None or self.id is None:
+            return None
+        if self.src == "bot":
+            return await self.app.bot_req("editMessageText", chat_id=self.chat_id, message_id=int(self.id), text=text, **kw)
+        peer = await self.app.mt.resolve_peer(self.chat_id)
+        return await self.app.mt_req("messages.editMessage", peer=peer, id=int(self.id), message=text, **kw)
+
+    async def forward_to(self, chat_id: int | str, *, via: str | None = None, **kw: Any) -> Any:
+        if self.chat_id is None or self.id is None:
+            return None
+        if self.src == "bot":
+            return await self.app.bot_req("forwardMessage", chat_id=chat_id, from_chat_id=self.chat_id, message_id=int(self.id), **kw)
+        from_peer = await self.app.mt.resolve_peer(self.chat_id)
+        to_peer = await self.app.mt.resolve_peer(self.app.raw_chat(chat_id))
+        return await self.app.mt_req("messages.forwardMessages", from_peer=from_peer, to_peer=to_peer, id=[int(self.id)], random_id=[secrets.randbits(63)], **kw)
+
+    async def pin(self, *, disable_notification: bool = False, **kw: Any) -> Any:
+        if self.chat_id is None or self.id is None:
+            return None
+        if self.src == "bot":
+            return await self.app.bot_req("pinChatMessage", chat_id=self.chat_id, message_id=int(self.id), disable_notification=disable_notification, **kw)
+        peer = await self.app.mt.resolve_peer(self.chat_id)
+        return await self.app.mt_req("messages.updatePinnedMessage", peer=peer, id=int(self.id), silent=disable_notification, **kw)
+
+    async def unpin(self, **kw: Any) -> Any:
+        if self.chat_id is None or self.id is None:
+            return None
+        if self.src == "bot":
+            return await self.app.bot_req("unpinChatMessage", chat_id=self.chat_id, message_id=int(self.id), **kw)
+        peer = await self.app.mt.resolve_peer(self.chat_id)
+        return await self.app.mt_req("messages.updatePinnedMessage", peer=peer, id=int(self.id), unpin=True, **kw)
+
+    async def react(self, reaction: Any, **kw: Any) -> Any:
+        if self.chat_id is None or self.id is None:
+            return None
+        if self.src == "bot":
+            return await self.app.bot_req("setMessageReaction", chat_id=self.chat_id, message_id=int(self.id), reaction=reaction, **kw)
+        peer = await self.app.mt.resolve_peer(self.chat_id)
+        return await self.app.mt_req("messages.sendReaction", peer=peer, msg_id=int(self.id), reaction=reaction, **kw)
+
+    async def download(self, destination: str | None = None) -> Any:
+        if self.src != "bot":
+            raise RuntimeError("MTProto media download requires an upload.getFile location")
+        media = self.get("document") or self.get("video") or self.get("audio") or self.get("voice") or self.get("animation") or self.get("video_note") or self.get("photo")
+        if isinstance(media, list):
+            media = media[-1] if media else None
+        file_id = media.get("file_id") if isinstance(media, dict) else None
+        if not file_id:
+            raise ValueError("message has no downloadable Bot API file_id")
+        return await self.app.download_file(file_id, destination)
+
     def net(self) -> Any:
         if self.src == "bot":
             if self.app.bot is None:

@@ -840,6 +840,19 @@ class MTNet:
                 except Exception as exc:
                     fut.set_exception(exc)
                 return
+            try:
+                import json
+                decoded = json.loads(rx.deserialize_constructor(inner))
+                if isinstance(decoded, dict):
+                    decoded_type = str(decoded.get("_", ""))
+                    if decoded_type in {"updates", "updatesCombined", "updateShort", "updatesTooLong"}:
+                        self._dispatch_updates(decoded)
+                        return
+                    if decoded_type.startswith("update"):
+                        self._dispatch_update(decoded)
+                        return
+            except Exception:
+                pass
             if cid == 0x73f1f8dc:
                 try:
                     cnt = rm.i32()
@@ -875,11 +888,12 @@ class MTNet:
                 except Exception:
                     pass
                 return
-            if cid == 0x313bc7f8:
+            if cid in {0x1f2b0afd, 0x62ba04d9}:
                 try:
-                    parsed = self._parse_new_message(inner[4:])
-                    if parsed:
-                        asyncio.ensure_future(self.bus.push("mt", parsed))
+                    import json
+                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    if isinstance(decoded, dict):
+                        self._dispatch_update(decoded)
                 except Exception:
                     pass
                 return
@@ -889,15 +903,6 @@ class MTNet:
                     decoded = json.loads(rx.deserialize_constructor(inner))
                     if isinstance(decoded, dict):
                         self._dispatch_updates(decoded)
-                except Exception:
-                    pass
-                return
-            if cid in {0x1f2b0afd, 0x62ba04d9}:
-                try:
-                    msg_obj = inner[4:]
-                    parsed = self._parse_new_message(msg_obj)
-                    if parsed:
-                        asyncio.ensure_future(self.bus.push("mt", parsed))
                 except Exception:
                     pass
                 return
