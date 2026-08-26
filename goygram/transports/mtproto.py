@@ -210,7 +210,7 @@ def _parse_user_obj(b:bytes)->dict[str,Any]|None:
         return None
     cid = int.from_bytes(b[:4], "little")
 
-    if cid in {0x020b1422, 0x8f97c628, 0x5c0d0a2a, 0xd8576e2a, 0x7fe4ab4, 0x2e13f2c3, 0xebe8e785, 0x31774388, 0xd3bc4b7a}:
+    if cid in {0x020b1422, 0xb1b8cc83, 0x8f97c628, 0x5c0d0a2a, 0xd8576e2a, 0x7fe4ab4, 0x2e13f2c3, 0xebe8e785, 0x31774388, 0xd3bc4b7a}:
         return _parse_user_obj_v4(b, cid)
     log.warning("Unsupported user constructor 0x%08x, raw_length=%s", cid, len(b))
     return None
