@@ -149,6 +149,13 @@ def _background_update(ext_module, on_layer=None, can_reload=None):
     if api_text is None:
         log.debug("No schema update available")
         return
+    try:
+        current = json.loads(ext_module.schema_info())
+    except Exception:
+        current = {}
+    if int(current.get("layer", 0) or 0) == layer:
+        log.debug("Official schema layer %s is already active", layer)
+        return
     if callable(can_reload) and not can_reload():
         log.info("Schema update cached; runtime reload deferred while RPCs are pending")
         return

@@ -65,7 +65,7 @@ def _html_to_entities(text:str)->tuple[str, list[tuple[int,int,int,str|None]]]:
 
 log = logging.getLogger("goygram.mtproto")
 
-from goygram.protocol.tl_core import IntermediateTransport, MTMessage, MsgIdGen, Reader, build_msg_container, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
+from goygram.protocol.tl_core import IntermediateTransport, MTCodec, MTMessage, MsgIdGen, Reader, build_msg_container, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
 
 try:
     from goygram import ext as rx
@@ -520,7 +520,8 @@ class MTNet:
             return
         if rx is None: raise RuntimeError('rx (goygram.ext) is not available')
         nonce=secrets.token_bytes(16)
-        req_pq=bytes(rx.serialize_method('req_pq_multi', json.dumps({'nonce': nonce.hex()})))
+        codec = MTCodec()
+        req_pq=codec.req_pq_multi(nonce)
         res=self._read_unencrypted_body(await self.invoke_unencrypted(req_pq))
         rr=Reader(res); cid=rr.u32()
         if cid != 0x05162463: raise RuntimeError(f'unexpected resPQ cid={cid:x}')
@@ -533,23 +534,23 @@ class MTNet:
         e=65537
         p,q=sorted(factorize(int.from_bytes(pq,'big')))
         new_nonce=secrets.token_bytes(32)
-        inner=bytes(rx.serialize_constructor('p_q_inner_data', json.dumps({
-            'pq': pq.hex(),
-            'p': p.to_bytes(4,'big').hex(),
-            'q': q.to_bytes(4,'big').hex(),
-            'nonce': nonce.hex(),
-            'server_nonce': server_nonce.hex(),
-            'new_nonce': new_nonce.hex(),
-        })))
+        inner=codec.p_q_inner_data(
+            pq=pq,
+            p=p.to_bytes(4,'big'),
+            q=q.to_bytes(4,'big'),
+            nonce=nonce,
+            server_nonce=server_nonce,
+            new_nonce=new_nonce,
+        )
         enc=rsa_pad_encrypt(inner,n_mod,e)
-        dh_req=bytes(rx.serialize_method('req_DH_params', json.dumps({
-            'nonce': nonce.hex(),
-            'server_nonce': server_nonce.hex(),
-            'p': p.to_bytes(4,'big').hex(),
-            'q': q.to_bytes(4,'big').hex(),
-            'public_key_fingerprint': fp,
-            'encrypted_data': enc.hex(),
-        })))
+        dh_req=codec.req_dh_params(
+            nonce=nonce,
+            server_nonce=server_nonce,
+            p=p.to_bytes(4,'big'),
+            q=q.to_bytes(4,'big'),
+            fp=fp,
+            encrypted_data=enc,
+        )
         dh=self._read_unencrypted_body(await self.invoke_unencrypted(dh_req))
         rd=Reader(dh); dcid=rd.u32()
         if dcid!=0xd0e8075c: raise RuntimeError(f'unexpected dh params cid={dcid:x}')
@@ -562,19 +563,19 @@ class MTNet:
         if aid!=0xb5890dba: raise RuntimeError(f'unexpected server_DH_inner_data cid={aid:#010x}')
         _=ra.take(16); _=ra.take(16); g=ra.i32(); dh_prime=int.from_bytes(ra.tl_bytes(),'big'); g_a=int.from_bytes(ra.tl_bytes(),'big'); _=ra.i32(); _=ra.i32()
         b=int.from_bytes(secrets.token_bytes(256),'big'); g_b=pow(g,b,dh_prime).to_bytes(256,'big')
-        cli=bytes(rx.serialize_constructor('client_DH_inner_data', json.dumps({
-            'nonce': nonce.hex(),
-            'server_nonce': server_nonce.hex(),
-            'retry_id': 0,
-            'g_b': g_b.hex(),
-        })))
+        cli=codec.client_dh_inner(
+            nonce=nonce,
+            server_nonce=server_nonce,
+            retry_id=0,
+            g_b=g_b,
+        )
         payload=sha1(cli).digest()+cli; payload+=b'\x00'*((16-len(payload)%16)%16)
         enc2=bytes(rx.aes_ige_enc_raw(payload,tmp_key,tmp_iv))
-        ans_req=bytes(rx.serialize_method('set_client_DH_params', json.dumps({
-            'nonce': nonce.hex(),
-            'server_nonce': server_nonce.hex(),
-            'encrypted_data': enc2.hex(),
-        })))
+        ans_req=codec.set_client_dh_params(
+            nonce=nonce,
+            server_nonce=server_nonce,
+            encrypted_data=enc2,
+        )
         ans=self._read_unencrypted_body(await self.invoke_unencrypted(ans_req))
         c=Reader(ans).u32()
         if c!=0x3bcbf734: raise RuntimeError(f'dh_gen not ok: {c:x}')

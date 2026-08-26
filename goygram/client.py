@@ -149,8 +149,11 @@ class AppCore:
             _ext,
             None,
             lambda layer: self.mt.update_layer(layer),
-            lambda: not self.mt.pending,
+            self._can_reload_schema,
         ) or 229
+
+    def _can_reload_schema(self) -> bool:
+        return self.mt is not None and self.mt.auth_ready.is_set() and not self.mt.pending
 
     def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any) -> None:
         import logging
