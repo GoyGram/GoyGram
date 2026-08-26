@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import re
 from typing import Any
 
 from goygram.logging import get_logger
 
 try:
     import aiohttp
+    from aiohttp import web
 except Exception:
     aiohttp = None
+    web: Any = None
 
 
 class BotNet:
@@ -20,6 +24,13 @@ class BotNet:
         bus: Any,
         timeout: int = 25,
         base: str = "https://api.telegram.org",
+        webhook_url: str | None = None,
+        webhook_host: str = "127.0.0.1",
+        webhook_port: int = 8080,
+        webhook_path: str = "/telegram/webhook",
+        webhook_secret_token: str | None = None,
+        webhook_max_body: int = 1024 * 1024,
+        webhook_drop_pending_updates: bool = False,
     ) -> None:
         self.token = token
         self.bus = bus
@@ -29,6 +40,26 @@ class BotNet:
         self.off = 0
         self.stop_ev = asyncio.Event()
         self.log = get_logger("goygram.botapi")
+        self.webhook_url = webhook_url
+        self.webhook_host = webhook_host
+        self.webhook_port = int(webhook_port)
+        self.webhook_path = "/" + webhook_path.strip("/")
+        self.webhook_secret_token = webhook_secret_token
+        self.webhook_max_body = int(webhook_max_body)
+        self.webhook_drop_pending_updates = bool(webhook_drop_pending_updates)
+        if self.webhook_port < 1 or self.webhook_port > 65535:
+            raise ValueError("webhook_port must be between 1 and 65535")
+        if self.webhook_max_body < 1024:
+            raise ValueError("webhook_max_body must be at least 1024 bytes")
+        if self.webhook_secret_token is not None and (
+            not 1 <= len(self.webhook_secret_token) <= 256
+            or re.fullmatch(r"[A-Za-z0-9_-]+", self.webhook_secret_token) is None
+        ):
+            raise ValueError("webhook_secret_token must contain 1-256 letters, digits, _ or -")
+        self.web_runner: Any | None = None
+        self.web_site: Any | None = None
+        self.webhook_seen: set[int] = set()
+        self.webhook_highest_update_id = -1
 
     def mod(self) -> Any:
         if aiohttp is None:
@@ -46,11 +77,98 @@ class BotNet:
 
     async def close(self) -> None:
         self.stop_ev.set()
+        await self.stop_webhook(delete_remote=True)
         if not self.sess:
             return
         if self.sess.closed:
             return
         await self.sess.close()
+
+    async def set_webhook(self) -> Any:
+        if not self.webhook_url:
+            raise ValueError("webhook_url is required")
+        data: dict[str, Any] = {
+            "url": self.webhook_url,
+            "drop_pending_updates": self.webhook_drop_pending_updates,
+        }
+        if self.webhook_secret_token is not None:
+            data["secret_token"] = self.webhook_secret_token
+        return await self.req("setWebhook", data)
+
+    async def delete_webhook(self, drop_pending_updates: bool = False) -> Any:
+        return await self.req("deleteWebhook", {"drop_pending_updates": drop_pending_updates})
+
+    async def get_webhook_info(self) -> Any:
+        return await self.req("getWebhookInfo")
+
+    async def _webhook_request(self, request: Any) -> Any:
+        if self.webhook_secret_token is not None:
+            received = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+            if not hmac.compare_digest(received, self.webhook_secret_token):
+                return web.json_response({"ok": False, "error": "forbidden"}, status=403)
+        content_length = request.headers.get("Content-Length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self.webhook_max_body:
+                    return web.json_response({"ok": False, "error": "body too large"}, status=413)
+            except ValueError:
+                return web.json_response({"ok": False, "error": "invalid content length"}, status=400)
+        raw = await request.read()
+        if len(raw) > self.webhook_max_body:
+            return web.json_response({"ok": False, "error": "body too large"}, status=413)
+        try:
+            update = json.loads(raw)
+        except (TypeError, ValueError):
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        if not isinstance(update, dict) or not isinstance(update.get("update_id"), int):
+            return web.json_response({"ok": False, "error": "invalid update"}, status=400)
+        update_id = int(update["update_id"])
+        if update_id <= self.webhook_highest_update_id or update_id in self.webhook_seen:
+            return web.json_response({"ok": True, "duplicate": True})
+        pkt = self.norm(update)
+        if pkt is not None:
+            await self.bus.push("bot", pkt)
+        self.webhook_seen.add(update_id)
+        self.webhook_highest_update_id = max(self.webhook_highest_update_id, update_id)
+        if len(self.webhook_seen) > 4096:
+            floor = self.webhook_highest_update_id - 2048
+            self.webhook_seen = {item for item in self.webhook_seen if item >= floor}
+        return web.json_response({"ok": True})
+
+    async def start_webhook(self) -> None:
+        if not self.webhook_url:
+            raise ValueError("webhook_url is required")
+        if web is None:
+            raise RuntimeError("aiohttp is not installed; run: pip install aiohttp")
+        web_mod: Any = web
+        if self.web_runner is not None:
+            return
+        await self.boot()
+        app = web_mod.Application(client_max_size=self.webhook_max_body)
+        app.router.add_post(self.webhook_path, self._webhook_request)
+        self.web_runner = web_mod.AppRunner(app, access_log=None)
+        await self.web_runner.setup()
+        self.web_site = web_mod.TCPSite(self.web_runner, self.webhook_host, self.webhook_port)
+        await self.web_site.start()
+        try:
+            await self.set_webhook()
+        except Exception:
+            await self.stop_webhook(delete_remote=False)
+            raise
+        self.log.info("Bot webhook is enabled at %s", self.webhook_path)
+
+    async def stop_webhook(self, delete_remote: bool = True) -> None:
+        if self.web_runner is None:
+            return
+        if delete_remote and self.sess and not self.sess.closed:
+            try:
+                await self.delete_webhook(drop_pending_updates=False)
+            except Exception as exc:
+                self.log.warning("Failed to delete webhook during shutdown: %r", exc)
+        if self.web_runner is not None:
+            await self.web_runner.cleanup()
+        self.web_site = None
+        self.web_runner = None
 
     async def req(self, m: str, data: dict[str, Any] | None = None, _attempt: int = 0) -> Any:
         await self.boot()

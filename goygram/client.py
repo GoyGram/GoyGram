@@ -34,6 +34,13 @@ class BotCfg(BaseModel):
     token: str
     timeout: int = 25
     base: str = "https://api.telegram.org"
+    webhook_url: str | None = None
+    webhook_host: str = "127.0.0.1"
+    webhook_port: int = 8080
+    webhook_path: str = "/telegram/webhook"
+    webhook_secret_token: str | None = None
+    webhook_max_body: int = 1024 * 1024
+    webhook_drop_pending_updates: bool = False
 
 
 class MtCfg(BaseModel):
@@ -78,7 +85,19 @@ class AppCore:
         if cfg.bot:
             from goygram.transports.botapi import BotNet
 
-            self.bot = BotNet(cfg.bot.token, self.bus, cfg.bot.timeout, cfg.bot.base)
+            self.bot = BotNet(
+                cfg.bot.token,
+                self.bus,
+                cfg.bot.timeout,
+                cfg.bot.base,
+                webhook_url=cfg.bot.webhook_url,
+                webhook_host=cfg.bot.webhook_host,
+                webhook_port=cfg.bot.webhook_port,
+                webhook_path=cfg.bot.webhook_path,
+                webhook_secret_token=cfg.bot.webhook_secret_token,
+                webhook_max_body=cfg.bot.webhook_max_body,
+                webhook_drop_pending_updates=cfg.bot.webhook_drop_pending_updates,
+            )
             self.api = BotAPI(self.bot)
         if cfg.mt:
             from goygram.transports.mtproto import MTNet
@@ -417,11 +436,14 @@ class AppCore:
             await self.fsm.start()
             if self.bot:
                 self.log.info("Bot transport is enabled.")
-                try:
-                    await self.bot_req("deleteWebhook", drop_pending_updates=False)
-                except Exception as e:
-                    self.log.error("Failed to clear webhook before polling: %r", e)
-                tasks.append(asyncio.create_task(self.bot.spin(), name="bot"))
+                if self.bot.webhook_url:
+                    await self.bot.start_webhook()
+                else:
+                    try:
+                        await self.bot_req("deleteWebhook", drop_pending_updates=False)
+                    except Exception as e:
+                        self.log.error("Failed to clear webhook before polling: %r", e)
+                    tasks.append(asyncio.create_task(self.bot.spin(), name="bot"))
             if self.mt:
                 self.log.info("MT transport is enabled.")
                 await bootstrap_session(self, api_id=self.api_id, api_hash=self.api_hash, session_name=self.session_name)
@@ -462,8 +484,28 @@ class GoyGram:
         lang_code: str = "en",
         fsm_backend: Any | None = None,
         fsm_on_change: Callable[[list[dict[str, Any]]], Any] | None = None,
+        webhook_url: str | None = None,
+        webhook_host: str = "127.0.0.1",
+        webhook_port: int = 8080,
+        webhook_path: str = "/telegram/webhook",
+        webhook_secret_token: str | None = None,
+        webhook_max_body: int = 1024 * 1024,
+        webhook_drop_pending_updates: bool = False,
     ) -> None:
-        bot = BotCfg(token=bot_token, timeout=bot_timeout, base=bot_base) if bot_token is not None else None
+        if webhook_url is not None and bot_token is None:
+            raise ValueError("webhook_url requires bot_token")
+        bot = BotCfg(
+            token=bot_token,
+            timeout=bot_timeout,
+            base=bot_base,
+            webhook_url=webhook_url,
+            webhook_host=webhook_host,
+            webhook_port=webhook_port,
+            webhook_path=webhook_path,
+            webhook_secret_token=webhook_secret_token,
+            webhook_max_body=webhook_max_body,
+            webhook_drop_pending_updates=webhook_drop_pending_updates,
+        ) if bot_token is not None else None
         log = get_logger("goygram.dc")
         resolved_host = mt_host
         resolved_port = mt_port
