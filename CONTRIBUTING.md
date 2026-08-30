@@ -1,32 +1,36 @@
 # Contributing to GoyGram
 
-## Before opening a change
+Thanks for your interest in contributing.
 
-Read the current implementation and trace the complete affected path. Do not treat README claims as proof of behavior. Changes to MTProto, TL schema loading, serialization, authentication, vaults, transports, or dispatch require focused regression tests and a safe live verification plan.
-
-Never include API hashes, bot tokens, phone numbers, auth keys, session files, vaults, server salts, login codes, passwords, or raw Telegram packets in commits, issues, logs, or pull requests.
-
-## Development checks
-
-Use a Python 3.11+ virtual environment. Keep the private regression suite outside this public repository. Run the local checks from that private checkout together with:
+## Getting started
 
 ```bash
-python -m compileall -q goygram ext_rust
-cargo test --manifest-path ext_rust/Cargo.toml
-
-git diff --check
+git clone https://github.com/GoyGram/GoyGram.git
+cd GoyGram
+uv venv .venv && source .venv/bin/activate
+uv pip install -e .
 ```
 
-For native changes, rebuild the extension with maturin and run the focused private regression tests again. A successful local unit test does not replace a live MTProto check for transport changes. Do not commit the private suite, local harnesses, caches, or credentials.
+## Building the Rust core
 
-## MTProto changes
+The crypto and TL codec live in `ext_rust/`. After changing Rust code, rebuild with:
 
-Keep the official schema and layer negotiation version-aware. Preserve unknown constructors and updates without silently returning success. Required TL fields must fail loudly when missing or malformed. Separate read-only live checks from controlled writes; test writes only with data owned by the test account and clean them up.
+```bash
+maturin develop --release --manifest-path ext_rust/Cargo.toml
+```
 
-## Pull requests
+## What we look for
 
-Describe the behavioral contract, affected transports, migration or rollback path, tests run, live checks run, and known limitations. Keep unrelated refactors out of a bug fix. Do not modify existing source comments unless the change explicitly requires it.
+- MTProto transport correctness — the auth flow, message handling, and salt/DC recovery are the most sensitive parts.
+- Bot API coverage — methods, types, and webhook handling.
+- Performance improvements to the Rust core and the zero-copy event objects.
 
-## Security reports
+## Before you open a PR
 
-Do not open a public issue for a suspected credential leak, authentication bypass, session compromise, or remotely exploitable vulnerability. Follow `SECURITY.md` and redact all proof data.
+- Run the benchmarks in `benchmarks/` when touching the Rust core, and include the before/after numbers in the PR description.
+- Keep existing code comments unchanged unless the change requires it.
+- Rust lives in `ext_rust/`, the Python layer in `goygram/`.
+
+## License
+
+By contributing you agree that your work is licensed under AGPL-3.0.

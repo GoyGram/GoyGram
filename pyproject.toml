@@ -10,6 +10,21 @@ description = "Goygram: unified Telegram runtime on Python and Rust"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["aiohttp>=3.9,<4.0", "rich>=13.0.0", "qrcode>=7.0"]
+keywords = ["telegram", "mtproto", "bot-api", "asyncio", "rust", "userbot"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Framework :: AsyncIO",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Topic :: Communications :: Chat",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://goygram.github.io"
+Documentation = "https://goygram.github.io"
+Repository = "https://github.com/GoyGram/GoyGram"
+Issues = "https://github.com/GoyGram/GoyGram/issues"
 
 [tool.maturin]
 manifest-path = "ext_rust/Cargo.toml"
