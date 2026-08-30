@@ -8,6 +8,7 @@
 [![Rust Core](https://img.shields.io/badge/Rust_Core-Blazing_Fast-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-red.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
 [![PyPI version](https://img.shields.io/pypi/v/goygram.svg?style=for-the-badge&logo=pypi&color=3775A9)](https://pypi.org/project/goygram/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/goygram.svg?style=for-the-badge&logo=pypi&color=3775A9)](https://pypi.org/project/goygram/)
 [![Telegram API](https://img.shields.io/badge/Telegram-MTProto_%7C_BotAPI-2CA5E0.svg?style=for-the-badge&logo=telegram)](https://telegram.org)
 [![Security](https://img.shields.io/badge/OpSec-Vault_Encrypted-black.svg?style=for-the-badge&logo=security)](https://github.com/GoyGram/GoyGram)
 [![Docs & Wiki](https://img.shields.io/badge/Docs-Read_the_Wiki-blue.svg?style=for-the-badge&logo=readthedocs)](https://goygram.github.io/docs)
