@@ -34,6 +34,18 @@ Under the hood: a Python orchestration layer drives two completely independent n
 - **Durable delivery state**: Bot API offsets and MTProto `pts/qts/date/seq` cursors are persisted atomically with restrictive permissions.
 - **Direct media primitives**: chunked MTProto `upload_file()`/`download_file()` and Bot API `download_file()` without a heavyweight media framework.
 
+## Benchmarks
+
+Cold import, memory footprint, and MTProto crypto (AES-256-IGE) measured against telethon, pyrogram, aiogram and python-telegram-bot. Full methodology and reproduction in [`benchmarks/`](./benchmarks).
+
+| | goygram | telethon | pyrogram | aiogram | python-telegram-bot |
+|---|---|---|---|---|---|
+| cold import (ms) | **87** | 298 | 477 | 3112 | 140 |
+| RSS delta (MB) | **12** | 48 | 35 | 152 | 18 |
+| AES-256-IGE (MB/s, 64 KiB) | **113** | 12 | 203 | — | — |
+
+The crypto runs in Rust (built in, no separate C extension), GoyGram starts ~36× faster than aiogram, and uses ~12× less memory.
+
 ## Installation
 ```bash
 pip install goygram
