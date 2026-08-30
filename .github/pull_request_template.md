@@ -14,6 +14,6 @@ Fixes # (issue number)
 ## Checklist Before Submitting
 - [ ] My code follows the code style of this project.
 - [ ] I have run local tests and they pass.
-- [ ] Memory safety and OpSec boundaries (Session Eater/Vault) are respected.
+- [ ] Memory safety and OpSec boundaries (Session zeroize/Vault) are respected.
 - [ ] I have updated the documentation/Wiki if necessary.
 - [ ] My commits are clean and properly formatted.

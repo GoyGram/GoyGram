@@ -13,13 +13,13 @@
 
 ## What is this?
 
-Ultimate split-brain Telegram framework (Python + Rust core) built for production-grade speed, control, and maximum OpSec.
+Ultimate hybrid Telegram framework (Python + Rust core) built for production-grade speed, control, and maximum OpSec.
 
 Under the hood: a Python orchestration layer drives two completely independent network transports (Bot API over aiohttp + MTProto over raw TCP with full DH key exchange), both feeding into a single async event bus. Every crypto operation — AES-256-IGE for MTProto packets, AES-256-GCM for session vaults — runs in a Rust `.so` compiled with LTO and opt-level=3. Hand-written TL codec, no code generation at runtime. QR code login rendering in the terminal via `qrcode` + Rich. SRP password proofs for 2FA. And the vault: your auth key locked to your machine-id through PBKDF2-SHA256 at 600,000 iterations.
 
 ## Key Features
-- **Split-brain architecture**: ergonomic Python layer + blazing-fast Rust extension.
-- **Session Eater**: aggressive in-memory cleanup (zeroize strategy for legacy `.session` files after migration).
+- **Hybrid architecture**: ergonomic Python layer + blazing-fast Rust extension.
+- **Session zeroize**: aggressive in-memory cleanup (zeroize strategy for legacy `.session` files after migration).
 - **Vault AES-256-GCM**: encrypted local session bootstrap. Key derived from machine-id + session name via PBKDF2 (or bypass with `GOYGRAM_VAULT_KEY`).
 - **TUI auth flow**: terminal-first authorization workflow — phone login with SMS code, QR code scanning in ASCII art, 2FA/SRP password challenges. All Rich-styled when a TTY is present.
 - **Proxy support**: SOCKS5 (with user/pass auth) and HTTP CONNECT tunneling for MTProto connections. Also respects `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` env vars.
