@@ -27,3 +27,5 @@ goygram/api.tl.bak
 goygram/mtproto.tl
 goygram/schema.tl
 tests/
+live.vault*
+observatory/
