@@ -1650,6 +1650,10 @@ class MTNet:
     async def close(self)->None:
         self.stop_ev.set()
         task = self._reader_task
+        if getattr(self, "_keepalive_task", None) is not None:
+            self._keepalive_task.cancel()
+            await asyncio.gather(self._keepalive_task, return_exceptions=True)
+            self._keepalive_task = None
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -1753,8 +1757,21 @@ class MTNet:
         self.auth_ready.clear()
         await self.ensure_auth_key()
 
+    async def _keepalive_loop(self) -> None:
+        while not self.stop_ev.is_set():
+            try:
+                await asyncio.sleep(30.0)
+                if self.stop_ev.is_set():
+                    return
+                await self._rpc_call("ping", ping_id=secrets.randbits(63))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
     async def spin(self) -> None:
         await self.auth_ready.wait()
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop(), name="goygram-mt-keepalive")
         backoff = 1.0
         max_backoff = 60.0
         while not self.stop_ev.is_set():
