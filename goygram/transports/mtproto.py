@@ -952,7 +952,10 @@ class MTNet:
                             sub_entry = self.pending.pop(old_sub_id, None)
                             if sub_entry is None:
                                 continue
-                            fut2, saved_obj2 = sub_entry
+                            if isinstance(sub_entry, tuple):
+                                fut2, saved_obj2 = sub_entry[0], sub_entry[1]
+                            else:
+                                continue
                             if fut2.done():
                                 continue
                             new_id = self.msg_ids.next()
@@ -964,7 +967,10 @@ class MTNet:
                             self.pending[new_container_id] = {'type': 'container', 'msg_ids': new_sub_ids}
                             asyncio.create_task(self._resend_container(new_container_id, saved_objs, new_sub_ids))
                     else:
-                        fut, saved_obj = entry
+                        if isinstance(entry, tuple):
+                            fut, saved_obj = entry[0], entry[1]
+                        else:
+                            return
                         if not fut.done():
                             new_msg_id = self.msg_ids.next()
                             self.pending[new_msg_id] = (fut, saved_obj)
@@ -979,7 +985,9 @@ class MTNet:
                     _error_code = rm.i32()
                     log.warning('bad_msg_notification for msg_id=%s code=%s', bad_msg_id, _error_code)
                     fut = self.pending.pop(bad_msg_id, None)
-                    if fut and not fut.done():
+                    if isinstance(fut, tuple):
+                        fut = fut[0]
+                    if fut is not None and not fut.done():
                         fut.set_exception(ConnectionError(f'bad_msg_notification code={_error_code}'))
                 except Exception:
                     pass
