@@ -1236,11 +1236,12 @@ class MTNet:
         obj = value if isinstance(value, dict) else {"chat_id": value}
         chat_id = obj.get("chat_id") or obj.get("peer")
         if isinstance(chat_id, str) and not chat_id.lstrip("-").isdigit() and chat_id not in {"self", "me"}:
-            entity = self.entity_usernames.get(chat_id.casefold())
+            username = chat_id.lstrip("@").casefold()
+            entity = self.entity_usernames.get(username)
             if entity is None:
-                result = await self.call("contacts.resolveUsername", username=chat_id, api_id=self._api_id)
+                result = await self.call("contacts.resolveUsername", username=username, api_id=self._api_id)
                 self._ingest_entities(result.get("result", result) if isinstance(result, dict) else {})
-                entity = self.entity_usernames.get(chat_id.casefold())
+                entity = self.entity_usernames.get(username)
             if entity is None:
                 raise ValueError('username resolution returned no entity')
             obj = dict(obj)
