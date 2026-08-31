@@ -29,3 +29,4 @@ goygram/schema.tl
 tests/
 live.vault*
 observatory/
+uv.lock
