@@ -168,8 +168,9 @@ class AppCore:
         vault = Path(f"{session_name}.vault")
         if not vault.exists() or vault.stat().st_size == 0:
             return
+        vault_key = Path(session_name).name
         try:
-            data = _read_vault(vault, session_name)
+            data = _read_vault(vault, vault_key)
             auth_key = data.get("auth_key")
             if auth_key and self.mt is not None:
                 self.mt.auth_key = _extract_auth_blob({"auth_key": auth_key})

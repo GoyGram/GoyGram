@@ -813,7 +813,7 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
             log.info("Vault %s detected. Session bootstrap completed without MT context.", vault.name)
             return {"source": "vault"}
         try:
-            data = _read_vault(vault, session_name)
+            data = _read_vault(vault, Path(session_name).name)
             auth_key = data.get("auth_key")
             if isinstance(auth_key, str) and auth_key:
                 app.mt.auth_key = _extract_auth_blob({"auth_key": auth_key})
