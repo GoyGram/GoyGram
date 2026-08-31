@@ -334,6 +334,36 @@ class BotNet:
                 "text": (msg.get("text") or msg.get("caption") or ""),
                 "raw": upd,
             }
+        inline = upd.get("inline_query")
+        if isinstance(inline, dict):
+            usr = inline.get("from") or {}
+            return {
+                "kind": "inline",
+                "src": "bot",
+                "update_type": "inline_query",
+                "upd_id": upd.get("update_id"),
+                "query_id": inline.get("id"),
+                "from_id": usr.get("id"),
+                "query": inline.get("query", ""),
+                "offset": inline.get("offset", ""),
+                "chat_type": inline.get("chat_type"),
+                "location": inline.get("location"),
+                "raw": upd,
+            }
+        chosen = upd.get("chosen_inline_result")
+        if isinstance(chosen, dict):
+            usr = chosen.get("from") or {}
+            return {
+                "kind": "update",
+                "src": "bot",
+                "update_type": "chosen_inline_result",
+                "upd_id": upd.get("update_id"),
+                "result_id": chosen.get("result_id"),
+                "from_id": usr.get("id"),
+                "query": chosen.get("query", ""),
+                "inline_message_id": chosen.get("inline_message_id"),
+                "raw": upd,
+            }
         message_key = next(
             (
                 key

@@ -9,6 +9,7 @@ from goygram.logging import get_logger
 
 from goygram.errors import StopPropagation
 from goygram.types.cb import CbObj
+from goygram.types.inline import InlineObj
 from goygram.types.member import MemberObj
 from goygram.types.msg import MsgObj
 from goygram.types.poll import PollObj
@@ -18,6 +19,7 @@ Fn = Callable[[MsgObj], Awaitable[Any]]
 CbFn = Callable[[CbObj], Awaitable[Any]]
 PollFn = Callable[[PollObj], Awaitable[Any]]
 MemFn = Callable[[MemberObj], Awaitable[Any]]
+InlineFn = Callable[[InlineObj], Awaitable[Any]]
 
 
 class Disp:
@@ -83,9 +85,20 @@ class Disp:
             return
         if kind == "cb":
             cb = CbObj(pkt.get("src", "sys"), data, self.app)
-            for fn in list(getattr(self.app, "cb_hook", [])):
+            for fn in list(self.app.cb_hook):
                 try:
                     await fn(cb)
+                except StopPropagation:
+                    return
+                except Exception as e:
+                    self.log.error("Handler failure: %r", e)
+                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+            return
+        if kind == "inline":
+            inline = InlineObj(pkt.get("src", "sys"), data, self.app)
+            for fn in list(getattr(self.app, "inline_hook", [])):
+                try:
+                    await fn(inline)
                 except StopPropagation:
                     return
                 except Exception as e:

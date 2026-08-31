@@ -16,6 +16,7 @@ from goygram.core.bus import Bus
 from goygram.core.disp import Disp
 from goygram.core.fsm import FSMEngine
 from goygram.types.cb import CbObj
+from goygram.types.inline import InlineObj
 from goygram.types.member import MemberObj
 from goygram.types.msg import MsgObj
 from goygram.types.poll import PollObj
@@ -29,6 +30,7 @@ Fn = Callable[[MsgObj], Awaitable[Any]]
 CbFn = Callable[[CbObj], Awaitable[Any]]
 PollFn = Callable[[PollObj], Awaitable[Any]]
 MemFn = Callable[[MemberObj], Awaitable[Any]]
+InlineFn = Callable[[InlineObj], Awaitable[Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +135,7 @@ class AppCore:
         self.edit_hook: list[Fn] = []
         self.update_hook: list[Fn] = []
         self.cb_hook: list[CbFn] = []
+        self.inline_hook: list[InlineFn] = []
         self.poll_hook: list[PollFn] = []
         self.member_hook: list[MemFn] = []
         self.stop_ev = asyncio.Event()
@@ -239,6 +242,24 @@ class AppCore:
                     return await inner(cb)
                 return None
             self.cb_hook.append(guarded)
+            return inner
+        if fn is not None:
+            return wrap(fn)
+        return wrap
+
+    def on_inline(self, fn: InlineFn | None = None, *, filt: Filter | None = None):
+        if isinstance(fn, Filter):
+            filt = fn
+            fn = None
+        def wrap(inner: InlineFn) -> InlineFn:
+            if filt is None:
+                self.inline_hook.append(inner)
+                return inner
+            async def guarded(inline: InlineObj) -> Any:
+                if filt(inline):
+                    return await inner(inline)
+                return None
+            self.inline_hook.append(guarded)
             return inner
         if fn is not None:
             return wrap(fn)
@@ -591,6 +612,9 @@ class GoyGram:
 
     def on_cb(self, fn: CbFn | None = None, *, filt: Filter | None = None):
         return self.core.on_cb(fn, filt=filt)
+
+    def on_inline(self, fn: InlineFn | None = None, *, filt: Filter | None = None):
+        return self.core.on_inline(fn, filt=filt)
 
     def on_cmd(self, *name: str) -> Callable[[Fn], Fn]:
         return self.core.on_cmd(*name)
