@@ -695,6 +695,20 @@ class MTNet:
         if str(result.get("_", "")).startswith("update"):
             self._dispatch_update(result)
 
+    async def _post_reconnect_recovery(self) -> None:
+        try:
+            await asyncio.sleep(0.5)
+            if self._difference_lock.locked():
+                return
+            if "pts" in self.cursor:
+                await self._recover_difference()
+                return
+            state = await self.call("updates.getState")
+            if isinstance(state, dict):
+                self.update_cursor(state)
+        except Exception:
+            pass
+
     async def _recover_difference(self) -> None:
         if self._difference_lock.locked():
             return
@@ -1800,6 +1814,7 @@ class MTNet:
                 try:
                     await self._connect()
                     backoff = 1.0
+                    asyncio.create_task(self._post_reconnect_recovery())
                 except Exception as e:
                     log.error("MTProto reconnect failed: %r", e)
                     backoff = min(backoff * 2, max_backoff)
