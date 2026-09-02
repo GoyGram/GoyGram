@@ -326,7 +326,7 @@ class MTNet:
         self._init_done=False
         self._api_id:int|None=None
         self.layer = 229
-        self._preferred_dc = int(str(port)[-1]) if 1 <= int(str(port)[-1]) <= 5 else 2
+        self._preferred_dc: int | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._reader_lock = asyncio.Lock()
 
@@ -706,8 +706,8 @@ class MTNet:
             state = await self.call("updates.getState")
             if isinstance(state, dict):
                 self.update_cursor(state)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.error("MTProto post-reconnect recovery failed: %s: %s", type(exc).__name__, exc)
 
     async def _recover_difference(self) -> None:
         if self._difference_lock.locked():
@@ -1761,12 +1761,13 @@ class MTNet:
 
     async def _connect(self) -> None:
         from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
-        try:
-            dc_map = get_dynamic_dc_config()
-            selected = pick_dc_endpoint(dc_map, preferred_dc=self._preferred_dc)
-            self.host, self.port = selected.host, selected.port
-        except Exception:
-            pass
+        if self._preferred_dc is not None:
+            try:
+                dc_map = get_dynamic_dc_config()
+                selected = pick_dc_endpoint(dc_map, preferred_dc=self._preferred_dc)
+                self.host, self.port = selected.host, selected.port
+            except Exception:
+                pass
         self._init_done = False
         self.auth_ready.clear()
         await self.ensure_auth_key()
