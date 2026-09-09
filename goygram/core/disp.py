@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import time as _time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -23,6 +24,40 @@ class Disp:
         self.bus = bus
         self.stop_ev = asyncio.Event()
         self.log = get_logger("goygram.disp")
+        self._seen: dict[tuple, float] = {}
+        self._seen_sweep = 0.0
+
+    def _dedup_key(self, data: dict[str, Any]) -> tuple | None:
+        kind = data.get("kind")
+        if kind not in {"msg", "edit", "cb", "inline"}:
+            return None
+        src = data.get("src")
+        if src is None and isinstance(data.get("raw"), dict):
+            src = "bot"
+        if kind in {"cb", "inline"}:
+            qid = data.get("query_id") or data.get("upd_id")
+            if qid is None:
+                return None
+            return (kind, "q", int(qid))
+        chat = data.get("chat_id")
+        mid = data.get("msg_id")
+        if chat is None or mid is None:
+            return None
+        return (kind, int(chat), int(mid))
+
+    def _is_duplicate(self, data: dict[str, Any]) -> bool:
+        key = self._dedup_key(data)
+        if key is None:
+            return False
+        now = _time.monotonic()
+        if now - self._seen_sweep > 300.0:
+            for k in [k for k, ts in self._seen.items() if now - ts > 300.0]:
+                del self._seen[k]
+            self._seen_sweep = now
+        if key in self._seen:
+            return True
+        self._seen[key] = now
+        return False
 
     async def close(self) -> None:
         self.stop_ev.set()
@@ -34,6 +69,9 @@ class Disp:
         kind = data.get("kind")
         if kind == "err":
             self.log.warning("Disp error event: %s", data.get("text", ""))
+            return
+        if self._is_duplicate(data):
+            self.log.debug("Duplicate update dropped (kind=%s chat=%s msg=%s)", data.get("kind"), data.get("chat_id"), data.get("msg_id"))
             return
         if kind != "update":
             update = Obj(pkt.get("src", "sys"), data, self.app)
@@ -47,6 +85,7 @@ class Disp:
                     await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
         if kind == "msg":
             msg = Obj(pkt.get("src", "sys"), data, self.app)
+            await self.app._conv_dispatch(msg)
             for fn in list(self.app.hook):
                 try:
                     await fn(msg)

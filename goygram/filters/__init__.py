@@ -257,11 +257,10 @@ class command(Filter):
             base = base.lower()
         if base not in self._cmds:
             return False
-        try:
-            object.__setattr__(e, "cmd", base)
-            object.__setattr__(e, "args", parts[1].strip() if len(parts) > 1 else "")
-        except (AttributeError, TypeError):
-            pass
+        raw = getattr(e, "raw", None)
+        if isinstance(raw, dict):
+            raw["cmd"] = base
+            raw["args"] = parts[1].strip() if len(parts) > 1 else ""
         return True
 
 
@@ -1549,6 +1548,89 @@ class _AnyData(Filter):
         super().__init__(fn=lambda e: True, _name="*")
 
 
+def _safe_cmp(a: Any, b: Any, op: str) -> bool:
+    try:
+        if op == ">":
+            return a > b
+        if op == "<":
+            return a < b
+        if op == ">=":
+            return a >= b
+        return a <= b
+    except TypeError:
+        return False
+
+
+class _MagicAttr:
+    __slots__ = ("_path",)
+
+    def __init__(self, path: tuple = ()) -> None:
+        self._path = path
+
+    def __getattr__(self, name: str) -> "_MagicAttr":
+        if name.startswith("_") and name != "_":
+            raise AttributeError(name)
+        return _MagicAttr(self._path + (name,))
+
+    def __getitem__(self, key: Any) -> "_MagicAttr":
+        return _MagicAttr(self._path + ((key,),))
+
+    def _resolve(self, e: object) -> Any:
+        cur: Any = e
+        for step in self._path:
+            if isinstance(step, tuple):
+                cur = cur[step[0]]
+            else:
+                cur = getattr(cur, step, None)
+                if cur is None:
+                    return None
+        return cur
+
+    def _wrap(self, fn: Callable[[object], bool], name: str) -> Filter:
+        return Filter(fn=fn, _name=name)
+
+    def __eq__(self, other: Any) -> Filter:
+        return self._wrap(lambda e: self._resolve(e) == other, f"F{'.'.join(str(s) for s in self._path)} == {other!r}")
+
+    def __ne__(self, other: Any) -> Filter:
+        return self._wrap(lambda e: self._resolve(e) != other, f"F{'.'.join(str(s) for s in self._path)} != {other!r}")
+
+    def __gt__(self, other: Any) -> Filter:
+        return self._wrap(lambda e: _safe_cmp(self._resolve(e), other, ">"), f"F.{'.'.join(str(s) for s in self._path)} > {other!r}")
+
+    def __lt__(self, other: Any) -> Filter:
+        return self._wrap(lambda e: _safe_cmp(self._resolve(e), other, "<"), f"F.{'.'.join(str(s) for s in self._path)} < {other!r}")
+
+    def __ge__(self, other: Any) -> Filter:
+        return self._wrap(lambda e: _safe_cmp(self._resolve(e), other, ">="), f"F.{'.'.join(str(s) for s in self._path)} >= {other!r}")
+
+    def __le__(self, other: Any) -> Filter:
+        return self._wrap(lambda e: _safe_cmp(self._resolve(e), other, "<="), f"F.{'.'.join(str(s) for s in self._path)} <= {other!r}")
+
+    def __invert__(self) -> Filter:
+        return self._wrap(lambda e: not bool(self._resolve(e)), f"~F.{'.'.join(str(s) for s in self._path)}")
+
+    def contains(self, other: Any) -> Filter:
+        return self._wrap(lambda e: other in (self._resolve(e) or ""), f"F.{'.'.join(str(s) for s in self._path)}.contains({other!r})")
+
+    def startswith(self, p: str) -> Filter:
+        return self._wrap(lambda e: bool((self._resolve(e) or "").startswith(p)), f"F.{'.'.join(str(s) for s in self._path)}.startswith({p!r})")
+
+    def endswith(self, p: str) -> Filter:
+        return self._wrap(lambda e: bool((self._resolve(e) or "").endswith(p)), f"F.{'.'.join(str(s) for s in self._path)}.endswith({p!r})")
+
+    def matches(self, pattern: str, flags: int = 0) -> Filter:
+        rx = _re.compile(pattern, flags)
+        return self._wrap(lambda e: bool(rx.search(self._resolve(e) or "")), f"F.{'.'.join(str(s) for s in self._path)}.matches({pattern!r})")
+
+    def in_(self, others: Any) -> Filter:
+        seq = tuple(others) if isinstance(others, (list, tuple, set)) else others
+        return self._wrap(lambda e: self._resolve(e) in seq, f"F.{'.'.join(str(s) for s in self._path)}.in_({others!r})")
+
+
+F = _MagicAttr()
+
+
 class filter_data(Filter):
     def __init__(self, **kwargs: Any):
         self._spec = kwargs
@@ -1617,4 +1699,5 @@ __all__ = [
     "if_", "unless",
     "once", "limit", "every_n", "cooldown", "throttled",
     "filter_data",
+    "F",
 ]

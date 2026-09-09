@@ -334,6 +334,16 @@ fn deserialize_fields(data: &[u8], pos: &mut usize, fields: &[TlFieldDef], has_f
 fn deserialize_tl(data: &[u8], pos: &mut usize) -> Result<serde_json::Value, String> {
     let start = *pos;
     let cid = read_u32(data, pos)?;
+    if cid == 0x1cb5c415 {
+        let count = read_i32(data, pos)?;
+        if count < 0 || count > 1_000_000 { return Err("invalid vector count".to_string()); }
+        let count = count as usize;
+        let mut arr = Vec::new();
+        for _ in 0..count {
+            arr.push(deserialize_tl(data, pos)?);
+        }
+        return Ok(serde_json::Value::Array(arr));
+    }
     if let Some((name, ctor)) = get_ctor_by_cid(cid) {
         let mut result = deserialize_fields(data, pos, &ctor.fields, ctor.has_flags, &name)?;
         if let Some(obj) = result.as_object_mut() {

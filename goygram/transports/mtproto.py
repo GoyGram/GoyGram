@@ -1246,20 +1246,15 @@ class MTNet:
         login_token = self._parse_login_token(result)
         if login_token is not None:
             return login_token
-        updates = self._parse_updates(result)
-        if updates.get("id") or updates.get("updates"):
-            return updates
         try:
             parsed = json.loads(rx.deserialize_constructor(result))
-            if parsed.get("_") == "rpc_result":
+            if isinstance(parsed, dict) and parsed.get("_") == "rpc_result":
                 return {"ok": True, "result": parsed.get("result", parsed)}
             return {"ok": True, "result": parsed}
         except Exception as exc:
             log.warning("MTProto schema decode failed: %s", exc)
-            return {"ok": False, "error": "SCHEMA_DECODE_FAILED", "error_message": str(exc), "raw_result_hex": result.hex()}
+            return {"ok": False, "error": "SCHEMA_DECODE_FAILED", "error_message": str(exc), "raw_result_hex": result[:4096].hex()}
 
-    def _parse_updates(self, result:bytes)->dict[str,Any]:
-        return {"ok": False, "error": "SCHEMA_DECODE_FAILED", "error_message": "structured update decoding failed", "raw_result_hex": result.hex()}
     def _resolve_peer(self, obj:dict[str,Any])->bytes:
         chat_id = obj.get('chat_id') or obj.get('peer')
         access_hash = obj.get('access_hash', 0)

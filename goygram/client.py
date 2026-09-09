@@ -29,6 +29,167 @@ MemFn = Fn
 InlineFn = Fn
 
 
+def _find_ctor(payload: Any, ctor: str) -> dict[str, Any] | None:
+    if isinstance(payload, dict):
+        if payload.get("_") == ctor:
+            return payload
+        for v in payload.values():
+            found = _find_ctor(v, ctor)
+            if found is not None:
+                return found
+    elif isinstance(payload, (list, tuple)):
+        for item in payload:
+            found = _find_ctor(item, ctor)
+            if found is not None:
+                return found
+    return None
+
+
+async def _call(fn: Callable[..., Any], *args: Any, **kw: Any) -> Any:
+    out = fn(*args, **kw)
+    if asyncio.iscoroutinefunction(fn) or asyncio.iscoroutine(out):
+        return await out
+    return out
+
+
+class _UsingCtx:
+    __slots__ = ("app", "which", "prev")
+
+    def __init__(self, app: "AppCore", which: str) -> None:
+        self.app = app
+        self.which = which
+        self.prev = app.default_transport
+
+    async def __aenter__(self) -> "AppCore":
+        self.prev = self.app.default_transport
+        self.app.use(self.which)
+        return self.app
+
+    async def __aexit__(self, *exc: Any) -> None:
+        self.app.default_transport = self.prev
+
+
+class _HandlerGroup:
+    __slots__ = ("app", "name", "_members")
+
+    def __init__(self, app: "AppCore", name: str) -> None:
+        self.app = app
+        self.name = name
+        self._members: dict[str, list[Fn]] = {
+            "hook": [], "edit_hook": [], "cb_hook": [], "inline_hook": [],
+            "poll_hook": [], "member_hook": [], "update_hook": [],
+        }
+
+    _names = {
+        "on_msg": "hook", "on_edit": "edit_hook", "on_cb": "cb_hook",
+        "on_inline": "inline_hook", "on_poll": "poll_hook", "on_member": "member_hook",
+        "on_update": "update_hook",
+    }
+
+    def __getattr__(self, item: str) -> Any:
+        if item.startswith("_"):
+            raise AttributeError(item)
+        key = self._names.get(item)
+        if key is None:
+            raise AttributeError(item)
+        target = self._members[key]
+
+        def _wrap(fn: Fn) -> Fn:
+            if isinstance(fn, Filter):
+                raise TypeError("pass filters via filt= keyword")
+            target.append(fn)
+            host = getattr(self.app, key)
+            host.append(fn)
+            return fn
+
+        return _wrap
+
+    def disable(self) -> None:
+        for hooks in self._members.values():
+            for fn in hooks:
+                for host in self._hosts():
+                    try:
+                        host.remove(fn)
+                    except ValueError:
+                        pass
+
+    def enable(self) -> None:
+        for key, hooks in self._members.items():
+            host = getattr(self.app, key)
+            for fn in hooks:
+                if fn not in host:
+                    host.append(fn)
+
+    def clear(self) -> None:
+        self.disable()
+        for hooks in self._members.values():
+            hooks.clear()
+
+    def _hosts(self) -> list[list[Fn]]:
+        return [getattr(self.app, key) for key in self._members]
+
+
+class _HistoryIter:
+    __slots__ = ("app", "chat_id", "limit", "batch", "via", "_offset_id", "_left", "_buf", "_started")
+
+    def __init__(self, app: "AppCore", chat_id: int | str, limit: int, batch: int, via: str | None) -> None:
+        self.app = app
+        self.chat_id = chat_id
+        self.limit = int(limit) if limit and int(limit) > 0 else 0
+        self.batch = max(1, min(int(batch), 100))
+        self.via = via
+        self._offset_id = 0
+        self._left = self.limit
+        self._buf: list[Any] = []
+        self._started = False
+
+    def __aiter__(self) -> "_HistoryIter":
+        return self
+
+    async def _fetch(self) -> list[Any]:
+        app = self.app
+        tr = app.via(self.chat_id, self.via)
+        if tr != "mt":
+            raise RuntimeError("iter_history requires the mtproto transport")
+        peer = await app.mt.resolve_peer(app.raw_chat(self.chat_id))
+        raw = await app.mt_req(
+            "messages.getHistory",
+            peer=peer,
+            offset_id=self._offset_id,
+            offset_date=0,
+            add_offset=0,
+            limit=min(self.batch, self._left) if self._left else self.batch,
+            max_id=0,
+            min_id=0,
+            hash=0,
+        )
+        res = raw.get("result", raw) if isinstance(raw, dict) else {}
+        msgs = res.get("messages") if isinstance(res, dict) else None
+        return list(msgs) if isinstance(msgs, list) else []
+
+    async def __anext__(self) -> Any:
+        if self._buf:
+            item = self._buf.pop(0)
+            if self._left:
+                self._left -= 1
+            return item
+        if self._left == 0 and self.limit:
+            raise StopAsyncIteration
+        msgs = await self._fetch()
+        if not msgs:
+            raise StopAsyncIteration
+        self._started = True
+        for m in msgs:
+            mid = m.get("id") if isinstance(m, dict) else None
+            if mid is not None:
+                self._offset_id = int(mid)
+        self._buf = list(msgs)
+        item = self._buf.pop(0)
+        if self._left:
+            self._left -= 1
+        return item
+
+
 @dataclass(frozen=True, slots=True)
 class BotCfg:
     token: str
@@ -79,6 +240,7 @@ class AppCore:
         lang_code: str = "en",
         fsm_backend: Any | None = None,
         fsm_on_change: Callable[[list[dict[str, Any]]], Any] | None = None,
+        intake: str = "auto",
     ) -> None:
         self.cfg = cfg
         self.bus = Bus(cfg.bus_max)
@@ -86,6 +248,7 @@ class AppCore:
         self.mt = None
         self.api = None
         self.self_id: int | None = None
+        self._me_cache: dict[str, Any] | None = None
         if cfg.bot:
             from goygram.transports.botapi import BotNet
 
@@ -129,6 +292,7 @@ class AppCore:
             self._load_vault_from_disk(session_name, api_id, api_hash)
         self.fsm = FSMEngine(backend=fsm_backend, on_change=fsm_on_change)
         self.disp = Disp(self, self.bus)
+        self._conv: dict[tuple, asyncio.Future] = {}
         self.hook: list[Fn] = []
         self.edit_hook: list[Fn] = []
         self.update_hook: list[Fn] = []
@@ -154,6 +318,7 @@ class AppCore:
             self.session = Session(name=session)
         else:
             raise TypeError("session must be a Session instance or an encrypted session string")
+        self.intake = str(intake)
 
     def _init_tl_schema(self) -> None:
         from goygram.schema_manager import init_schema, CURRENT_LAYER_FLOOR
@@ -205,132 +370,201 @@ class AppCore:
         except Exception:
             pass
 
-    def on_msg(self, fn: Fn | None = None, filt: Filter | None = None):
+    def _reg(self, host: list[Fn], fn: Fn | None, filt: Filter | None, once: bool = False):
         if isinstance(fn, Filter):
             filt = fn
             fn = None
+        if once:
+            host_ref = host
+            def wrap(inner: Fn) -> Fn:
+                async def guarded(msg: "Obj") -> Any:
+                    try:
+                        if filt is None or filt(msg):
+                            return await inner(msg)
+                        return None
+                    finally:
+                        try:
+                            host_ref.remove(guarded)
+                        except ValueError:
+                            pass
+                host_ref.append(guarded)
+                return inner
+            if fn is not None:
+                return wrap(fn)
+            return wrap
         def wrap(inner: Fn) -> Fn:
             if filt is None:
-                self.hook.append(inner)
+                host.append(inner)
                 return inner
             async def guarded(msg: "Obj") -> Any:
                 if filt(msg):
                     return await inner(msg)
                 return None
-            self.hook.append(guarded)
+            host.append(guarded)
             return inner
         if fn is not None:
             return wrap(fn)
         return wrap
 
-    def on_edit(self, fn: Fn | None = None, filt: Filter | None = None):
-        if isinstance(fn, Filter):
-            filt = fn
-            fn = None
-        def wrap(inner: Fn) -> Fn:
-            if filt is None:
-                self.edit_hook.append(inner)
-                return inner
-            async def guarded(msg: "Obj") -> Any:
-                if filt(msg):
-                    return await inner(msg)
-                return None
-            self.edit_hook.append(guarded)
-            return inner
-        if fn is not None:
-            return wrap(fn)
-        return wrap
+    def on_msg(self, fn: Fn | None = None, filt: Filter | None = None, once: bool = False):
+        return self._reg(self.hook, fn, filt, once)
 
-    def on_cb(self, fn: CbFn | None = None, *, filt: Filter | None = None):
-        if isinstance(fn, Filter):
-            filt = fn
-            fn = None
-        def wrap(inner: CbFn) -> CbFn:
-            if filt is None:
-                self.cb_hook.append(inner)
-                return inner
-            async def guarded(cb: "Obj") -> Any:
-                if filt(cb):
-                    return await inner(cb)
-                return None
-            self.cb_hook.append(guarded)
-            return inner
-        if fn is not None:
-            return wrap(fn)
-        return wrap
+    def on_edit(self, fn: Fn | None = None, filt: Filter | None = None, once: bool = False):
+        return self._reg(self.edit_hook, fn, filt, once)
 
-    def on_inline(self, fn: InlineFn | None = None, *, filt: Filter | None = None):
-        if isinstance(fn, Filter):
-            filt = fn
-            fn = None
-        def wrap(inner: InlineFn) -> InlineFn:
-            if filt is None:
-                self.inline_hook.append(inner)
-                return inner
-            async def guarded(inline: "Obj") -> Any:
-                if filt(inline):
-                    return await inner(inline)
-                return None
-            self.inline_hook.append(guarded)
-            return inner
-        if fn is not None:
-            return wrap(fn)
-        return wrap
+    def on_cb(self, fn: CbFn | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self._reg(self.cb_hook, fn, filt, once)
 
-    def on_poll(self, fn: PollFn | None = None, *, filt: Filter | None = None):
-        if isinstance(fn, Filter):
-            filt = fn
-            fn = None
-        def wrap(inner: PollFn) -> PollFn:
-            if filt is None:
-                self.poll_hook.append(inner)
-                return inner
-            async def guarded(poll: "Obj") -> Any:
-                if filt(poll):
-                    return await inner(poll)
-                return None
-            self.poll_hook.append(guarded)
-            return inner
-        if fn is not None:
-            return wrap(fn)
-        return wrap
+    def on_inline(self, fn: InlineFn | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self._reg(self.inline_hook, fn, filt, once)
 
-    def on_member(self, fn: MemFn | None = None, *, filt: Filter | None = None):
-        if isinstance(fn, Filter):
-            filt = fn
-            fn = None
-        def wrap(inner: MemFn) -> MemFn:
-            if filt is None:
-                self.member_hook.append(inner)
-                return inner
-            async def guarded(mem: "Obj") -> Any:
-                if filt(mem):
-                    return await inner(mem)
-                return None
-            self.member_hook.append(guarded)
-            return inner
-        if fn is not None:
-            return wrap(fn)
-        return wrap
+    def on_poll(self, fn: PollFn | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self._reg(self.poll_hook, fn, filt, once)
 
-    def on_update(self, fn: Callable[[object], Awaitable[Any]] | None = None, *, filt: Filter | None = None):
-        def wrap(inner: Callable[[object], Awaitable[Any]]) -> Callable[[object], Awaitable[Any]]:
-            if filt is None:
-                self.update_hook.append(inner)
-                return inner
-            async def guarded(event: object) -> Any:
-                if filt(event):
-                    return await inner(event)
-                return None
-            self.update_hook.append(guarded)
-            return inner
-        if fn is not None:
-            return wrap(fn)
-        return wrap
+    def on_member(self, fn: MemFn | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self._reg(self.member_hook, fn, filt, once)
+
+    def on_update(self, fn: Callable[[object], Awaitable[Any]] | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self._reg(self.update_hook, fn, filt, once)
 
     def on_cmd(self, *name: str) -> Callable[[Fn], Fn]:
         from goygram.filters import command as _cmd_filt
         return self.on_msg(filt=_cmd_filt(*name))
+
+    @property
+    def transport(self) -> str:
+        if self.bot is None and self.mt is None:
+            return "none"
+        if self.bot is None:
+            return "mtproto"
+        if self.mt is None:
+            return "api"
+        return self.default_transport if self.default_transport != "auto" else "mtproto"
+
+    def use(self, which: str) -> None:
+        norm = {"api": "api", "bot": "api", "botapi": "api", "mt": "mtproto", "mtproto": "mtproto"}
+        target = norm.get(str(which).lower())
+        if target is None:
+            raise ValueError(f"unknown transport {which!r}; use 'api' or 'mtproto'")
+        if target == "api" and self.bot is None:
+            raise RuntimeError("bot net is not configured")
+        if target == "mtproto" and self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        self.default_transport = target
+
+    def use_api(self) -> "AppCore":
+        self.use("api")
+        return self
+
+    def use_mt(self) -> "AppCore":
+        self.use("mtproto")
+        return self
+
+    def switch(self, which: str) -> None:
+        self.use(which)
+
+    def using(self, which: str) -> "_UsingCtx":
+        return _UsingCtx(self, which)
+
+    @property
+    def me(self) -> int | None:
+        return self.self_id
+
+    async def get_me(self, refresh: bool = False) -> dict[str, Any] | None:
+        if self._me_cache is not None and not refresh:
+            return self._me_cache
+        if self.bot is not None:
+            try:
+                info = await self.bot_req("getMe")
+                if isinstance(info, dict):
+                    self._me_cache = info
+                    if info.get("id") is not None and self.self_id is None:
+                        self.self_id = int(info["id"])
+                        if self.mt is not None:
+                            self.mt.self_id = self.self_id
+                    return info
+            except Exception as e:
+                self.log.debug("getMe self-resolve failed: %r", e)
+        if self.mt is not None:
+            try:
+                raw = await self.mt_req("users.getUsers", id=[{"_": "inputUserSelf"}])
+                user = _find_ctor(raw, "user")
+                if isinstance(user, dict) and user.get("id") is not None:
+                    self._me_cache = user
+                    self.self_id = int(user["id"])
+                    self.mt.self_id = self.self_id
+                    return user
+            except Exception as e:
+                self.log.debug("users.getUsers self-resolve failed: %r", e)
+        return None
+
+    def iter_history(self, chat_id: int | str, limit: int = 0, batch: int = 100, via: str | None = None):
+        return _HistoryIter(self, chat_id, limit, batch, via)
+
+    async def count_history(self, chat_id: int | str, via: str | None = None) -> int | None:
+        tr = self.via(chat_id, via)
+        if tr != "mt":
+            return None
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        raw = await self.mt_req("messages.getHistory", peer=peer, offset_id=0, offset_date=0, add_offset=0, limit=1, max_id=0, min_id=0, hash=0)
+        res = raw.get("result", raw) if isinstance(raw, dict) else {}
+        return res.get("count") if isinstance(res, dict) else None
+
+    def group(self, name: str) -> "_HandlerGroup":
+        return _HandlerGroup(self, name)
+
+    def every(self, seconds: float, fn: Callable[..., Any], *args: Any, **kw: Any) -> "asyncio.Task":
+        async def _loop() -> None:
+            try:
+                while not self.stop_ev.is_set():
+                    await asyncio.sleep(seconds)
+                    if self.stop_ev.is_set():
+                        return
+                    try:
+                        await _call(fn, *args, **kw)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self.log.error("every(%s) tick failed: %r", seconds, e)
+            except asyncio.CancelledError:
+                pass
+        return asyncio.create_task(_loop(), name=f"goygram-every-{seconds}")
+
+    def later(self, seconds: float, fn: Callable[..., Any], *args: Any, **kw: Any) -> "asyncio.Task":
+        async def _once() -> None:
+            try:
+                await asyncio.sleep(seconds)
+                await _call(fn, *args, **kw)
+            except asyncio.CancelledError:
+                pass
+        return asyncio.create_task(_once(), name="goygram-later")
+
+    async def conv_wait(self, chat_id: int | str, user_id: int | str | None = None, filt: Filter | None = None, timeout: float = 60.0) -> "Obj | None":
+        key = (chat_id, user_id)
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        if key in self._conv:
+            old = self._conv.pop(key)
+            if not old.done():
+                old.set_exception(RuntimeError("conversation superseded"))
+        self._conv[key] = fut
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            self._conv.pop(key, None)
+            return None
+
+    async def _conv_dispatch(self, msg: "Obj") -> None:
+        if not self._conv:
+            return
+        key = (msg.chat_id, None)
+        target = self._conv.pop(key, None)
+        if target is not None and not target.done():
+            target.set_result(msg)
+            return
+        key2 = (msg.chat_id, msg.from_id)
+        target = self._conv.pop(key2, None)
+        if target is not None and not target.done():
+            target.set_result(msg)
 
     def _bot_method_name(self, name: str) -> str:
         if "_" in name:
@@ -520,27 +754,38 @@ class AppCore:
         try:
             tasks.append(asyncio.create_task(self.disp.consume(), name="disp"))
             await self.fsm.start()
-            if self.bot:
-                self.log.info("Bot transport is enabled.")
-                if self.mt is not None:
-                    self.log.info("Hybrid mode: updates are served exclusively by MTProto; Bot API polling is off.")
-                if self.bot.webhook_url and self.mt is None:
-                    await self.bot.start_webhook()
-                elif self.mt is None:
-                    try:
-                        await self.bot_req("deleteWebhook", drop_pending_updates=False)
-                    except Exception as e:
-                        self.log.error("Failed to clear webhook before polling: %r", e)
-                    tasks.append(asyncio.create_task(self.bot.spin(), name="bot"))
             if self.mt:
                 self.log.info("MT transport is enabled.")
                 await bootstrap_session(self, api_id=self.api_id, api_hash=self.api_hash, session_name=self.session_name, bot_token=self.bot_token, session=self.session)
+                if self.intake == "auto":
+                    if self.bot is None:
+                        self.intake = "mtproto"
+                    elif self.session.is_bot:
+                        self.intake = "mtproto"
+                    else:
+                        self.intake = "dual"
                 await self.mt.start()
                 tasks.append(self.mt._reader_task)
                 try:
                     await self.mt.call("updates.getState", api_id=self.api_id)
                 except Exception as exc:
                     self.log.debug("Initial MTProto state request failed: %s", type(exc).__name__)
+            elif self.intake == "auto":
+                self.intake = "api"
+            if self.bot:
+                self.log.info("Bot transport is enabled.")
+                if self.mt is not None and self.intake != "dual":
+                    self.log.info("Hybrid mode: updates are served exclusively by MTProto; Bot API polling is off.")
+                if self.mt is not None and self.intake == "dual":
+                    self.log.info("Dual-intake mode: updates flow from BOTH MTProto and Bot API; cross-transport dedup is active.")
+                if self.bot.webhook_url and (self.mt is None or self.intake == "dual"):
+                    await self.bot.start_webhook()
+                elif self.mt is None or self.intake == "dual":
+                    try:
+                        await self.bot_req("deleteWebhook", drop_pending_updates=False)
+                    except Exception as e:
+                        self.log.error("Failed to clear webhook before polling: %r", e)
+                    tasks.append(asyncio.create_task(self.bot.spin(), name="bot"))
             stop_wait = asyncio.create_task(self.stop_ev.wait(), name="stop-wait")
             done, _ = await asyncio.wait({stop_wait, *tasks}, return_when=asyncio.FIRST_COMPLETED)
             if stop_wait not in done:
@@ -590,6 +835,7 @@ class GoyGram:
         webhook_max_body: int = 1024 * 1024,
         webhook_drop_pending_updates: bool = False,
         bot_offset_path: str | None = None,
+        intake: str = "auto",
     ) -> None:
         if webhook_url is not None and bot_token is None:
             raise ValueError("webhook_url requires bot_token")
@@ -639,31 +885,32 @@ class GoyGram:
             lang_code=lang_code,
             fsm_backend=fsm_backend,
             fsm_on_change=fsm_on_change,
+            intake=intake,
         )
 
-    def on_msg(self, fn: Fn | None = None, filt: Filter | None = None):
-        return self.core.on_msg(fn, filt=filt)
+    def on_msg(self, fn: Fn | None = None, filt: Filter | None = None, once: bool = False):
+        return self.core.on_msg(fn, filt=filt, once=once)
 
-    def on_cb(self, fn: CbFn | None = None, *, filt: Filter | None = None):
-        return self.core.on_cb(fn, filt=filt)
+    def on_cb(self, fn: CbFn | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self.core.on_cb(fn, filt=filt, once=once)
 
-    def on_inline(self, fn: InlineFn | None = None, *, filt: Filter | None = None):
-        return self.core.on_inline(fn, filt=filt)
+    def on_inline(self, fn: InlineFn | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self.core.on_inline(fn, filt=filt, once=once)
 
     def on_cmd(self, *name: str) -> Callable[[Fn], Fn]:
         return self.core.on_cmd(*name)
 
-    def on_poll(self, fn: PollFn | None = None, *, filt: Filter | None = None):
-        return self.core.on_poll(fn, filt=filt)
+    def on_poll(self, fn: PollFn | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self.core.on_poll(fn, filt=filt, once=once)
 
-    def on_member(self, fn: MemFn | None = None, *, filt: Filter | None = None):
-        return self.core.on_member(fn, filt=filt)
+    def on_member(self, fn: MemFn | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self.core.on_member(fn, filt=filt, once=once)
 
-    def on_edit(self, fn: Fn | None = None, filt: Filter | None = None):
-        return self.core.on_edit(fn, filt=filt)
+    def on_edit(self, fn: Fn | None = None, filt: Filter | None = None, once: bool = False):
+        return self.core.on_edit(fn, filt=filt, once=once)
 
-    def on_update(self, fn: Callable[[object], Awaitable[Any]] | None = None, *, filt: Filter | None = None):
-        return self.core.on_update(fn, filt=filt)
+    def on_update(self, fn: Callable[[object], Awaitable[Any]] | None = None, *, filt: Filter | None = None, once: bool = False):
+        return self.core.on_update(fn, filt=filt, once=once)
 
     def help(self) -> None:
         self.core.help()
