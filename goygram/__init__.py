@@ -8,8 +8,9 @@ from .utils import print_methods
 from .types.kbd import KbdBuilder
 from .types.obj import Obj as MemberObj
 from .types.obj import Obj as PollObj
+from .sugar import html, chunk_text, human_size, human_duration, parse_entities_html, progress_bar, code_block, plural_ru, json_dumps
 
-__all__ = ["GoyGram", "Session", "StopPropagation", "KbdBuilder", "PollObj", "MemberObj", "print_methods"]
+__all__ = ["GoyGram", "Session", "StopPropagation", "KbdBuilder", "PollObj", "MemberObj", "print_methods", "html", "chunk_text", "human_size", "human_duration", "parse_entities_html", "progress_bar", "code_block", "plural_ru", "json_dumps"]
 
 from . import filters
 

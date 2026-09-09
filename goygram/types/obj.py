@@ -89,11 +89,210 @@ class Obj:
 
     @property
     def chat_type(self) -> Any:
-        return self.raw.get("chat_type")
+        v = self.raw.get("chat_type")
+        if v is None:
+            chat = self.raw.get("chat")
+            if isinstance(chat, dict):
+                return chat.get("type")
+        return v
 
     @property
     def location(self) -> Any:
         return self.raw.get("location")
+
+    @property
+    def words(self) -> list[str]:
+        return self.text.split()
+
+    @property
+    def word_count(self) -> int:
+        return len(self.text.split())
+
+    @property
+    def urls(self) -> list[str]:
+        raw = self.raw.get("entities") or []
+        out = []
+        for ent in raw:
+            if isinstance(ent, dict) and ent.get("type") == "url":
+                off = int(ent.get("offset", 0))
+                ln = int(ent.get("length", 0))
+                out.append(self.text[off:off + ln])
+        return out
+
+    @property
+    def entities(self) -> list[dict[str, Any]]:
+        v = self.raw.get("entities")
+        return v if isinstance(v, list) else []
+
+    @property
+    def has_text(self) -> bool:
+        return bool(self.text.strip())
+
+    @property
+    def html_text(self) -> str:
+        from goygram.sugar import parse_entities_html
+        return parse_entities_html(self.text, self.entities)
+
+    @property
+    def caption(self) -> str:
+        return str(self.raw.get("caption", "") or "")
+
+    @property
+    def is_private(self) -> bool:
+        return self.chat_type == "private"
+
+    @property
+    def is_group(self) -> bool:
+        return self.chat_type in ("group", "supergroup")
+
+    @property
+    def chat_title(self) -> str | None:
+        chat = self.raw.get("chat")
+        if isinstance(chat, dict):
+            return chat.get("title") or chat.get("first_name") or chat.get("username")
+        return None
+
+    @property
+    def username(self) -> str | None:
+        chat = self.raw.get("chat")
+        if isinstance(chat, dict):
+            return chat.get("username")
+        return None
+
+    @property
+    def file_size(self) -> int | None:
+        from goygram.filters import _msize
+        try:
+            return int(_msize(self))
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def file_name(self) -> str | None:
+        raw = self.raw
+        for key in ("document", "video", "audio", "voice", "animation", "video_note"):
+            v = raw.get(key)
+            if isinstance(v, dict) and v.get("file_name"):
+                return v["file_name"]
+        return None
+
+    @property
+    def mime(self) -> str | None:
+        raw = self.raw
+        for key in ("document", "video", "audio", "voice", "animation", "video_note"):
+            v = raw.get(key)
+            if isinstance(v, dict) and v.get("mime_type"):
+                return v["mime_type"]
+        return None
+
+    @property
+    def media_type(self) -> str | None:
+        from goygram.filters import _mkey
+        return _mkey(self)
+
+    @property
+    def is_media(self) -> bool:
+        return self.media_type is not None
+
+    @property
+    def date_ts(self) -> int | None:
+        v = self.raw.get("date")
+        return int(v) if v is not None else None
+
+    @property
+    def edit_date_ts(self) -> int | None:
+        v = self.raw.get("edit_date")
+        return int(v) if v is not None else None
+
+    @property
+    def is_reply(self) -> bool:
+        return bool(self.raw.get("reply_to_message"))
+
+    @property
+    def reply_msg(self) -> "Obj | None":
+        r = self.raw.get("reply_to_message")
+        if isinstance(r, dict):
+            return Obj(self.src, r, self.app)
+        return None
+
+    @property
+    def args_list(self) -> list[str]:
+        a = self.raw.get("args")
+        if isinstance(a, str):
+            return a.split() if a else []
+        if isinstance(a, list):
+            return [str(x) for x in a]
+        return []
+
+    @property
+    def command_name(self) -> str | None:
+        return self.cmd
+
+    @property
+    def full_name(self) -> str:
+        first = self._value("first_name")
+        last = self._value("last_name")
+        if first is None or last is None:
+            chat = self.raw.get("chat")
+            if isinstance(chat, dict):
+                if first is None:
+                    first = chat.get("first_name") or chat.get("title")
+                if last is None:
+                    last = chat.get("last_name")
+        parts = [p for p in (first, last) if p]
+        return " ".join(str(p) for p in parts) if parts else ""
+
+    @property
+    def mention(self) -> str:
+        name = self.full_name or str(self.from_id or self.chat_id)
+        uid = self.from_id if self.from_id is not None else self.chat_id
+        return f'<a href="tg://user?id={uid}">{name}</a>'
+
+    @property
+    def ago(self) -> str:
+        from datetime import datetime, timezone
+
+        ts = self.raw.get("date")
+        if ts is None:
+            return ""
+        delta = datetime.now(tz=timezone.utc).timestamp() - float(ts)
+        if delta < 0:
+            delta = 0.0
+        m, s = divmod(int(delta), 60)
+        h, m = divmod(m, 60)
+        d, h = divmod(h, 24)
+        if d:
+            return f"{d}d"
+        if h:
+            return f"{h}h"
+        if m:
+            return f"{m}m"
+        return f"{s}s"
+
+    async def ask(self, prompt: str | None = None, timeout: float = 60.0, filt: Any = None, user_id: int | None = None, from_me: bool = False) -> "Obj | None":
+        if prompt:
+            await self.reply(prompt)
+        uid = user_id
+        if uid is None and from_me:
+            uid = getattr(self.app, "self_id", None)
+        if uid is None:
+            uid = self.from_id
+        return await self.app.conv_wait(self.chat_id, user_id=uid, filt=filt, timeout=timeout)
+
+    async def copy_to(self, chat_id: int | str, **kw: Any) -> Any:
+        return await self.app.copy_msg(self.chat_id, self.msg_id, to=chat_id, **kw)
+
+    async def typing(self) -> None:
+        await self.app.send_action(self.chat_id, "typing")
+
+    async def get_chat(self, **kw: Any) -> Any:
+        return await self.app.get_chat(self.chat_id, via=self.src, **kw)
+
+    async def get_sender(self, **kw: Any) -> Any:
+        return await self.app.get_user(self.from_id, via=self.src, **kw)
+
+    async def mark_read(self) -> Any:
+        return await self.app.mark_read(self.chat_id, self.msg_id)
 
     def _value(self, key: str, default: Any = None) -> Any:
         if key in self.raw:

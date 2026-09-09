@@ -1648,6 +1648,383 @@ class filter_data(Filter):
 
 
 
+
+
+class has_photo(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "photo", _name="has_photo")
+
+
+class has_video(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "video", _name="has_video")
+
+
+class has_audio(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "audio", _name="has_audio")
+
+
+class has_voice(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "voice", _name="has_voice")
+
+
+class has_document(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "document", _name="has_document")
+
+
+class has_sticker(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "sticker", _name="has_sticker")
+
+
+class has_animation(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "animation", _name="has_animation")
+
+
+class has_video_note(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "video_note", _name="has_video_note")
+
+
+class has_contact(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "contact", _name="has_contact")
+
+
+class has_location(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "location", _name="has_location")
+
+
+class has_poll(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "poll", _name="has_poll")
+
+
+class has_dice(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: _mkey(e) == "dice", _name="has_dice")
+
+
+class caption(Filter):
+    def __init__(self, contains: str | None = None):
+        if contains is not None:
+            super().__init__(fn=lambda e: contains in (getattr(e, "caption", "") or ""), _name=f"caption({contains})")
+        else:
+            super().__init__(fn=lambda e: bool(getattr(e, "caption", "") or ""), _name="caption")
+
+
+class args_count(Filter):
+    def __init__(self, n: int):
+        super().__init__(fn=lambda e: len([a for a in str(getattr(e, "args", "") or "").split() if a]) == n, _name=f"args_count({n})")
+
+
+class args_n(Filter):
+    def __init__(self, n: int):
+        super().__init__(fn=lambda e: len([a for a in str(getattr(e, "args", "") or "").split() if a]) >= n, _name=f"args_n({n})")
+
+
+class arg_is(Filter):
+    def __init__(self, idx: int, value: str, ignore_case: bool = False):
+        def chk(e):
+            args = [a for a in str(getattr(e, "args", "") or "").split() if a]
+            if idx >= len(args):
+                return False
+            a = args[idx]
+            return a.lower() == value.lower() if ignore_case else a == value
+        super().__init__(fn=chk, _name=f"arg_is({idx},{value})")
+
+
+class arg_int(Filter):
+    def __init__(self, idx: int = 0):
+        def chk(e):
+            args = [a for a in str(getattr(e, "args", "") or "").split() if a]
+            if idx >= len(args):
+                return False
+            try:
+                int(args[idx])
+                return True
+            except ValueError:
+                return False
+        super().__init__(fn=chk, _name=f"arg_int({idx})")
+
+
+class arg_float(Filter):
+    def __init__(self, idx: int = 0):
+        def chk(e):
+            args = [a for a in str(getattr(e, "args", "") or "").split() if a]
+            if idx >= len(args):
+                return False
+            try:
+                float(args[idx])
+                return True
+            except ValueError:
+                return False
+        super().__init__(fn=chk, _name=f"arg_float({idx})")
+
+
+class in_chat(Filter):
+    def __init__(self, *chats: int | str):
+        ids = set()
+        for c in chats:
+            ids.add(int(c) if isinstance(c, int) or (isinstance(c, str) and c.lstrip("-").isdigit()) else c)
+        def chk(e):
+            cid = getattr(e, "chat_id", None)
+            return cid in ids
+        super().__init__(fn=chk, _name=f"in_chat({chats})")
+
+
+class chat_id_range(Filter):
+    def __init__(self, lo: int, hi: int):
+        def chk(e):
+            cid = getattr(e, "chat_id", None)
+            try:
+                return lo <= int(cid) <= hi
+            except (TypeError, ValueError):
+                return False
+        super().__init__(fn=chk, _name=f"chat_id_range({lo},{hi})")
+
+
+class reply_to_me(Filter):
+    def __init__(self):
+        def chk(e):
+            raw = getattr(e, "raw", {})
+            r = raw.get("reply_to_message") if isinstance(raw, dict) else None
+            if not isinstance(r, dict):
+                return False
+            app = getattr(e, "app", None)
+            self_id = getattr(app, "self_id", None) if app is not None else None
+            if self_id is None:
+                return False
+            rf = r.get("from_id")
+            return rf is not None and int(rf) == int(self_id)
+        super().__init__(fn=chk, _name="reply_to_me")
+
+
+class forwarded_from(Filter):
+    def __init__(self, uid: int):
+        def chk(e):
+            raw = getattr(e, "raw", {})
+            fwd = raw.get("forward_from") or raw.get("forward_from_id") if isinstance(raw, dict) else None
+            u = fwd.get("id") if isinstance(fwd, dict) else fwd
+            try:
+                return u is not None and int(u) == int(uid)
+            except (TypeError, ValueError):
+                return False
+        super().__init__(fn=chk, _name=f"forwarded_from({uid})")
+
+
+class edited_recently(Filter):
+    def __init__(self, within: float = 300.0):
+        def chk(e):
+            raw = getattr(e, "raw", {})
+            if not isinstance(raw, dict):
+                return False
+            d = raw.get("edit_date")
+            o = raw.get("date")
+            if d is None or o is None:
+                return False
+            return 0 <= int(d) - int(o) <= within
+        super().__init__(fn=chk, _name=f"edited_recently({within})")
+
+
+class time_window(Filter):
+    def __init__(self, start_hour: int, end_hour: int, tz: int = 0):
+        def chk(e):
+            import time as _t
+            h = (_t.gmtime().tm_hour + tz) % 24
+            if start_hour <= end_hour:
+                return start_hour <= h < end_hour
+            return h >= start_hour or h < end_hour
+        super().__init__(fn=chk, _name=f"time_window({start_hour}-{end_hour})")
+
+
+class weekday(Filter):
+    def __init__(self, *days: int):
+        ds = set(days)
+        def chk(e):
+            import time as _t
+            return _t.gmtime().tm_wday in ds
+        super().__init__(fn=chk, _name=f"weekday({days})")
+
+
+class random_chance(Filter):
+    def __init__(self, p: float):
+        def chk(e):
+            import random as _r
+            return _r.random() < p
+        super().__init__(fn=chk, _name=f"random_chance({p})")
+
+
+class silent_msg(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: bool(getattr(e, "raw", {}).get("has_silent_silent", False) or getattr(e, "raw", {}).get("silent", False) or getattr(e, "raw", {}).get("disable_notification", False)), _name="silent_msg")
+
+
+class outgoing(Filter):
+    def __init__(self):
+        def chk(e):
+            raw = getattr(e, "raw", {})
+            if not isinstance(raw, dict):
+                return False
+            if raw.get("out") is not None:
+                return bool(raw["out"])
+            app = getattr(e, "app", None)
+            sid = getattr(app, "self_id", None) if app is not None else None
+            f = raw.get("from_id")
+            return sid is not None and f is not None and int(f) == int(sid)
+        super().__init__(fn=chk, _name="outgoing")
+
+
+class incoming(Filter):
+    def __init__(self):
+        def chk(e):
+            raw = getattr(e, "raw", {})
+            if not isinstance(raw, dict):
+                return False
+            if raw.get("out") is not None:
+                return not raw["out"]
+            app = getattr(e, "app", None)
+            sid = getattr(app, "self_id", None) if app is not None else None
+            f = raw.get("from_id")
+            return not (sid is not None and f is not None and int(f) == int(sid))
+        super().__init__(fn=chk, _name="incoming")
+
+
+class from_chat_type(Filter):
+    def __init__(self, *types: str):
+        ts = set(types)
+        super().__init__(fn=lambda e: (getattr(e, "chat_type", None) or "") in ts, _name=f"from_chat_type({types})")
+
+
+class has_caption_entities(Filter):
+    def __init__(self, etype: str | None = None):
+        if etype is not None:
+            super().__init__(fn=lambda e: any(isinstance(x, dict) and x.get("type") == etype for x in (getattr(e, "raw", {}).get("caption_entities") or [])), _name=f"has_caption_entities({etype})")
+        else:
+            super().__init__(fn=lambda e: bool(getattr(e, "raw", {}).get("caption_entities")), _name="has_caption_entities")
+
+
+class mime_is(Filter):
+    def __init__(self, *mimes: str):
+        ms = set(mimes)
+        super().__init__(fn=lambda e: (_mime(e) or "") in ms, _name=f"mime_is({mimes})")
+
+
+class mime_prefix(Filter):
+    def __init__(self, prefix: str):
+        super().__init__(fn=lambda e: (_mime(e) or "").startswith(prefix), _name=f"mime_prefix({prefix})")
+
+
+class file_ext(Filter):
+    def __init__(self, *exts: str):
+        es = {e.lower() if e.startswith(".") else "." + e.lower() for e in exts}
+        def chk(e):
+            raw = getattr(e, "raw", {})
+            if not isinstance(raw, dict):
+                return False
+            for key in ("document", "video", "audio", "animation"):
+                v = raw.get(key)
+                if isinstance(v, dict) and v.get("file_name"):
+                    name = str(v["file_name"])
+                    dot = name.rfind(".")
+                    if dot > 0 and name[dot:].lower() in es:
+                        return True
+            return False
+        super().__init__(fn=chk, _name=f"file_ext({exts})")
+
+
+class poll_answered_by(Filter):
+    def __init__(self, uid: int):
+        def chk(e):
+            raw = getattr(e, "raw", {})
+            if not isinstance(raw, dict):
+                return False
+            d = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+            u = (raw.get("user") or {}).get("id") or d.get("user_id")
+            try:
+                return u is not None and int(u) == int(uid)
+            except (TypeError, ValueError):
+                return False
+        super().__init__(fn=chk, _name=f"poll_answered_by({uid})")
+
+
+class text_lower(Filter):
+    def __init__(self, s: str):
+        super().__init__(fn=lambda e: str(getattr(e, "text", "") or "").lower() == s.lower(), _name=f"text_lower({s})")
+
+
+class has_digits(Filter):
+    def __init__(self):
+        super().__init__(fn=lambda e: any(c.isdigit() for c in str(getattr(e, "text", "") or "")), _name="has_digits")
+
+
+class only_digits(Filter):
+    def __init__(self):
+        def chk(e):
+            t = str(getattr(e, "text", "") or "").strip()
+            return bool(t) and t.isdigit()
+        super().__init__(fn=chk, _name="only_digits")
+
+
+class is_command(Filter):
+    def __init__(self):
+        def chk(e):
+            t = str(getattr(e, "text", "") or "").strip()
+            return bool(t) and t[0] in "/!.#$+"
+        super().__init__(fn=chk, _name="is_command")
+
+
+class url_contains(Filter):
+    def __init__(self, s: str):
+        def chk(e):
+            urls = getattr(e, "urls", None)
+            if urls:
+                return any(s in u for u in urls)
+            raw = getattr(e, "raw", {})
+            ents = raw.get("entities") if isinstance(raw, dict) else None
+            if isinstance(ents, list):
+                for ent in ents:
+                    if isinstance(ent, dict) and ent.get("type") in ("url", "text_link"):
+                        url = ent.get("url") or ""
+                        if s in url:
+                            return True
+            return False
+        super().__init__(fn=chk, _name=f"url_contains({s})")
+
+
+class hashtag(Filter):
+    def __init__(self, *tags: str):
+        ts = {t.lstrip("#").lower() for t in tags}
+        def chk(e):
+            raw = getattr(e, "raw", {})
+            ents = raw.get("entities") if isinstance(raw, dict) else None
+            txt = str(getattr(e, "text", "") or "")
+            if isinstance(ents, list):
+                for ent in ents:
+                    if isinstance(ent, dict) and ent.get("type") == "hashtag":
+                        off = int(ent.get("offset", 0))
+                        ln = int(ent.get("length", 0))
+                        tag = txt[off + 1:off + ln].lower()
+                        if tag in ts:
+                            return True
+            return False
+        super().__init__(fn=chk, _name=f"hashtag({tags})")
+
+
+class cmd_group(Filter):
+    def __init__(self, *names: str):
+        ns = {n.lower() for n in names}
+        def chk(e):
+            c = getattr(e, "cmd", None)
+            return c is not None and c.lower() in ns
+        super().__init__(fn=chk, _name=f"cmd_group({names})")
+
+
 __all__ = [
     "Filter",
     "text", "command", "regex", "fullmatch", "findall", "finditer", "split",
@@ -1700,4 +2077,46 @@ __all__ = [
     "once", "limit", "every_n", "cooldown", "throttled",
     "filter_data",
     "F",
+    "has_photo",
+    "has_video",
+    "has_audio",
+    "has_voice",
+    "has_document",
+    "has_sticker",
+    "has_animation",
+    "has_video_note",
+    "has_contact",
+    "has_location",
+    "has_poll",
+    "has_dice",
+    "caption",
+    "args_count",
+    "args_n",
+    "arg_is",
+    "arg_int",
+    "arg_float",
+    "in_chat",
+    "chat_id_range",
+    "reply_to_me",
+    "forwarded_from",
+    "edited_recently",
+    "time_window",
+    "weekday",
+    "random_chance",
+    "silent_msg",
+    "outgoing",
+    "incoming",
+    "from_chat_type",
+    "has_caption_entities",
+    "mime_is",
+    "mime_prefix",
+    "file_ext",
+    "poll_answered_by",
+    "text_lower",
+    "has_digits",
+    "only_digits",
+    "is_command",
+    "url_contains",
+    "hashtag",
+    "cmd_group",
 ]

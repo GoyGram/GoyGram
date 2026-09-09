@@ -62,6 +62,23 @@ class Disp:
     async def close(self) -> None:
         self.stop_ev.set()
 
+    async def _report_error(self, e: Exception, data: Any) -> None:
+        self.log.error("Handler failure: %r", e)
+        await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+        handlers = list(getattr(self.app, "_error_handlers", []) or [])
+        if handlers:
+            try:
+                evt = data if isinstance(data, Obj) else Obj("sys", data if isinstance(data, dict) else {"kind": "unknown"}, self.app)
+            except Exception:
+                evt = None
+            for fn in handlers:
+                try:
+                    out = fn(evt, e)
+                    if asyncio.iscoroutine(out) or asyncio.iscoroutinefunction(fn):
+                        await out
+                except Exception as nested:
+                    self.log.error("Error handler failure: %r", nested)
+
     async def one(self, pkt: dict[str, Any]) -> None:
         data = pkt.get("data")
         if not isinstance(data, dict):
@@ -75,16 +92,17 @@ class Disp:
             return
         if kind != "update":
             update = Obj(pkt.get("src", "sys"), data, self.app)
+            evt = update
             for fn in list(getattr(self.app, "update_hook", [])):
                 try:
                     await fn(update)
                 except StopPropagation:
                     return
                 except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+                    await self._report_error(e, evt if evt is not None else data)
         if kind == "msg":
             msg = Obj(pkt.get("src", "sys"), data, self.app)
+            evt = msg
             await self.app._conv_dispatch(msg)
             for fn in list(self.app.hook):
                 try:
@@ -92,67 +110,67 @@ class Disp:
                 except StopPropagation:
                     return
                 except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+                    await self._report_error(e, evt if evt is not None else data)
             return
         if kind == "edit":
             msg = Obj(pkt.get("src", "sys"), data, self.app)
+            evt = msg
             for fn in list(getattr(self.app, "edit_hook", [])):
                 try:
                     await fn(msg)
                 except StopPropagation:
                     return
                 except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+                    await self._report_error(e, evt if evt is not None else data)
             return
         if kind == "poll":
             poll = Obj(pkt.get("src", "sys"), data, self.app)
+            evt = poll
             for fn in list(getattr(self.app, "poll_hook", [])):
                 try:
                     await fn(poll)
                 except StopPropagation:
                     return
                 except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+                    await self._report_error(e, evt if evt is not None else data)
             return
         if kind == "cb":
             cb = Obj(pkt.get("src", "sys"), data, self.app)
+            evt = cb
             for fn in list(self.app.cb_hook):
                 try:
                     await fn(cb)
                 except StopPropagation:
                     return
                 except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+                    await self._report_error(e, evt if evt is not None else data)
             return
         if kind == "inline":
             inline = Obj(pkt.get("src", "sys"), data, self.app)
+            evt = inline
             for fn in list(getattr(self.app, "inline_hook", [])):
                 try:
                     await fn(inline)
                 except StopPropagation:
                     return
                 except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+                    await self._report_error(e, evt if evt is not None else data)
             return
         if kind == "update":
             update = Obj(pkt.get("src", "sys"), data, self.app)
+            evt = update
             for fn in list(getattr(self.app, "update_hook", [])):
                 try:
                     await fn(update)
                 except StopPropagation:
                     return
                 except Exception as e:
-                    self.log.error("Handler failure: %r", e)
-                    await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+                    await self._report_error(e, evt if evt is not None else data)
             return
         if kind != "member":
             return
         mem = Obj(pkt.get("src", "sys"), data, self.app)
+        evt = mem
         for fn in list(getattr(self.app, "member_hook", [])):
             try:
                 await fn(mem)

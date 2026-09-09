@@ -17,10 +17,54 @@ class KbdBuilder:
         self._rows[-1].append(btn)
         return self
 
+    def url(self, text: str, url: str, **kw: Any) -> KbdBuilder:
+        return self.btn(text, url=url, **kw)
+
+    def cb(self, text: str, data: str, **kw: Any) -> KbdBuilder:
+        return self.btn(text, callback_data=data, **kw)
+
+    def copy(self, text: str, copy_text: str, **kw: Any) -> KbdBuilder:
+        return self.btn(text, copy_text=copy_text, **kw)
+
+    def switch(self, text: str, query: str = "", current: bool = False, **kw: Any) -> KbdBuilder:
+        if current:
+            return self.btn(text, switch_inline_query_current_chat=query, **kw)
+        return self.btn(text, switch_inline_query=query, **kw)
+
+    def web(self, text: str, url: str, **kw: Any) -> KbdBuilder:
+        return self.btn(text, web_app={"url": url}, **kw)
+
     def row(self) -> KbdBuilder:
         if self._rows[-1]:
             self._rows.append([])
         return self
+
+    def add(self, *rows: list[dict[str, Any]]) -> KbdBuilder:
+        for r in rows:
+            if r:
+                self._rows[-1].extend(r)
+                self._rows.append([])
+        if self._rows and not self._rows[-1]:
+            self._rows.pop()
+        return self
+
+    def line(self, *buttons: dict[str, Any]) -> KbdBuilder:
+        for b in buttons:
+            self._rows[-1].append(b)
+        self._rows.append([])
+        return self
+
+    def join(self, other: "KbdBuilder") -> KbdBuilder:
+        rows = other.build().get("inline_keyboard", []) if other._kind == "inline" else []
+        for r in rows:
+            self._rows.append(list(r))
+        return self
+
+    def __len__(self) -> int:
+        return sum(len(r) for r in self._rows)
+
+    def __bool__(self) -> bool:
+        return any(bool(r) for r in self._rows)
 
     def build(self) -> dict[str, Any]:
         rows = [r for r in self._rows if r]
