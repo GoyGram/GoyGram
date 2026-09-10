@@ -359,6 +359,44 @@ def _u16(o: int, s: str) -> int:
     return len(s[:o].encode("utf-16-le")) // 2
 
 
+def media_duration(path: str) -> int | None:
+    ext = str(path).rsplit(".", 1)[-1].lower()
+    if ext == "wav":
+        try:
+            import wave
+            with wave.open(str(path), "rb") as wf:
+                rate = wf.getframerate() or 0
+                if rate:
+                    secs = int(round(wf.getnframes() / float(rate)))
+                    if secs > 0:
+                        return secs
+        except Exception:
+            pass
+    try:
+        import mutagen
+        audio = mutagen.File(str(path))
+        secs = int(round(float(getattr(getattr(audio, "info", None), "length", 0) or 0)))
+        if secs > 0:
+            return secs
+    except Exception:
+        pass
+    try:
+        import shutil
+        import subprocess
+        if shutil.which("ffprobe"):
+            p = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+                capture_output=True, text=True, timeout=5,
+            )
+            secs = int(round(float(p.stdout.strip() or 0)))
+            if secs > 0:
+                return secs
+    except Exception:
+        pass
+    return None
+
+
 def md_to_entities(src: str) -> tuple[str, list[dict[str, Any]]]:
     import re as _re
     _md2 = {

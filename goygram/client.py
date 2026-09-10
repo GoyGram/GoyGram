@@ -73,6 +73,8 @@ def _guess_mime(source: Any, kind: str) -> str:
     if dot > 0:
         ext = name[dot:].lower()
         if ext in _MIME_EXT:
+            if kind == "voice" and _MIME_EXT[ext] != "audio/ogg":
+                return "audio/ogg"
             return _MIME_EXT[ext]
     return _MIME_GUESS.get(kind, "application/octet-stream")
 
@@ -1065,12 +1067,31 @@ class AppCore:
             up = await self.mt.upload_file(source, file_name=file_name)
             from goygram import ext as rx
             import json as _json
+            file_hex = bytes(rx.serialize_constructor("inputFile", _json.dumps({"id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")}))).hex()
             if kind == "photo":
-                media = {"_": "inputMediaUploadedPhoto", "file": {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"]}}
+                media = {"_": "inputMediaUploadedPhoto", "file": file_hex}
             elif kind == "sticker":
-                media = {"_": "inputMediaUploadedDocument", "file": {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"]}, "mime_type": "image/webp", "attributes": [{"_": "documentAttributeSticker", "alt": "", "stickerset": {"_": "inputStickerSetEmpty"}}]}
+                st_hex = bytes(rx.serialize_constructor("documentAttributeSticker", _json.dumps({"alt": "", "stickerset": bytes(rx.serialize_constructor("inputStickerSetEmpty", _json.dumps({}))).hex()}))).hex()
+                attr_hex = [st_hex]
+                media = {"_": "inputMediaUploadedDocument", "file": file_hex, "mime_type": "image/webp", "attributes": attr_hex}
             else:
-                media = {"_": "inputMediaUploadedDocument", "file": {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"]}, "mime_type": _guess_mime(source, kind), "attributes": [{"_": "documentAttributeFilename", "file_name": up["name"]}]}
+                attrs: list[dict[str, Any]] = [{"_": "documentAttributeFilename", "file_name": up["name"]}]
+                if kind in {"audio", "voice"}:
+                    from goygram.sugar import media_duration
+                    p = source if isinstance(source, (str, Path)) else None
+                    dur = media_duration(p) if p is not None and Path(p).exists() else None
+                    if kind == "voice":
+                        attrs.append({"_": "documentAttributeAudio", "voice": True, "duration": dur or 0})
+                    else:
+                        attrs.append({"_": "documentAttributeAudio", "voice": False, "duration": dur or 0, "title": Path(p).stem if p else up["name"], "performer": ""})
+                elif kind == "video":
+                    from goygram.sugar import media_duration
+                    p = source if isinstance(source, (str, Path)) else None
+                    dur = media_duration(p) if p is not None and Path(p).exists() else None
+                    if dur:
+                        attrs.append({"_": "documentAttributeVideo", "duration": dur, "w": 0, "h": 0})
+                attr_hex = [bytes(rx.serialize_constructor(a["_"], _json.dumps({k: v for k, v in a.items() if k != "_"}))).hex() for a in attrs]
+                media = {"_": "inputMediaUploadedDocument", "file": file_hex, "mime_type": _guess_mime(source, kind), "attributes": attr_hex}
             ser = rx.serialize_constructor(media["_"], _json.dumps({k: v for k, v in media.items() if k != "_"}))
             media_raw = bytes(ser).hex()
         else:

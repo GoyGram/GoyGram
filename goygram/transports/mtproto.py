@@ -1503,11 +1503,13 @@ class MTNet:
             file_name = file_name or "file"
         file_id = secrets.randbits(63)
         parts = 0
+        md5 = hashlib.new("md5")
         try:
             while True:
                 chunk = handle.read(part_size)
                 if not chunk:
                     break
+                md5.update(chunk)
                 result = await self.call("upload.saveFilePart", file_id=file_id, file_part=parts, bytes=chunk)
                 if result is False or (isinstance(result, dict) and result.get("ok") is False):
                     raise RuntimeError("upload.saveFilePart failed")
@@ -1515,7 +1517,7 @@ class MTNet:
         finally:
             if close_source:
                 handle.close()
-        return {"id": file_id, "parts": parts, "name": file_name}
+        return {"id": file_id, "parts": parts, "name": file_name, "md5": md5.hexdigest()}
 
     async def download_file(self, location: Any, destination: Any, *, offset: int = 0, limit: int = 524288) -> int:
         if limit < 1024 or limit > 524288 or limit % 1024:
