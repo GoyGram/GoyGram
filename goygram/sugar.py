@@ -355,6 +355,107 @@ _ENT_MAP = {
 }
 
 
+def _u16(o: int, s: str) -> int:
+    return len(s[:o].encode("utf-16-le")) // 2
+
+
+def md_to_entities(src: str) -> tuple[str, list[dict[str, Any]]]:
+    import re as _re
+    _md2 = {
+        "__": "messageEntityUnderline",
+        "||": "messageEntitySpoiler",
+        "~~": "messageEntityStrike",
+    }
+    _md1 = {
+        "*": "messageEntityBold",
+        "_": "messageEntityItalic",
+        "`": "messageEntityCode",
+    }
+    out: list[str] = []
+    ents: list[dict[str, Any]] = []
+    stack: list[tuple[str, int]] = []
+    i = 0
+    n = len(src)
+
+    def cur() -> int:
+        return len("".join(out))
+
+    def close(mark: str) -> bool:
+        for k in range(len(stack) - 1, -1, -1):
+            if stack[k][0] == mark:
+                _, off = stack.pop(k)
+                ents.append({"_": _md2.get(mark) or _md1[mark], "offset": off, "length": cur() - off})
+                return True
+        return False
+
+    while i < n:
+        c = src[i]
+        if c == "\\" and i + 1 < n:
+            out.append(src[i + 1])
+            i += 2
+            continue
+        if src[i:i + 3] == "```":
+            j = src.find("```", i + 3)
+            if j == -1:
+                out.append("```")
+                i += 3
+                continue
+            head = src[i + 3:j]
+            if "\n" in head:
+                lang, _, body = head.partition("\n")
+            else:
+                lang, body = "", head
+            ents.append({"_": "messageEntityPre", "language": lang, "offset": cur(), "length": len(body)})
+            out.append(body)
+            i = j + 3
+            continue
+        two = src[i:i + 2]
+        if two in _md2:
+            if close(two):
+                pass
+            elif two in src[i + 2:]:
+                stack.append((two, cur()))
+            else:
+                out.append(two)
+            i += 2
+            continue
+        if c in _md1:
+            if close(c):
+                pass
+            elif c in src[i + 1:]:
+                stack.append((c, cur()))
+            else:
+                out.append(c)
+            i += 1
+            continue
+        if c == "[":
+            m = _re.match(r"\[([^\]]*)\]\(([^)]*)\)", src[i:])
+            if m:
+                start = cur()
+                out.append(m.group(1))
+                url = m.group(2)
+                if url.startswith("tg://user?id="):
+                    ents.append({"_": "inputMessageEntityMentionName", "user_id": int(url.split("id=", 1)[1]), "offset": start, "length": len(m.group(1))})
+                else:
+                    ents.append({"_": "messageEntityTextUrl", "url": url, "offset": start, "length": len(m.group(1))})
+                i += m.end()
+                continue
+        out.append(c)
+        i += 1
+    plain = "".join(out)
+    fixed = []
+    for e in ents:
+        o16 = _u16(e["offset"], plain)
+        l16 = _u16(e["offset"] + e["length"], plain) - o16
+        fixed.append({**e, "offset": o16, "length": l16})
+    return plain, fixed
+
+
+def md_escape(text: str) -> str:
+    import re as _re
+    return _re.sub(r"([_*\[\]()~`>#\+\-=|{}.!\\])", r"\\\1", text)
+
+
 def html_to_entities(html_src: str) -> tuple[str, list[dict[str, Any]]]:
     from html.parser import HTMLParser
 
@@ -425,7 +526,13 @@ def html_to_entities(html_src: str) -> tuple[str, list[dict[str, Any]]]:
     p = _P()
     p.feed(html_src)
     p.close()
-    return "".join(p.out), p.ents
+    plain = "".join(p.out)
+    fixed = []
+    for e in p.ents:
+        o16 = _u16(e["offset"], plain)
+        l16 = _u16(e["offset"] + e["length"], plain) - o16
+        fixed.append({**e, "offset": o16, "length": l16})
+    return plain, fixed
 
 
 __all__ = [
@@ -433,4 +540,5 @@ __all__ = [
     "parse_entities_html", "json_dumps", "progress_bar", "code_block",
     "b64e", "b64d", "rand_id", "len_s", "md5", "now_ts", "plural_ru",
     "html_to_entities", "extract_sent_message", "split_html_text",
+    "md_to_entities", "md_escape",
 ]

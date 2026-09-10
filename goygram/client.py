@@ -980,9 +980,15 @@ class AppCore:
             tl_kbd = kbd_to_tl(kbd)
             if tl_kbd is not None:
                 data["reply_markup"] = tl_kbd
-        if str(data.pop("parse_mode", "")).lower() == "html":
+        pm = str(data.pop("parse_mode", "")).lower()
+        if pm == "html":
             from goygram.sugar import html_to_entities
             plain, ents = html_to_entities(text)
+            data["entities"] = ents
+            text = plain
+        elif pm == "md":
+            from goygram.sugar import md_to_entities
+            plain, ents = md_to_entities(text)
             data["entities"] = ents
             text = plain
         data["_dispatch_chat_id"] = target
@@ -1127,9 +1133,15 @@ class AppCore:
             tl_kbd = kbd_to_tl(kbd)
             if tl_kbd is not None:
                 data["reply_markup"] = tl_kbd
-        if str(data.pop("parse_mode", "")).lower() == "html":
+        pm = str(data.pop("parse_mode", "")).lower()
+        if pm == "html":
             from goygram.sugar import html_to_entities
             plain, ents = html_to_entities(text)
+            data["entities"] = ents
+            text = plain
+        elif pm == "md":
+            from goygram.sugar import md_to_entities
+            plain, ents = md_to_entities(text)
             data["entities"] = ents
             text = plain
         return await self.mt_req("messages.editMessage", peer=peer, id=msg_id, message=text, **data)
