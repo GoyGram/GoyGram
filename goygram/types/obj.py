@@ -477,7 +477,14 @@ class Obj:
 
     async def download(self, destination: str | None = None) -> Any:
         if self.src != "bot":
-            raise RuntimeError("MTProto media download requires an upload.getFile location")
+            if destination is None:
+                import tempfile
+                import os
+                fd, path = tempfile.mkstemp(prefix="goygram-dl-")
+                os.close(fd)
+                os.unlink(path)
+                return await self.app.download_media(self.raw if isinstance(self.raw, dict) else self, path)
+            return await self.app.download_media(self.raw if isinstance(self.raw, dict) else self, destination)
         media = self.get("document") or self.get("video") or self.get("audio") or self.get("voice") or self.get("animation") or self.get("video_note") or self.get("photo")
         if isinstance(media, list):
             media = media[-1] if media else None
