@@ -201,7 +201,9 @@ class Rich:
         html = self.to_html()
         return {"html": html}
 
-    def to_tl(self) -> dict[str, Any]:
+    def to_tl(self, markdown: bool = False) -> dict[str, Any]:
+        if markdown:
+            return {"_": "inputRichMessageMarkdown", "markdown": self.build()}
         html = self.to_html()
         return {"_": "inputRichMessageHTML", "html": html}
 
