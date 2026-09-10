@@ -976,8 +976,8 @@ class AppCore:
             if asyncio.iscoroutinefunction(progress):
                 async def _prog(done: int, _t: int) -> Any:
                     return await progress(done, wrap_total or done)
-            return await self.mt.download_file(location, destination, progress=_prog)
-        return await self.mt.download_file(location, destination)
+            return await self.mt.download_file(location, destination, progress=_prog, media_source=media)
+        return await self.mt.download_file(location, destination, media_source=media)
 
     async def upload_file(self, source: Any, **kw: Any) -> Any:
         if self.mt is None:
@@ -1812,6 +1812,266 @@ class AppCore:
 
     def clear_state(self, chat_id: int | str, user_id: int | str) -> None:
         self.fsm.clear(chat_id, user_id)
+
+    async def restrict_member(self, chat_id: int | str, user_id: int | str, rights: dict[str, bool] | None = None, *, until: int | None = None, via: str | None = None) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        r = rights or {}
+        if transport == "bot":
+            data: dict[str, Any] = {"chat_id": target, "user_id": self.raw_chat(user_id)}
+            mapping = {
+                "send_messages": "can_send_messages",
+                "send_media": "can_send_media_messages",
+                "send_polls": "can_send_polls",
+                "add_members": "can_add_page_members",
+                "pin_messages": "can_pin_messages",
+                "invite_members": "can_invite_users",
+                "change_info": "can_change_info",
+            }
+            for k, bk in mapping.items():
+                if k in r:
+                    data[bk] = not bool(r[k])
+            if until is not None:
+                data["until_date"] = until
+            return await self.bot_req("restrictChatMember", **data)
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(target)
+        uper = await self.mt.resolve_peer(self.raw_chat(user_id))
+        banned = {"_": "chatBannedRights", "until_date": int(until or 0)}
+        for k, v in r.items():
+            banned[k] = bool(v)
+        return await self.mt_req("channels.editBanned", channel=peer, participant=uper, banned_rights=banned)
+
+    async def demote_member(self, chat_id: int | str, user_id: int | str, *, via: str | None = None) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        if transport == "bot":
+            data = {"chat_id": target, "user_id": self.raw_chat(user_id)}
+            for k in ("can_change_info", "can_delete_messages", "can_invite_users", "can_pin_messages", "can_promote_members", "can_restrict_members", "can_manage_video_chats", "can_manage_chat"):
+                data[k] = False
+            return await self.bot_req("promoteChatMember", **data)
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(target)
+        uper = await self.mt.resolve_peer(self.raw_chat(user_id))
+        return await self.mt_req("channels.editAdmin", channel=peer, user_id=uper, admin_rights={"_": "chatAdminRights"})
+
+    async def set_slow_mode(self, chat_id: int | str, seconds: int, *, via: str | None = None) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        if transport == "bot":
+            return await self.bot_req("setChatPermissions", chat_id=target, permissions={})
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(target)
+        return await self.mt_req("channels.editSlowMode", channel=peer, slowmode_seconds=int(seconds))
+
+    async def get_invite_links(self, chat_id: int | str, *, admin_id: int | str | None = None, revoked: bool = False, limit: int = 100, via: str | None = None) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        if transport == "bot":
+            return await self.bot_req("getChat", chat_id=target)
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(target)
+        admin = await self.mt.resolve_peer(self.raw_chat(admin_id) if admin_id is not None else self.me)
+        return await self.mt_req("messages.getExportedChatInvites", peer=peer, admin_id=admin, limit=int(limit), revoked=revoked)
+
+    async def edit_invite_link(self, chat_id: int | str, link: str, *, name: str | None = None, expires: int | None = None, member_limit: int | None = None, request_needed: bool | None = None, revoke: bool = False, via: str | None = None) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        if transport == "bot":
+            data: dict[str, Any] = {"chat_id": target, "invite_link": link}
+            if name is not None:
+                data["name"] = name
+            if expires is not None:
+                data["expire_date"] = expires
+            if member_limit is not None:
+                data["member_limit"] = member_limit
+            if request_needed is not None:
+                data["creates_join_request"] = request_needed
+            if revoke:
+                data["is_revoked"] = True
+            return await self.bot_req("editChatInviteLink", **data)
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(target)
+        data = {"peer": peer, "link": link}
+        if name is not None:
+            data["title"] = name
+        if expires is not None:
+            data["expire_date"] = expires
+        if member_limit is not None:
+            data["usage_limit"] = member_limit
+        if request_needed is not None:
+            data["request_needed"] = request_needed
+        if revoke:
+            data["revoked"] = True
+        return await self.mt_req("messages.editExportedChatInvite", **data)
+
+    async def revoke_invite_link(self, chat_id: int | str, link: str, *, via: str | None = None) -> Any:
+        return await self.edit_invite_link(chat_id, link, revoke=True, via=via)
+
+    async def approve_join_request(self, chat_id: int | str, user_id: int | str, *, via: str | None = None) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        if transport == "bot":
+            return await self.bot_req("approveChatJoinRequest", chat_id=target, user_id=self.raw_chat(user_id))
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(target)
+        uper = await self.mt.resolve_peer(self.raw_chat(user_id))
+        return await self.mt_req("messages.hideChatJoinRequest", peer=peer, user_id=uper, approved=True)
+
+    async def decline_join_request(self, chat_id: int | str, user_id: int | str, *, via: str | None = None) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        if transport == "bot":
+            return await self.bot_req("declineChatJoinRequest", chat_id=target, user_id=self.raw_chat(user_id))
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(target)
+        uper = await self.mt.resolve_peer(self.raw_chat(user_id))
+        return await self.mt_req("messages.hideChatJoinRequest", peer=peer, user_id=uper, approved=False)
+
+    async def get_stars_balance(self, *, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer("me")
+        return await self.mt_req("payments.getStarsStatus", peer=peer)
+
+    async def get_star_gifts(self, *, hash: int = 0, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        return await self.mt_req("payments.getStarGifts", hash=int(hash))
+
+    async def send_star_gift(self, chat_id: int | str, gift_id: int | str, *, message: str | None = None, hide_name: bool = False, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        invoice: dict[str, Any] = {"_": "inputInvoiceStarGift", "peer": peer, "gift_id": int(gift_id)}
+        if message is not None:
+            invoice["message"] = {"_": "textWithEntities", "text": message}
+        if hide_name:
+            invoice["hide_name"] = True
+        form = await self.mt_req("payments.getPaymentForm", invoice=invoice)
+        form_id = form.get("form_id") if isinstance(form, dict) else None
+        while form_id is None and isinstance(form, dict):
+            form = form.get("result")
+            form_id = form.get("form_id") if isinstance(form, dict) else None
+        return await self.mt_req("payments.sendStarsForm", form_id=form_id, invoice=invoice)
+
+    async def get_stories(self, chat_id: int | str, *, ids: list[int] | None = None, via: str | None = None) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        if transport == "bot":
+            return await self.bot_req("getChat", chat_id=target)
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(target)
+        if ids:
+            return await self.mt_req("stories.getStoriesByID", peer=peer, id=[int(i) for i in ids])
+        return await self.mt_req("stories.getPeerStories", peer=peer)
+
+    async def send_story(self, chat_id: int | str, media: Any, caption: str | None = None, *, pinned: bool = False, period: int = 86400, privacy: list[dict[str, Any]] | None = None, via: str | None = None, **kw: Any) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        file = await self.upload_file(media)
+        doc = _find_ctor(file, "inputMediaUploadedDocument")
+        if doc is None and isinstance(file, dict):
+            doc = file
+        data: dict[str, Any] = {"peer": peer, "media": doc, "privacy_rules": privacy or [{"_": "inputPrivacyValueAllowAll"}]}
+        if caption:
+            data["caption"] = caption
+        if pinned:
+            data["pinned"] = True
+        if period != 86400:
+            data["period"] = int(period)
+        data.update(kw)
+        return await self.mt_req("stories.sendStory", random_id=secrets.randbits(63), **data)
+
+    async def edit_story(self, chat_id: int | str, story_id: int, *, caption: str | None = None, privacy: list[dict[str, Any]] | None = None, media: Any | None = None, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        data: dict[str, Any] = {"peer": peer, "id": int(story_id)}
+        if media is not None:
+            file = await self.upload_file(media)
+            doc = _find_ctor(file, "inputMediaUploadedDocument")
+            data["media"] = doc if doc is not None else file
+        if caption is not None:
+            data["caption"] = caption
+        if privacy is not None:
+            data["privacy_rules"] = privacy
+        return await self.mt_req("stories.editStory", **data)
+
+    async def delete_story(self, chat_id: int | str, story_ids: list[int] | int, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        ids = [int(story_ids)] if isinstance(story_ids, int) else [int(i) for i in story_ids]
+        return await self.mt_req("stories.deleteStories", peer=peer, id=ids)
+
+    async def read_stories(self, chat_id: int | str, max_id: int, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        return await self.mt_req("stories.readStories", peer=peer, max_id=int(max_id))
+
+    async def get_story_views(self, chat_id: int | str, story_ids: list[int] | int, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        ids = [int(story_ids)] if isinstance(story_ids, int) else [int(i) for i in story_ids]
+        return await self.mt_req("stories.getStoriesViews", peer=peer, id=ids)
+
+    async def export_story_link(self, chat_id: int | str, story_id: int, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        return await self.mt_req("stories.exportStoryLink", peer=peer, id=int(story_id))
+
+    async def save_draft(self, chat_id: int | str, text: str, *, reply_to: int | None = None, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        data: dict[str, Any] = {"peer": peer, "message": text}
+        if reply_to is not None:
+            data["reply_to"] = {"_": "inputReplyToMessage", "reply_to_msg_id": int(reply_to)}
+        return await self.mt_req("messages.saveDraft", **data)
+
+    async def get_all_drafts(self, *, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        return await self.mt_req("messages.getAllDrafts")
+
+    async def get_scheduled_messages(self, chat_id: int | str, *, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        return await self.mt_req("messages.getScheduledMessages", peer=peer, id=[])
+
+    async def send_scheduled(self, chat_id: int | str, text: str, schedule_date: int, *, via: str | None = None, reply_to: int | None = None, kbd: Any | None = None, **kw: Any) -> Any:
+        return await self.send_msg(chat_id, text, via=via, reply_to=reply_to, kbd=kbd, schedule_date=int(schedule_date), **kw)
+
+    async def delete_scheduled(self, chat_id: int | str, msg_ids: list[int] | int, *, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        ids = [int(msg_ids)] if isinstance(msg_ids, int) else [int(i) for i in msg_ids]
+        return await self.mt_req("messages.deleteScheduledMessages", peer=peer, id=ids)
+
+    async def start_takeout(self, *, files: bool = False, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        return await self.mt_req("account.initTakeoutSession", files=files)
+
+    async def finish_takeout(self, takeout_id: int, *, success: bool = True, via: str | None = None) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        return await self.mt_req("account.finishTakeoutSession", success=success, takeout_id=takeout_id)
 
     async def close(self) -> None:
         self.stop_ev.set()

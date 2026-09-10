@@ -4,7 +4,7 @@ import asyncio, hashlib, json, os, secrets, struct, tempfile, urllib.parse, logg
 from hashlib import sha1, sha256
 from pathlib import Path
 from typing import Any
-from goygram.errors import ConnectionClosedError, FloodWaitError, GoyGramError, RPCError
+from goygram.errors import ConnectionClosedError, FileReferenceExpiredError, FloodWaitError, GoyGramError, RPCError
 
 import re as _re
 
@@ -602,6 +602,16 @@ class MTNet:
         if not isinstance(update, dict):
             return
         update_type = str(update.get("_", "unknown"))
+        if update_type == "updateChannelTooLong":
+            channel_id = update.get("channel_id")
+            if isinstance(channel_id, int):
+                if isinstance(update.get("pts"), int):
+                    self._update_channel_pts(channel_id, update["pts"])
+                asyncio.create_task(self._recover_channel_difference(channel_id))
+            return
+        if update_type in {"updateNewChannelMessage", "updateEditChannelMessage", "updateDeleteChannelMessages", "updateReadChannelInbox", "updatePinnedChannelMessages", "updateChannelMessageViews"} and isinstance(update.get("channel_id"), int):
+            if isinstance(update.get("pts"), int):
+                self._update_channel_pts(update["channel_id"], update["pts"])
         raw = update.get("raw")
         if isinstance(raw, str):
             try:
@@ -710,6 +720,178 @@ class MTNet:
                 parsed["raw_update"] = update
                 asyncio.create_task(self.bus.push("mt", parsed))
                 return
+        if update_type in {"updateUserTyping", "updateChatUserTyping", "updateChannelUserTyping", "updateEncryptedChatTyping"}:
+            action = update.get("action")
+            typing_kind = "typing"
+            if isinstance(action, dict):
+                typing_kind = "cancel" if action.get("_") == "sendMessageCancelAction" else "typing"
+            chat_id = update.get("chat_id") or update.get("channel_id") or update.get("user_id")
+            if update_type == "updateChannelUserTyping" and isinstance(update.get("channel_id"), int):
+                chat_id = -1000000000000 - update["channel_id"]
+            elif update_type == "updateChatUserTyping" and isinstance(chat_id, int):
+                chat_id = -chat_id
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "typing": typing_kind,
+                "chat_id": chat_id,
+                "from_id": update.get("user_id") or update.get("from_id"),
+                "action": action,
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type in {"updateStory", "updateReadStories", "updateStoryID", "updateStoriesStealthMode", "updateSentStoryReaction"}:
+            story = update.get("story")
+            peer = update.get("peer") or {}
+            peer_kind = peer.get("_") if isinstance(peer, dict) else None
+            owner_id = peer.get("user_id") if peer_kind == "peerUser" else -peer.get("channel_id") if peer_kind == "peerChannel" else update.get("user_id")
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "owner_id": owner_id,
+                "story_id": (story.get("id") if isinstance(story, dict) else None) or update.get("story_id") or update.get("max_id"),
+                "story": story,
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type in {"updateFolderPeers", "updateDialogFilter", "updateDialogFilterOrder", "updateDialogFilters"}:
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "folder_id": update.get("folder_id") or update.get("id"),
+                "order": update.get("order"),
+                "peers": update.get("peers"),
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type == "updateBotChatBoost":
+            boost = update.get("boost")
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "boost": boost,
+                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else None,
+                "from_id": update.get("user_id"),
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type in {"updateMessageReactions", "updateBotMessageReaction", "updateBotMessageReactions"}:
+            reactor = update.get("actor_id") or update.get("user_id") or update.get("from_id")
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else update.get("chat_id"),
+                "msg_id": update.get("msg_id") or update.get("message_id") or update.get("id"),
+                "reactions": update.get("reactions") or update.get("new_reactions"),
+                "from_id": reactor,
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type in {"updatePendingJoinRequests", "updateBotChatInviteRequester"}:
+            peer = update.get("peer") or {}
+            peer_kind = peer.get("_") if isinstance(peer, dict) else None
+            chat_id = peer.get("chat_id") if peer_kind == "peerChat" else -1000000000000 - peer.get("channel_id") if peer_kind == "peerChannel" else None
+            if isinstance(chat_id, int) and peer_kind == "peerChat":
+                chat_id = -chat_id
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "chat_id": chat_id,
+                "from_id": update.get("user_id") or update.get("actor_id"),
+                "invite": update.get("invite") or update.get("invite_about"),
+                "recent_requesters": update.get("recent_requesters"),
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type == "updateDraftMessage":
+            peer = update.get("peer") or {}
+            peer_kind = peer.get("_") if isinstance(peer, dict) else None
+            draft_chat = peer.get("user_id") if peer_kind == "peerUser" else -peer.get("chat_id") if peer_kind == "peerChat" else -1000000000000 - peer.get("channel_id") if peer_kind == "peerChannel" else None
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "chat_id": draft_chat,
+                "draft": update.get("draft"),
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type in {"updatePinnedMessages", "updatePinnedChannelMessages"}:
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else update.get("chat_id"),
+                "msg_ids": update.get("messages"),
+                "pinned": bool(update.get("pinned", True)),
+                "pts": update.get("pts"),
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type in {"updateReadHistoryInbox", "updateReadHistoryOutbox", "updateReadChannelInbox", "updateReadChannelOutbox", "updateReadMessagesContents", "updateReadChannelDiscussionInbox", "updateReadChannelDiscussionOutbox"}:
+            peer = update.get("peer") or {}
+            peer_kind = peer.get("_") if isinstance(peer, dict) else None
+            read_chat = peer.get("user_id") if peer_kind == "peerUser" else -peer.get("chat_id") if peer_kind == "peerChat" else -1000000000000 - peer.get("channel_id") if peer_kind == "peerChannel" else None
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else read_chat,
+                "max_id": update.get("max_id") or update.get("max_read_id"),
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type in {"updateUserStatus", "updateUserName", "updateUserPhone", "updateUserEmojiStatus", "updatePeerBlocked", "updatePrivacy", "updateUser"}:
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "user_id": update.get("user_id") or update.get("user") if not isinstance(update.get("user"), dict) else (update.get("user") or {}).get("id"),
+                "status": update.get("status"),
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type == "updateServiceNotification":
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "type": update.get("type"),
+                "text": update.get("message", {}).get("message", "") if isinstance(update.get("message"), dict) else update.get("message", ""),
+                "msg": update.get("message"),
+                "inbox_date": update.get("inbox_date"),
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
+        if update_type in {"updateDeleteMessages", "updateDeleteChannelMessages"}:
+            evt = {
+                "kind": "update",
+                "src": "mt",
+                "update_type": update_type,
+                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else None,
+                "msg_ids": update.get("messages"),
+                "pts": update.get("pts"),
+                "raw_update": update,
+            }
+            asyncio.create_task(self.bus.push("mt", evt))
+            return
         asyncio.create_task(self.bus.push("mt", {"kind": "update", "update_type": update_type, "raw": update}))
 
     def _dispatch_updates(self, result: Any) -> None:
@@ -771,14 +953,85 @@ class MTNet:
         if self._difference_lock.locked():
             return
         async with self._difference_lock:
-            kwargs = {key: self.cursor[key] for key in ("pts", "qts", "date", "seq") if key in self.cursor}
-            if "pts" not in kwargs:
+            if "pts" not in self.cursor:
                 return
-            try:
-                result = await self.call("updates.getDifference", **kwargs)
+            for _ in range(16):
+                kwargs = {key: self.cursor[key] for key in ("pts", "qts", "date", "seq") if key in self.cursor}
+                try:
+                    result = await self.call("updates.getDifference", **kwargs)
+                except Exception as exc:
+                    log.warning("MTProto update difference recovery failed: %s", exc)
+                    return
+                ctor = str(result.get("_", "")) if isinstance(result, dict) else ""
+                if ctor == "updates.differenceTooLong":
+                    state = await self.call("updates.getState")
+                    if isinstance(state, dict):
+                        self.update_cursor(state)
+                    return
                 self._dispatch_updates(result)
+                if ctor != "updates.differenceSlice":
+                    return
+                intermediate = result.get("intermediate_state")
+                if isinstance(intermediate, dict):
+                    self.update_cursor(intermediate)
+
+    def _channel_pts(self, channel_id: int) -> int:
+        try:
+            return int(self.cursor.get("channels", {}).get(int(channel_id), 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _update_channel_pts(self, channel_id: int, pts: int) -> None:
+        channels = dict(self.cursor.get("channels", {}))
+        channels[int(channel_id)] = int(pts)
+        self.cursor["channels"] = channels
+        if self.cursor_path is not None:
+            self.update_cursor({})
+
+    async def _recover_channel_difference(self, channel_id: int, force: bool = False) -> None:
+        peer = None
+        try:
+            peer = await self.resolve_peer(-1000000000000 - int(channel_id))
+        except Exception:
+            pass
+        if not isinstance(peer, dict) or peer.get("_") != "inputPeerChannel":
+            return
+        pts = self._channel_pts(channel_id)
+        if pts <= 0:
+            return
+        filter_ctor = {"_": "channelMessagesFilterEmpty"}
+        for _ in range(16):
+            try:
+                result = await self.call("updates.getChannelDifference", channel=peer, filter=filter_ctor, pts=pts, limit=100, force=force)
             except Exception as exc:
-                log.warning("MTProto update difference recovery failed: %s", exc)
+                log.warning("MTProto channel difference recovery failed for %s: %s", channel_id, exc)
+                return
+            ctor = str(result.get("_", "")) if isinstance(result, dict) else ""
+            if ctor == "updates.channelDifferenceTooLong":
+                dialog = result.get("dialog")
+                if isinstance(dialog, dict) and isinstance(dialog.get("pts"), int):
+                    self._update_channel_pts(channel_id, dialog["pts"])
+                return
+            new_pts = result.get("pts") if isinstance(result, dict) else None
+            if ctor == "updates.channelDifference" and isinstance(new_pts, int):
+                self._update_channel_pts(channel_id, new_pts)
+            messages = result.get("messages") if isinstance(result, dict) else None
+            if isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, dict):
+                        parsed = self._parse_new_message(message)
+                        if parsed is not None:
+                            parsed["update_type"] = "updateNewChannelMessage"
+                            parsed["raw_update"] = message
+                            asyncio.create_task(self.bus.push("mt", parsed))
+            other = result.get("other_updates") if isinstance(result, dict) else None
+            if isinstance(other, list):
+                for update in other:
+                    self._dispatch_update(update)
+            if ctor != "updates.channelDifference" or not result.get("pending_updates", []):
+                return
+            if isinstance(new_pts, int):
+                pts = new_pts
 
     def _ingest_entities(self, result: dict[str, Any]) -> None:
         for key, kind in (("users", "user"), ("chats", "chat")):
@@ -1386,6 +1639,20 @@ class MTNet:
         rest = parts[1:]
         return ns + '.' + rest[0] + ''.join(p[:1].upper() + p[1:] for p in rest[1:])
 
+    def _takeout_encode(self, v: Any) -> Any:
+        from goygram import ext as _ext
+        if isinstance(v, (list, tuple)):
+            return [self._takeout_encode(item) for item in v]
+        if isinstance(v, dict) and '_' in v:
+            ctor_name = v.get('_')
+            inner = {k: self._takeout_encode(v2) for k, v2 in v.items() if k != '_'}
+            return _ext.serialize_constructor(ctor_name, json.dumps(inner)).hex()
+        if isinstance(v, (bytes, bytearray)):
+            return v.hex()
+        if isinstance(v, memoryview):
+            return bytes(v).hex()
+        return v
+
     def _build_body(self, act:str, obj:dict[str,Any])->bytes:
         import json
         from goygram import ext as _ext
@@ -1532,7 +1799,28 @@ class MTNet:
                 handle.close()
         return {"id": file_id, "parts": parts, "name": file_name, "md5": md5.hexdigest()}
 
-    async def download_file(self, location: Any, destination: Any, *, offset: int = 0, limit: int = 524288, progress: Any = None) -> int:
+    async def _refresh_file_reference(self, source: Any, location: dict[str, Any]) -> dict[str, Any]:
+        document = None
+        if isinstance(source, dict):
+            document = source.get("document") if isinstance(source.get("document"), dict) else source
+            if document is not None and document.get("_") != "document":
+                media = source.get("media")
+                document = media.get("document") if isinstance(media, dict) else None
+        if not isinstance(document, dict) or not isinstance(document.get("id"), int):
+            raise FileReferenceExpiredError("file reference expired and source is unknown")
+        result = await self.call("messages.getMessages", id=[{"_": "inputDocument", "id": document.get("id"), "access_hash": document.get("access_hash") or 0, "file_reference": b""}])
+        body = result.get("result") if isinstance(result, dict) and isinstance(result.get("result"), dict) else result
+        messages = body.get("messages") if isinstance(body, dict) else None
+        fresh = next((item for item in messages or [] if isinstance(item, dict) and item.get("id") == document.get("id")), None) if isinstance(messages, list) else None
+        doc = fresh.get("media", {}).get("document") if isinstance(fresh, dict) and isinstance(fresh.get("media"), dict) else None
+        if isinstance(doc, dict) and isinstance(doc.get("file_reference"), (bytes, bytearray)):
+            self._ingest_entities(body if isinstance(body, dict) else {})
+            updated = dict(location)
+            updated["file_reference"] = bytes(doc["file_reference"])
+            return updated
+        raise FileReferenceExpiredError("file reference refresh returned no document")
+
+    async def download_file(self, location: Any, destination: Any, *, offset: int = 0, limit: int = 524288, progress: Any = None, media_source: Any = None) -> int:
         if limit < 1024 or limit > 524288 or limit % 1024:
             raise ValueError("limit must be a multiple of 1024 between 1024 and 524288")
         close_target = False
@@ -1548,10 +1836,18 @@ class MTNet:
             handle = destination
         total = 0
         migration_attempted = False
+        reference_refresh_attempted = False
+        refresh_source = media_source
         try:
             while True:
                 try:
                     response = await self.call("upload.getFile", location=location, offset=offset + total, limit=limit)
+                except FileReferenceExpiredError:
+                    if reference_refresh_attempted or refresh_source is None:
+                        raise
+                    reference_refresh_attempted = True
+                    location = await self._refresh_file_reference(refresh_source, location)
+                    continue
                 except GoyGramError as exc:
                     match = _re.search(r"FILE_MIGRATE_(\d+)", str(exc).upper())
                     if match is None or migration_attempted:
@@ -1813,6 +2109,20 @@ class MTNet:
         retry_budget = int(kw.pop("retry", 3))
         dispatch_chat_id = kw.pop("_dispatch_chat_id", None)
         dispatch_message_text = kw.pop("_dispatch_message_text", None)
+        takeout_id = kw.pop("takeout_id", None)
+        if normalized.startswith("account.initTakeoutSession") or normalized == "invokeWithTakeout":
+            takeout_id = None
+        if takeout_id is not None:
+            from goygram import ext as _ext
+            inner = {k: v for k, v in kw.items() if k not in ("_dispatch_chat_id", "_dispatch_message_text")}
+            inner = {k: self._takeout_encode(v) for k, v in inner.items()}
+            inner_body = bytes(_ext.serialize_method(normalized, json.dumps(inner)))
+            payload = {"act": "invokeWithTakeout", "takeout_id": int(takeout_id), "query": inner_body.hex()}
+            if dispatch_chat_id is not None:
+                payload["_dispatch_chat_id"] = dispatch_chat_id
+            if dispatch_message_text is not None:
+                payload["_dispatch_message_text"] = dispatch_message_text
+            return await self._rpc_call(**payload)
         if normalized.startswith("messages.") and "peer" in kw and not isinstance(kw["peer"], (bytes, bytearray, memoryview, dict)):
             kw = dict(kw)
             kw["peer"] = await self.resolve_peer(kw["peer"])
