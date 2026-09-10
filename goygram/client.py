@@ -737,9 +737,26 @@ class AppCore:
     def help(self) -> None:
         print_methods(self)
 
+    _MT_NS = frozenset({"account", "auth", "bots", "channels", "contacts", "folders", "help", "langpack", "messages", "payments", "phone", "premium", "sms", "stats", "stickers", "stories", "upload", "users"})
+
     def __getattr__(self, name: str) -> Any:
         if self.api is not None and hasattr(self.api, name):
             return getattr(self.api, name)
+        if name[:1].isupper():
+            lower = "".join(c if c.islower() or not c.isalpha() else "_" + c.lower() for c in name).lstrip("_")
+            for candidate in (lower, "mt_" + lower):
+                try:
+                    obj = object.__getattribute__(self, candidate)
+                    if callable(obj):
+                        return obj
+                except AttributeError:
+                    pass
+            if lower.partition("_")[0] in self._MT_NS and self.mt is not None:
+                return self._dynamic_method("mt_" + lower)
+            if self.bot is not None:
+                return self._dynamic_method(lower)
+            if self.mt is not None and "." in self._mt_method_name(lower):
+                return self._dynamic_method("mt_" + lower)
         if name.startswith("mt_") and self.mt is not None:
             return self._dynamic_method(name)
         if not name.startswith("mt_") and not name.startswith("_") and self.bot is not None:
