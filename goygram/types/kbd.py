@@ -120,6 +120,17 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
             fields["style"] = ser("keyboardButtonStyle", {"icon": int(icon)})
         return ser("keyboardInlineButton", fields)
 
+    def reply_btn(b: dict[str, Any]) -> dict[str, Any]:
+        t: dict[str, Any] = {"_": "buttonTypeDefault"}
+        if b.get("request_contact"):
+            t = {"_": "buttonTypeRequestPhone"}
+        elif b.get("request_location"):
+            t = {"_": "buttonTypeRequestGeoLocation"}
+        elif b.get("request_poll"):
+            t = {"_": "buttonTypeRequestPoll"}
+        out = {"_": "keyboardButton", "text": str(b.get("text", "")), "type": t}
+        return out
+
     if isinstance(kbd, KbdBuilder):
         kbd = kbd.build()
     if not isinstance(kbd, dict):
@@ -128,7 +139,27 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
         return kbd
     rows_raw = kbd.get("inline_keyboard")
     if rows_raw is None:
-        return None
+        rows_raw = kbd.get("keyboard")
+        if rows_raw is None:
+            return None
+        return {
+            "_": "replyKeyboardMarkup",
+            "rows": [
+                {
+                    "_": "keyboardButtonRow",
+                    "buttons": [
+                        b if isinstance(b, dict) and b.get("_") else reply_btn(dict(b) if isinstance(b, dict) else {"text": str(b)})
+                        for b in row
+                    ],
+                }
+                for row in rows_raw
+                if isinstance(row, (list, tuple))
+            ],
+            "resize": bool(kbd.get("resize_keyboard", kbd.get("resize"))),
+            "single_use": bool(kbd.get("single_use")),
+            "selective": bool(kbd.get("selective")),
+            "persistent": bool(kbd.get("persistent")),
+        }
     rows = [
         ser("keyboardInlineButtonRow", {"buttons": [btn(b) for b in row]})
         for row in rows_raw
