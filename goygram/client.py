@@ -938,9 +938,11 @@ class AppCore:
             return {"_": "inputPhotoFileLocation", "id": photo["id"], "access_hash": photo["access_hash"], "file_reference": bytes(ref), "thumb_size": photo.get("largest_size", "")}
         return None
 
-    async def download_media(self, source: Any, destination: str, *, via: str | None = None) -> Any:
+    async def download_media(self, source: Any, destination: str, *, via: str | None = None, progress: Any = None) -> Any:
         media = None
         src_kind = None
+        if isinstance(source, tuple) and len(source) == 2 and isinstance(source[0], (int, str)) and isinstance(source[1], int):
+            source = await self.get_msg(source[0], source[1], via=via)
         if isinstance(source, dict):
             src_kind = source.get("src")
             media = source.get("media") if isinstance(source.get("media"), dict) else source
@@ -961,6 +963,20 @@ class AppCore:
         location = self._media_location(media) or self._media_location(source if isinstance(source, dict) else getattr(source, "raw", None))
         if location is None:
             raise ValueError("no downloadable media found in source")
+        if progress is not None:
+            size = 0
+            doc = media.get("document") if isinstance(media, dict) and isinstance(media.get("document"), dict) else media
+            if isinstance(doc, dict):
+                size = int(doc.get("size") or 0)
+            wrap_total = size
+
+            def _prog(done: int, _t: int) -> None:
+                progress(done, wrap_total or done)
+
+            if asyncio.iscoroutinefunction(progress):
+                async def _prog(done: int, _t: int) -> Any:
+                    return await progress(done, wrap_total or done)
+            return await self.mt.download_file(location, destination, progress=_prog)
         return await self.mt.download_file(location, destination)
 
     async def upload_file(self, source: Any, **kw: Any) -> Any:

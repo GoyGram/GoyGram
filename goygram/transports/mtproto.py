@@ -1489,7 +1489,7 @@ class MTNet:
         for item in value.values():
             self._annotate_short_sent(item, chat_id, message_text)
 
-    async def upload_file(self, source: Any, *, file_name: str | None = None, part_size: int = 524288) -> dict[str, Any]:
+    async def upload_file(self, source: Any, *, file_name: str | None = None, part_size: int = 524288, progress: Any = None) -> dict[str, Any]:
         if part_size < 1024 or part_size > 524288 or part_size % 1024:
             raise ValueError("part_size must be a multiple of 1024 between 1024 and 524288")
         close_source = False
@@ -1504,6 +1504,13 @@ class MTNet:
         file_id = secrets.randbits(63)
         parts = 0
         md5 = hashlib.new("md5")
+        total_size = 0
+        if isinstance(source, (str, os.PathLike)):
+            try:
+                total_size = Path(source).stat().st_size
+            except OSError:
+                total_size = 0
+        sent = 0
         try:
             while True:
                 chunk = handle.read(part_size)
@@ -1514,12 +1521,18 @@ class MTNet:
                 if result is False or (isinstance(result, dict) and result.get("ok") is False):
                     raise RuntimeError("upload.saveFilePart failed")
                 parts += 1
+                sent += len(chunk)
+                if progress is not None:
+                    if asyncio.iscoroutinefunction(progress):
+                        await progress(sent, total_size or sent)
+                    else:
+                        progress(sent, total_size or sent)
         finally:
             if close_source:
                 handle.close()
         return {"id": file_id, "parts": parts, "name": file_name, "md5": md5.hexdigest()}
 
-    async def download_file(self, location: Any, destination: Any, *, offset: int = 0, limit: int = 524288) -> int:
+    async def download_file(self, location: Any, destination: Any, *, offset: int = 0, limit: int = 524288, progress: Any = None) -> int:
         if limit < 1024 or limit > 524288 or limit % 1024:
             raise ValueError("limit must be a multiple of 1024 between 1024 and 524288")
         close_target = False
@@ -1570,6 +1583,11 @@ class MTNet:
                     break
                 handle.write(chunk)
                 total += len(chunk)
+                if progress is not None:
+                    if asyncio.iscoroutinefunction(progress):
+                        await progress(total, 0)
+                    else:
+                        progress(total, 0)
                 if len(chunk) < limit:
                     break
         except Exception:
