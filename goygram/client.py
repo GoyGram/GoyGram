@@ -238,6 +238,69 @@ class _HistoryIter:
         return item
 
 
+class _SearchIter:
+    __slots__ = ("app", "chat_id", "query", "limit", "batch", "from_user", "_offset_id", "_left", "_buf")
+
+    def __init__(self, app: "AppCore", chat_id: int | str, query: str, limit: int, batch: int, from_user: int | None) -> None:
+        self.app = app
+        self.chat_id = chat_id
+        self.query = query
+        self.limit = int(limit) if limit and int(limit) > 0 else 0
+        self.batch = max(1, min(int(batch), 100))
+        self.from_user = from_user
+        self._offset_id = 0
+        self._left = self.limit
+        self._buf: list[Any] = []
+
+    def __aiter__(self) -> "_SearchIter":
+        return self
+
+    async def _fetch(self) -> list[Any]:
+        app = self.app
+        peer = await app.mt.resolve_peer(app.raw_chat(self.chat_id))
+        data: dict[str, Any] = {"q": self.query}
+        if self.from_user is not None:
+            data["from_id"] = await app.mt.resolve_peer(app.raw_chat(self.from_user))
+        raw = await app.mt_req(
+            "messages.search",
+            peer=peer,
+            filter={"_": "inputMessagesFilterEmpty"},
+            min_date=0,
+            max_date=0,
+            offset_id=self._offset_id,
+            add_offset=0,
+            limit=min(self.batch, self._left) if self._left else self.batch,
+            max_id=0,
+            min_id=0,
+            hash=0,
+            **data,
+        )
+        res = raw.get("result", raw) if isinstance(raw, dict) else {}
+        msgs = res.get("messages") if isinstance(res, dict) else None
+        return list(msgs) if isinstance(msgs, list) else []
+
+    async def __anext__(self) -> Any:
+        if self._buf:
+            item = self._buf.pop(0)
+            if self._left:
+                self._left -= 1
+            return item
+        if self._left == 0 and self.limit:
+            raise StopAsyncIteration
+        msgs = await self._fetch()
+        if not msgs:
+            raise StopAsyncIteration
+        for m in msgs:
+            mid = m.get("id") if isinstance(m, dict) else None
+            if mid is not None:
+                self._offset_id = int(mid)
+        self._buf = list(msgs)
+        item = self._buf.pop(0)
+        if self._left:
+            self._left -= 1
+        return item
+
+
 class _DialogIter:
     __slots__ = ("app", "limit", "batch", "folder", "_offset_date", "_offset_id", "_left", "_buf", "_started")
 
@@ -1465,6 +1528,62 @@ class AppCore:
 
     def iter_dialogs(self, limit: int = 0, batch: int = 100, folder: int = 0) -> "_DialogIter":
         return _DialogIter(self, limit, batch, folder)
+
+    async def search_messages(self, chat_id: int | str, query: str, *, limit: int = 50, from_user: int | None = None, offset_id: int = 0, via: str | None = None) -> list[Any]:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        target = self.raw_chat(chat_id)
+        peer = await self.mt.resolve_peer(target)
+        data: dict[str, Any] = {"q": query}
+        if from_user is not None:
+            data["from_id"] = await self.mt.resolve_peer(self.raw_chat(from_user))
+        res = await self.mt_req(
+            "messages.search",
+            peer=peer,
+            filter={"_": "inputMessagesFilterEmpty"},
+            min_date=0,
+            max_date=0,
+            offset_id=offset_id,
+            add_offset=0,
+            limit=min(limit, 100) if limit else 50,
+            max_id=0,
+            min_id=0,
+            hash=0,
+            **data,
+        )
+        messages = None
+        if isinstance(res, dict):
+            inner = res.get("result") if isinstance(res.get("result"), dict) else res
+            messages = inner.get("messages") if isinstance(inner, dict) else None
+        return messages or []
+
+    def iter_search(self, chat_id: int | str, query: str, *, limit: int = 0, batch: int = 100, from_user: int | None = None) -> "_SearchIter":
+        return _SearchIter(self, chat_id, query, limit, batch, from_user)
+
+    async def vote_poll(self, chat_id: int | str, msg_id: int, options: list[int]) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        opts = [bytes([int(o)]) for o in options]
+        return await self.mt_req("messages.sendVote", peer=peer, msg_id=int(msg_id), options=opts)
+
+    async def get_forum_topics(self, chat_id: int | str, *, query: str | None = None, limit: int = 100, offset_topic: int = 0, via: str | None = None) -> Any:
+        transport = self.via(chat_id, via)
+        target = self.raw_chat(chat_id)
+        if transport == "bot":
+            data: dict[str, Any] = {"chat_id": target, "limit": min(limit, 100)}
+            if query:
+                data["search_query"] = query
+            return await self.bot_req("getForumTopics", **data)
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await self.mt.resolve_peer(target)
+        data = {"peer": peer, "offset_date": 0, "offset_id": 0, "offset_topic": int(offset_topic), "limit": min(limit, 100)}
+        if query:
+            data["q"] = query
+        else:
+            data["q"] = ""
+        return await self.mt_req("messages.getForumTopics", **data)
 
     async def get_chat_info(self, chat_id: int | str, *, full: bool = False, via: str | None = None) -> Any:
         target = self.raw_chat(chat_id)
