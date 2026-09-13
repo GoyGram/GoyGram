@@ -536,8 +536,11 @@ def html_to_entities(html_src: str) -> tuple[str, list[dict[str, Any]]]:
                         prev["language"] = at["class"][9:]
                     return
             ent = {"_": ctor}
-            if tag == "pre" and at.get("class", "").startswith("language-"):
-                ent["language"] = at["class"][9:]
+            if tag == "pre":
+                lang = str(at.get("class") or "")
+                ent["language"] = lang[9:] if lang.startswith("language-") else ""
+            elif tag == "blockquote" and str(at.get("expandable", "")).lower() == "true":
+                ent["collapsed"] = True
             self.stack.append((tag, len("".join(self.out)), ent))
 
         def handle_endtag(self, tag: str) -> None:
