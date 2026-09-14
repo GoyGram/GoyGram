@@ -1,6 +1,6 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
-import asyncio, hashlib, json, os, secrets, struct, tempfile, urllib.parse, logging
+import asyncio, hashlib, json, os, secrets, struct, tempfile, time, urllib.parse, logging
 from hashlib import sha1, sha256
 from pathlib import Path
 from typing import Any
@@ -314,7 +314,11 @@ class MTNet:
         self.dc_auth_keys: dict[int, dict[str, bytes]] = {}
         self._entity_flush_hook: Any | None = None
         self._entity_cache_dirty = False
-        self._entity_limit = 4096
+        self._entity_atime: dict[tuple[str, int], float] = {}
+        self._entity_weights: dict[tuple[str, int], float] = {}
+        self._user_limit = 3000
+        self._chat_limit = 1500
+        self._entity_bytes_limit = 512 * 1024
         self.cursor_path = Path(cursor_path) if cursor_path is not None else None
         self.cursor: dict[str, int] = {}
         self._difference_lock = asyncio.Lock()
@@ -1050,28 +1054,68 @@ class MTNet:
                 username = item.get("username")
                 if isinstance(username, str) and username:
                     self.entity_usernames[username.casefold()] = item
+                self._entity_atime.setdefault((kind, int(item["id"])), time.monotonic())
         self._entity_cache_maybe_flush()
 
+    def _entity_keep_fields(self, entity: dict[str, Any]) -> dict[str, Any]:
+        return {k: entity[k] for k in ("_", "id", "access_hash", "username") if k in entity}
+
+    def _entity_touch(self, key: tuple[str, int]) -> None:
+        self._entity_atime[key] = time.monotonic()
+
+    def _entity_pinned(self, kind: str, entity: dict[str, Any]) -> bool:
+        uid = entity.get("id")
+        if not isinstance(uid, int):
+            return False
+        if kind == "user" and uid == getattr(self, "self_id", None):
+            return True
+        return bool(self._entity_weights.get((kind, uid)))
+
     def _entity_cache_snapshot(self) -> dict[str, Any]:
-        users = []
-        chats = []
+        users: list[dict[str, Any]] = []
+        chats: list[dict[str, Any]] = []
         for (kind, _id), entity in self.entities.items():
             if kind == "user":
                 users.append(entity)
             else:
                 chats.append(entity)
-        limit = self._entity_limit
-        if len(users) > limit:
-            users = users[-limit:]
-        if len(chats) > limit:
-            chats = chats[-limit:]
-        return {"users": users, "chats": chats}
+
+        def rank(kind: str, entity: dict[str, Any]) -> tuple[int, float]:
+            eid = int(entity.get("id") or 0)
+            pinned = self._entity_pinned(kind, entity)
+            weight = self._entity_weights.get((kind, eid), 1.0)
+            age = time.monotonic() - self._entity_atime.get((kind, eid), 0.0)
+            return (0 if pinned else 1, -weight / (1.0 + age / 3600.0))
+
+        users.sort(key=lambda e: rank("user", e))
+        chats.sort(key=lambda e: rank("chat", e))
+        kept_users = users[: self._user_limit]
+        kept_chats = chats[: self._chat_limit]
+        total = 0
+        kept_users_out = []
+        for entity in kept_users:
+            if total >= self._entity_bytes_limit:
+                break
+            item = self._entity_keep_fields(entity)
+            total += len(str(item))
+            kept_users_out.append(item)
+        kept_chats_out = []
+        for entity in kept_chats:
+            if total >= self._entity_bytes_limit:
+                break
+            item = self._entity_keep_fields(entity)
+            total += len(str(item))
+            kept_chats_out.append(item)
+        return {"users": kept_users_out, "chats": kept_chats_out}
 
     def _entity_cache_restore(self, data: dict[str, Any]) -> None:
         if not isinstance(data, dict):
             return
         self._ingest_entities(data)
         self._entity_cache_dirty = False
+        now = time.monotonic()
+        for key in self.entities:
+            self._entity_atime.setdefault(key, now)
 
     def _entity_cache_maybe_flush(self) -> None:
         self._entity_cache_dirty = True
@@ -1562,6 +1606,7 @@ class MTNet:
                     raise ValueError('username peer requires explicit entity resolution')
                 chat_id = int(entity["id"])
                 access_hash = entity.get("access_hash", 0)
+                self._entity_touch(("user", chat_id))
         if isinstance(chat_id, int):
             if chat_id == 0:
                 return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
@@ -1571,6 +1616,7 @@ class MTNet:
                 entity = self.entities.get(("user", chat_id))
                 if entity is not None:
                     access_hash = access_hash or entity.get("access_hash", 0)
+                    self._entity_touch(("user", chat_id))
                 if not access_hash:
                     raise ValueError('user peer requires a non-zero access_hash')
                 return bytes(rx.serialize_constructor('inputPeerUser', json.dumps({'user_id': chat_id, 'access_hash': int(access_hash)})))
@@ -1580,6 +1626,7 @@ class MTNet:
                 entity = self.entities.get(("chat", channel_id))
                 if entity is not None:
                     access_hash = access_hash or entity.get("access_hash", 0)
+                    self._entity_touch(("chat", channel_id))
                 if not access_hash:
                     raise ValueError('channel peer requires a non-zero access_hash')
                 return bytes(rx.serialize_constructor('inputPeerChannel', json.dumps({'channel_id': channel_id, 'access_hash': int(access_hash)})))
@@ -1600,8 +1647,10 @@ class MTNet:
                 entity = self.entity_usernames.get(username)
             if entity is None:
                 raise ValueError('username resolution returned no entity')
+            resolved_id = int(entity["id"])
+            self._entity_touch(("user", resolved_id))
             obj = dict(obj)
-            obj["chat_id"] = int(entity["id"])
+            obj["chat_id"] = resolved_id
             obj["access_hash"] = entity.get("access_hash", 0)
         if isinstance(chat_id, int) and chat_id > 0 and chat_id != getattr(self, "self_id", None):
             entity = self.entities.get(("user", chat_id))
