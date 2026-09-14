@@ -918,6 +918,8 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
             return {"source": "vault"}
         try:
             data = _read_vault(vault, Path(name).name)
+            if not isinstance(data, dict):
+                raise ValueError("vault payload is not a dict")
             auth_key = data.get("auth_key")
             if isinstance(auth_key, str) and auth_key:
                 app.mt.auth_key = _extract_auth_blob({"auth_key": auth_key})
@@ -940,6 +942,17 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                 app.self_id = uid
                 app.mt.self_id = uid
                 log.info("Self ID resolved: %s", uid)
+            app.mt._entity_cache_restore(data.get("entities") or {})
+            dc_keys = data.get("dc_auth_keys")
+            if isinstance(dc_keys, dict):
+                for dc_id, entry in dc_keys.items():
+                    try:
+                        key = bytes.fromhex(entry["key"]) if isinstance(entry, dict) else None
+                        salt = bytes.fromhex(entry.get("salt", "")) if isinstance(entry, dict) and entry.get("salt") else None
+                        if key:
+                            app.mt.dc_auth_keys[int(dc_id)] = {"key": key, "salt": salt or b"\x00" * 8}
+                    except Exception:
+                        continue
             session.data = data
             log.info("Vault %s detected. Session restored from vault into MT runtime.", vault.name)
             return {"source": "vault"}

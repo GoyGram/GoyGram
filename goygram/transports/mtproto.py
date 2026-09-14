@@ -311,6 +311,10 @@ class MTNet:
         self._seen_server_msg_ids: set[int] = set()
         self.entities: dict[tuple[str, int], dict[str, Any]] = {}
         self.entity_usernames: dict[str, dict[str, Any]] = {}
+        self.dc_auth_keys: dict[int, dict[str, bytes]] = {}
+        self._entity_flush_hook: Any | None = None
+        self._entity_cache_dirty = False
+        self._entity_limit = 4096
         self.cursor_path = Path(cursor_path) if cursor_path is not None else None
         self.cursor: dict[str, int] = {}
         self._difference_lock = asyncio.Lock()
@@ -1046,6 +1050,38 @@ class MTNet:
                 username = item.get("username")
                 if isinstance(username, str) and username:
                     self.entity_usernames[username.casefold()] = item
+        self._entity_cache_maybe_flush()
+
+    def _entity_cache_snapshot(self) -> dict[str, Any]:
+        users = []
+        chats = []
+        for (kind, _id), entity in self.entities.items():
+            if kind == "user":
+                users.append(entity)
+            else:
+                chats.append(entity)
+        limit = self._entity_limit
+        if len(users) > limit:
+            users = users[-limit:]
+        if len(chats) > limit:
+            chats = chats[-limit:]
+        return {"users": users, "chats": chats}
+
+    def _entity_cache_restore(self, data: dict[str, Any]) -> None:
+        if not isinstance(data, dict):
+            return
+        self._ingest_entities(data)
+        self._entity_cache_dirty = False
+
+    def _entity_cache_maybe_flush(self) -> None:
+        self._entity_cache_dirty = True
+        hook = self._entity_flush_hook
+        if hook is None:
+            return
+        try:
+            hook()
+        except Exception:
+            pass
 
     def _parse_phone_code_hash(self, result:bytes)->str|None:
         try:

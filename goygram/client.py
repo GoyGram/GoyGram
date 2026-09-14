@@ -465,6 +465,7 @@ class AppCore:
                 self.mt._api_id = int(api_id)
             self._init_tl_schema()
             self._load_vault_from_disk(session_name, api_id, api_hash)
+            self.mt._entity_flush_hook = self._entity_cache_schedule
         self.fsm = FSMEngine(backend=fsm_backend, on_change=fsm_on_change)
         self.disp = Disp(self, self.bus)
         self._conv: dict[tuple, asyncio.Future] = {}
@@ -522,6 +523,8 @@ class AppCore:
         vault_key = Path(session_name).name
         try:
             data = _read_vault(vault, vault_key)
+            if not isinstance(data, dict):
+                return
             auth_key = data.get("auth_key")
             if auth_key and self.mt is not None:
                 self.mt.auth_key = _extract_auth_blob({"auth_key": auth_key})
@@ -542,8 +545,60 @@ class AppCore:
             if uid and uid != 0 and self.mt is not None:
                 self.self_id = uid
                 self.mt.self_id = uid
+            if self.mt is not None:
+                self.mt._entity_cache_restore(data.get("entities") or {})
+                dc_keys = data.get("dc_auth_keys")
+                if isinstance(dc_keys, dict):
+                    for dc_id, entry in dc_keys.items():
+                        try:
+                            key = bytes.fromhex(entry["key"]) if isinstance(entry, dict) else None
+                            salt = bytes.fromhex(entry.get("salt", "")) if isinstance(entry, dict) and entry.get("salt") else None
+                            if key:
+                                self.mt.dc_auth_keys[int(dc_id)] = {"key": key, "salt": salt or b"\x00" * 8}
+                        except Exception:
+                            continue
         except Exception:
             pass
+
+    def _entity_cache_flush(self, final: bool = False) -> None:
+        if self.mt is None or self.session is None:
+            return
+        if not final and not getattr(self.mt, "_entity_cache_dirty", False):
+            return
+        try:
+            from goygram.security import _read_vault, _write_vault
+            vault = self.session.path if getattr(self.session, "path", None) is not None else Path(f"{self.session_name}.vault")
+            if vault is None:
+                return
+            try:
+                data = _read_vault(vault, Path(self.session_name).name) or {}
+            except Exception:
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+            snapshot = self.mt._entity_cache_snapshot()
+            if snapshot.get("users") or snapshot.get("chats") or self.mt.dc_auth_keys:
+                data["entities"] = snapshot
+                data["dc_auth_keys"] = {str(dc_id): {"key": entry["key"].hex(), "salt": (entry.get("salt") or b"").hex()} for dc_id, entry in self.mt.dc_auth_keys.items()}
+                _write_vault(vault, data, Path(self.session_name).name)
+                self.mt._entity_cache_dirty = False
+        except Exception:
+            pass
+
+    def _entity_cache_schedule(self) -> None:
+        if getattr(self, "_entity_cache_flushing_soon", False):
+            return
+        self._entity_cache_flushing_soon = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._entity_cache_flushing_soon = False
+            return
+        loop.call_later(30.0, self._entity_cache_flush_now)
+
+    def _entity_cache_flush_now(self) -> None:
+        self._entity_cache_flushing_soon = False
+        self._entity_cache_flush(final=False)
 
     def _reg(self, host: list[Fn], fn: Fn | None, filt: Filter | None, once: bool = False):
         if isinstance(fn, Filter):
@@ -983,6 +1038,18 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         return await self.mt.upload_file(source, **kw)
+
+    async def charged_upload(self, source: Any, **kw: Any) -> Any:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        from goygram.transports.charged import charged_upload
+        return await charged_upload(self.mt, source, **kw)
+
+    async def charged_download(self, location: Any, destination: Any, **kw: Any) -> int:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        from goygram.transports.charged import charged_download
+        return await charged_download(self.mt, location, destination, **kw)
 
     async def send_msg(self, chat_id: int | str, text: str, *, via: str | None = None, reply_to: int | None = None, kbd: Any | None = None, **kw: Any) -> Any:
         transport = self.via(chat_id, via)
@@ -2075,6 +2142,10 @@ class AppCore:
 
     async def close(self) -> None:
         self.stop_ev.set()
+        try:
+            self._entity_cache_flush(final=True)
+        except Exception:
+            pass
         await self.fsm.stop()
         await self.disp.close()
         if self.bot:
