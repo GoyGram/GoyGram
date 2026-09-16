@@ -968,6 +968,14 @@ class MTNet:
                 try:
                     result = await self.call("updates.getDifference", **kwargs)
                 except Exception as exc:
+                    if "PERSISTENT_TIMESTAMP_INVALID" in str(exc) or "PERSISTENT_TIMESTAMP_OUTDATED" in str(exc):
+                        try:
+                            state = await self.call("updates.getState")
+                            if isinstance(state, dict):
+                                self.update_cursor(state)
+                            continue
+                        except Exception as state_exc:
+                            log.warning("MTProto state resync failed: %s", state_exc)
                     log.warning("MTProto update difference recovery failed: %s", exc)
                     return
                 ctor = str(result.get("_", "")) if isinstance(result, dict) else ""
