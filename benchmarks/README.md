@@ -4,25 +4,27 @@ Reproducible comparisons of GoyGram against the major Python Telegram libraries.
 
 ## What is measured
 
-1. **AES-256-IGE throughput and latency** — the core MTProto crypto operation (packet encryption).
-2. **TL codec throughput** — serializing a `messages.sendMessage` request and deserializing a `message` object.
-3. **AES-256-GCM throughput** — the vault encryption operation.
-4. **Cold import time** — how long the library takes to load.
-5. **Memory footprint** — resident set size after import.
+1. **AES-256-IGE throughput and latency** — MTProto packet encryption.
+2. **TL codec** — native PyDict `dumps`/`loads` of a realistic `updateNewMessage` (text, forward, inline buttons) plus `messages.sendMessage` serialize. Latency percentiles on `loads`.
+3. **AES-256-GCM throughput** — vault encryption.
+4. **Cold import time**.
+5. **Memory footprint** — RSS after import.
+
+Not measured: live Telegram, a mock DC, C10K sessions. Those are network/OS tests, not the codec. Flooding api.telegram.org is not a benchmark.
 
 ## Environment
 
 | Component | Version |
 |---|---|
 | Python | 3.11 |
-| goygram | 0.7.68 (Rust core, AES-NI, `lto = true`, `opt-level = 3`) |
+| goygram | 0.7.89 (Rust core, AES-NI, native PyDict) |
 | telethon | 1.44.0 |
 | pyrogram | 2.0.106 |
 | aiogram | 3.31.0 |
 | python-telegram-bot | 22.8 |
 | tgcrypto | 1.2.5 |
 
-A single unremarkable VPS (AMD Ryzen 9 5950X), no special hardware. Each library was measured in a fresh process.
+A single VPS (AMD Ryzen 9 5950X, 6 vCPU). Codec numbers below were re-run on 0.7.89 after the JSON/hex bridge was removed. IGE/import/RSS rows are the same box as before.
 
 ## Results
 
@@ -37,21 +39,26 @@ A single unremarkable VPS (AMD Ryzen 9 5950X), no special hardware. Each library
 
 Per-message latency at 256 B (lower is better): goygram 0.4 µs, tgcrypto 1.3 µs, pyrogram 1.4 µs, telethon 23 µs.
 
-GoyGram's IGE uses AES-NI intrinsics with a runtime CPU check and zero-copy `&[u8]` extraction at the Python boundary. tgcrypto 1.2.5 is a table-based software implementation, which is why the gap is a factor of 3-4.7x across sizes.
-
 ### TL codec (ops/s, higher is better)
+
+Payload: `updateNewMessage` with ~200-char text, `messageFwdHeader`, inline keyboard (callback + url). Packet 356 B. `ext.__file__` printed by the script.
 
 | Operation | ops/s |
 |---|---|
-| serialize `messages.sendMessage` | 284,933 |
-| deserialize `message` object | 66,457 |
+| serialize `messages.sendMessage` (nested dict peer) | 343,991 |
+| dumps `updateNewMessage` | 106,580 |
+| loads `updateNewMessage` | 228,493 |
+| echo loads+dumps | 106,562 |
+| AES-256-IGE enc+dec of that packet | 850,540 |
+
+loads latency (µs): p50 3.7, p95 6.6, p99 8.2, p99.9 20.0.
 
 ### AES-256-GCM (4 KiB, ops/s)
 
 | Operation | ops/s |
 |---|---|
-| encrypt | 313,217 |
-| decrypt | 303,643 |
+| encrypt | 292,099 |
+| decrypt | 308,479 |
 
 ### Cold import time (ms, lower is better)
 
@@ -75,10 +82,11 @@ GoyGram's IGE uses AES-NI intrinsics with a runtime CPU check and zero-copy `&[u
 
 ## Honest notes
 
-- **tgcrypto loses on raw AES-IGE now.** tgcrypto 1.2.5 drives table-based software AES; GoyGram's core dispatches to AES-NI intrinsics when the CPU has them (with a software fallback for older CPUs). Both are far beyond what Telegram needs in practice — the network round-trip dominates. The difference is that GoyGram's crypto is built in, while tgcrypto (or Telethon's `cryptg`) must be installed separately.
-- **Telethon's default path is slow** because it drives OpenSSL through `ctypes`, re-running the key schedule and unpacking buffers byte-by-byte on every call. Its fast path (`cryptg`) is not installed by default. This is not a bug in Telethon, it is a default-configuration fact.
-- **aiogram's import time and memory** are dominated by pydantic v2.
-- **Schema load** (823 methods + 1698 constructors of the official layer 229 schema) takes ~31 ms from cache and ~0.4 µs for a warm `serialize_method` call — dynamic dispatch does not mean slow.
+- **No live Telegram.** A mock MTProto DC, 10k sessions, and hour-long leak runs are not in this folder. The codec+crypto path is what GoyGram claims; the numbers above are that path on loopback.
+- **tgcrypto loses on raw AES-IGE now.** tgcrypto 1.2.5 is table-based software AES; GoyGram dispatches to AES-NI. Network RTT still dominates a real client.
+- **Telethon's default IGE path is slow** because it drives OpenSSL through ctypes. `cryptg` is optional.
+- **aiogram import/RSS** are pydantic v2.
+- **Schema load** (layer 229, 823 methods, 1698 constructors) is once per process. Warm `loads` is a few microseconds.
 
 ## Reproduce
 
