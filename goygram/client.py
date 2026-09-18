@@ -1155,14 +1155,16 @@ class AppCore:
         peer = await self.mt.resolve_peer(target)
         if not isinstance(source, dict) or "_" not in source:
             up = await self.mt.upload_file(source, file_name=file_name)
-            from goygram import ext as rx
-            file_hex = bytes(rx.serialize_constructor("inputFile", {"id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")})).hex()
+            file_obj = {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")}
             if kind == "photo":
-                media = {"_": "inputMediaUploadedPhoto", "file": file_hex}
+                media = {"_": "inputMediaUploadedPhoto", "file": file_obj}
             elif kind == "sticker":
-                st_hex = bytes(rx.serialize_constructor("documentAttributeSticker", {"alt": "", "stickerset": bytes(rx.serialize_constructor("inputStickerSetEmpty", {})).hex()})).hex()
-                attr_hex = [st_hex]
-                media = {"_": "inputMediaUploadedDocument", "file": file_hex, "mime_type": "image/webp", "attributes": attr_hex}
+                media = {
+                    "_": "inputMediaUploadedDocument",
+                    "file": file_obj,
+                    "mime_type": "image/webp",
+                    "attributes": [{"_": "documentAttributeSticker", "alt": "", "stickerset": {"_": "inputStickerSetEmpty"}}],
+                }
             else:
                 attrs: list[dict[str, Any]] = [{"_": "documentAttributeFilename", "file_name": up["name"]}]
                 if kind in {"audio", "voice"}:
@@ -1179,10 +1181,8 @@ class AppCore:
                     dur = media_duration(p) if p is not None and Path(p).exists() else None
                     if dur:
                         attrs.append({"_": "documentAttributeVideo", "duration": dur, "w": 0, "h": 0})
-                attr_hex = [bytes(rx.serialize_constructor(a["_"], {k: v for k, v in a.items() if k != "_"})).hex() for a in attrs]
-                media = {"_": "inputMediaUploadedDocument", "file": file_hex, "mime_type": _guess_mime(source, kind), "attributes": attr_hex}
-            ser = rx.serialize_constructor(media["_"], {k: v for k, v in media.items() if k != "_"})
-            media_raw = bytes(ser).hex()
+                media = {"_": "inputMediaUploadedDocument", "file": file_obj, "mime_type": _guess_mime(source, kind), "attributes": attrs}
+            media_raw = media
         else:
             media_raw = source
         data = dict(kw)
@@ -1521,7 +1521,7 @@ class AppCore:
         media = {
             "_": "inputMediaPoll",
             "question": {"_": "textWithEntities", "text": question, "entities": []},
-            "answers": [{"_": "pollAnswer", "text": {"_": "textWithEntities", "text": o, "entities": []}, "option": bytes([i]).hex()} for i, o in enumerate(options)],
+            "answers": [{"_": "pollAnswer", "text": {"_": "textWithEntities", "text": o, "entities": []}, "option": bytes([i])} for i, o in enumerate(options)],
         }
         if not anonymous:
             media["poll"] = {"_": "poll", "id": 0, "question": {"_": "textWithEntities", "text": question, "entities": []}, "answers": media["answers"], "public_voters": True}

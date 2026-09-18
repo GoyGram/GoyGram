@@ -89,38 +89,38 @@ class KbdBuilder:
 
 
 def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
-    from goygram import ext as rx
+    def as_bytes(value: Any) -> bytes:
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value)
+        return str(value).encode()
 
-    def ser(ctor: str, fields: dict[str, Any]) -> str:
-        return rx.serialize_constructor(ctor, fields).hex()
-
-    def btn_type(b: dict[str, Any]) -> str:
+    def btn_type(b: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(b.get("type"), dict) and b["type"].get("_"):
+            return b["type"]
         if b.get("callback_data") is not None:
-            raw = b["callback_data"]
-            if not isinstance(raw, (bytes, bytearray)):
-                raw = str(raw).encode()
-            return ser("inlineButtonTypeCallback", {"data": bytes(raw)})
+            return {"_": "inlineButtonTypeCallback", "data": as_bytes(b["callback_data"])}
         if b.get("url") is not None:
-            return ser("inlineButtonTypeUrl", {"url": str(b["url"])})
+            return {"_": "inlineButtonTypeUrl", "url": str(b["url"])}
         if b.get("web_app") is not None:
-            return ser("inlineButtonTypeWebView", {"url": str(b["web_app"].get("url", ""))})
+            url = b["web_app"].get("url", "") if isinstance(b.get("web_app"), dict) else str(b.get("web_app"))
+            return {"_": "inlineButtonTypeWebView", "url": str(url)}
         if b.get("switch_inline_query") is not None:
-            return ser("inlineButtonTypeSwitchInline", {"query": str(b["switch_inline_query"])})
+            return {"_": "inlineButtonTypeSwitchInline", "query": str(b["switch_inline_query"])}
         if b.get("switch_inline_query_current_chat") is not None:
-            return ser("inlineButtonTypeSwitchInline", {"query": str(b["switch_inline_query_current_chat"]), "same_peer": True})
+            return {"_": "inlineButtonTypeSwitchInline", "query": str(b["switch_inline_query_current_chat"]), "same_peer": True}
         if b.get("copy_text") is not None:
-            return ser("inlineButtonTypeCopy", {"copy_text": str(b["copy_text"])})
-        return ser("inlineButtonTypeCallback", {"data": b.get("callback_data") or "noop"})
+            return {"_": "inlineButtonTypeCopy", "copy_text": str(b["copy_text"])}
+        return {"_": "inlineButtonTypeCallback", "data": as_bytes(b.get("callback_data") or "noop")}
 
-    def btn(b: Any) -> str:
+    def btn(b: Any) -> dict[str, Any]:
         if isinstance(b, dict) and b.get("_") == "keyboardInlineButton":
-            return ser("keyboardInlineButton", {"text": str(b.get("text", "")), "type": b.get("type")})
+            return b
         d = b.to_dict() if hasattr(b, "to_dict") else dict(b) if isinstance(b, dict) else {"text": str(b)}
-        fields: dict[str, Any] = {"text": str(d.get("text", "")), "type": btn_type(d)}
+        fields: dict[str, Any] = {"_": "keyboardInlineButton", "text": str(d.get("text", "")), "type": btn_type(d)}
         icon = d.get("icon_custom_emoji_id")
         if icon is not None:
-            fields["style"] = ser("keyboardButtonStyle", {"icon": int(icon)})
-        return ser("keyboardInlineButton", fields)
+            fields["style"] = {"_": "keyboardButtonStyle", "icon": int(icon)}
+        return fields
 
     def reply_btn(b: dict[str, Any]) -> dict[str, Any]:
         t: dict[str, Any] = {"_": "buttonTypeDefault"}
@@ -130,8 +130,7 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
             t = {"_": "buttonTypeRequestGeoLocation"}
         elif b.get("request_poll"):
             t = {"_": "buttonTypeRequestPoll"}
-        out = {"_": "keyboardButton", "text": str(b.get("text", "")), "type": t}
-        return out
+        return {"_": "keyboardButton", "text": str(b.get("text", "")), "type": t}
 
     if isinstance(kbd, KbdBuilder):
         kbd = kbd.build()
@@ -162,9 +161,11 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
             "selective": bool(kbd.get("selective")),
             "persistent": bool(kbd.get("persistent")),
         }
-    rows = [
-        ser("keyboardInlineButtonRow", {"buttons": [btn(b) for b in row]})
-        for row in rows_raw
-        if isinstance(row, (list, tuple))
-    ]
-    return {"_": "replyInlineMarkup", "rows": rows}
+    return {
+        "_": "replyInlineMarkup",
+        "rows": [
+            {"_": "keyboardInlineButtonRow", "buttons": [btn(b) for b in row]}
+            for row in rows_raw
+            if isinstance(row, (list, tuple))
+        ],
+    }

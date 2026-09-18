@@ -426,8 +426,7 @@ class Obj:
             data = dict(kw)
             peer = await self.app.mt.resolve_peer(self.chat_id)
             if self.id is not None:
-                data["reply_to"] = bytes(rx.serialize_constructor('inputReplyToMessage',
-                    {'reply_to_msg_id': int(self.id)}))
+                data["reply_to"] = {"_": "inputReplyToMessage", "reply_to_msg_id": int(self.id)}
             if kbd is not None:
                 data["kbd"] = kbd
             if link_options is not None:

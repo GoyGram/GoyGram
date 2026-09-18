@@ -1,6 +1,6 @@
 // CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList, PyModule};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
 use pyo3::ToPyObject;
@@ -269,11 +269,11 @@ fn read_field_value(py: Python<'_>, data: &[u8], pos: &mut usize, f: &TlFieldDef
         "long" | "Long" => Ok(read_i64(data, pos).map_err(PyValueError::new_err)?.to_object(py)),
         "int128" => {
             let b = read_bytes(data, pos, 16).map_err(PyValueError::new_err)?;
-            Ok(hex::encode(b).to_object(py))
+            Ok(PyBytes::new_bound(py, &b).to_object(py))
         }
         "int256" => {
             let b = read_bytes(data, pos, 32).map_err(PyValueError::new_err)?;
-            Ok(hex::encode(b).to_object(py))
+            Ok(PyBytes::new_bound(py, &b).to_object(py))
         }
         "string" | "String" => {
             let s = read_tl_string(data, pos).map_err(PyValueError::new_err)?;
@@ -411,84 +411,87 @@ fn deserialize_constructor(py: Python<'_>, data: &[u8]) -> PyResult<PyObject> {
     deserialize_tl(py, data, &mut pos)
 }
 
-fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
-    if obj.is_none() {
-        return Ok(serde_json::Value::Null);
+
+fn as_dict<'py>(py: Python<'py>, args: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+    if let Ok(d) = args.downcast::<PyDict>() {
+        return Ok(d.clone());
     }
-    if let Ok(b) = obj.extract::<bool>() {
-        return Ok(serde_json::Value::Bool(b));
+    if let Ok(s) = args.extract::<String>() {
+        let json = PyModule::import_bound(py, "json")?;
+        let loaded = json.call_method1("loads", (s,))?;
+        return Ok(loaded.downcast::<PyDict>()?.clone());
     }
-    if let Ok(i) = obj.extract::<i64>() {
-        return Ok(serde_json::json!(i));
+    Err(PyValueError::new_err("TL args must be a dict"))
+}
+
+fn flag_set(val: Option<&Bound<'_, PyAny>>, is_bare: bool) -> bool {
+    let Some(v) = val else { return false };
+    if v.is_none() {
+        return false;
     }
-    if let Ok(u) = obj.extract::<u64>() {
-        return Ok(serde_json::json!(u));
+    if is_bare {
+        return v.extract::<bool>().ok() == Some(true);
     }
-    if let Ok(f) = obj.extract::<f64>() {
-        return Ok(serde_json::json!(f));
+    true
+}
+
+fn py_i64(val: &Bound<'_, PyAny>) -> Result<i64, String> {
+    if let Ok(n) = val.extract::<i64>() {
+        return Ok(n);
     }
-    if let Ok(s) = obj.extract::<String>() {
-        return Ok(serde_json::Value::String(s));
+    if let Ok(n) = val.extract::<u64>() {
+        return Ok(n as i64);
     }
-    if let Ok(b) = obj.downcast::<PyBytes>() {
-        return Ok(serde_json::Value::String(hex::encode(b.as_bytes())));
+    Err("int expected".to_string())
+}
+
+fn py_raw_bytes(val: &Bound<'_, PyAny>) -> Result<Vec<u8>, String> {
+    if let Ok(b) = val.downcast::<PyBytes>() {
+        return Ok(b.as_bytes().to_vec());
     }
-    if let Ok(d) = obj.downcast::<PyDict>() {
-        let mut map = serde_json::Map::new();
-        for (k, v) in d.iter() {
-            let key: String = k.extract()?;
-            map.insert(key, py_to_value(&v)?);
+    if let Ok(s) = val.extract::<String>() {
+        if s.is_empty() {
+            return Ok(vec![]);
         }
-        return Ok(serde_json::Value::Object(map));
+        if s.len() % 2 == 0 && s.bytes().all(|c| c.is_ascii_hexdigit()) {
+            if let Ok(b) = hex::decode(&s) {
+                return Ok(b);
+            }
+        }
+        return Ok(s.into_bytes());
     }
-    if let Ok(l) = obj.downcast::<PyList>() {
-        let mut arr = Vec::with_capacity(l.len());
+    if let Ok(l) = val.downcast::<PyList>() {
+        let mut b = Vec::with_capacity(l.len());
         for item in l.iter() {
-            arr.push(py_to_value(&item)?);
+            b.push(py_i64(&item)? as u8);
         }
-        return Ok(serde_json::Value::Array(arr));
+        return Ok(b);
     }
-    if let Ok(t) = obj.downcast::<pyo3::types::PyTuple>() {
-        let mut arr = Vec::with_capacity(t.len());
-        for item in t.iter() {
-            arr.push(py_to_value(&item)?);
-        }
-        return Ok(serde_json::Value::Array(arr));
-    }
-    Err(PyValueError::new_err(format!(
-        "cannot convert {} to TL args",
-        obj.get_type().name()?
-    )))
+    Err("bytes expected".to_string())
 }
 
-fn args_to_value(args: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
-    if let Ok(s) = args.extract::<&str>() {
-        return serde_json::from_str(s)
-            .map_err(|e| PyValueError::new_err(format!("args parsing failed: {}", e)));
+fn serialize_named(name: &str, args: &Bound<'_, PyDict>) -> Result<Vec<u8>, String> {
+    let schema = schema_arc().ok_or_else(|| "schema not loaded".to_string())?;
+    if let Some(tl) = schema.ctors.get(name) {
+        return serialize_tl_py(name, args, tl.cid, &tl.fields, tl.has_flags).map_err(|e| e.to_string());
     }
-    py_to_value(args)
+    if let Some(tl) = schema.methods.get(name) {
+        return serialize_tl_py(name, args, tl.cid, &tl.fields, tl.has_flags).map_err(|e| e.to_string());
+    }
+    Err(format!("unknown constructor {}", name))
 }
 
-fn serialize_tl(name: &str, args: &serde_json::Value, cid: u32, fields: &[TlFieldDef], has_flags: bool) -> PyResult<Vec<u8>> {
+fn serialize_tl_py(name: &str, args: &Bound<'_, PyDict>, cid: u32, fields: &[TlFieldDef], has_flags: bool) -> PyResult<Vec<u8>> {
     let mut buf: Vec<u8> = Vec::new();
     buf.extend_from_slice(&cid.to_le_bytes());
-
     if has_flags {
         let mut flags = 0u32;
         let mut flags2 = 0u32;
-
         for f in fields {
             if let Some(bit) = f.flag_bit {
-                let group = f.flags_group.as_deref().unwrap_or("flags");
-                let val = args.get(&f.name);
-                let has_val = match val {
-                    Some(serde_json::Value::Null) | None => false,
-                    Some(serde_json::Value::Bool(true)) if f.is_bare => true,
-                    Some(serde_json::Value::Bool(false)) if f.is_bare => false,
-                    _ => val.is_some(),
-                };
-                if has_val {
-                    if group == "flags2" {
+                let val = args.get_item(&f.name).ok().flatten();
+                if flag_set(val.as_ref(), f.is_bare) {
+                    if f.flags_group.as_deref() == Some("flags2") {
                         flags2 |= 1 << bit;
                     } else {
                         flags |= 1 << bit;
@@ -496,181 +499,144 @@ fn serialize_tl(name: &str, args: &serde_json::Value, cid: u32, fields: &[TlFiel
                 }
             }
         }
-
         for f in fields {
             if f.ftype == "#" {
                 let fv = if f.name == "flags2" { flags2 } else { flags };
                 buf.extend_from_slice(&fv.to_le_bytes());
                 continue;
             }
-
+            let val = args.get_item(&f.name).ok().flatten();
             if f.flag_bit.is_some() {
-                let val = args.get(&f.name);
-                let has_val = match val {
-                    Some(serde_json::Value::Null) | None => false,
-                    Some(serde_json::Value::Bool(true)) if f.is_bare => true,
-                    Some(serde_json::Value::Bool(false)) if f.is_bare => false,
-                    _ => val.is_some(),
-                };
-
-                if !has_val {
+                if !flag_set(val.as_ref(), f.is_bare) {
                     continue;
                 }
-
                 if f.is_bare {
                     continue;
                 }
-
-                let fb = encode_field_value(f, val.unwrap_or(&serde_json::Value::Null))
+                let v = val.unwrap();
+                let fb = encode_field_py(f, &v)
                     .map_err(|e| PyValueError::new_err(format!("{}:{}: {}", name, f.name, e)))?;
                 buf.extend_from_slice(&fb);
             } else {
-                let val = args.get(&f.name).ok_or_else(|| PyValueError::new_err(format!("{}: missing required field {}", name, f.name)))?;
-                let fb = encode_field_value(f, val)
+                let v = val.ok_or_else(|| PyValueError::new_err(format!("{}: missing required field {}", name, f.name)))?;
+                let fb = encode_field_py(f, &v)
                     .map_err(|e| PyValueError::new_err(format!("{}:{}: {}", name, f.name, e)))?;
                 buf.extend_from_slice(&fb);
             }
         }
     } else {
         for f in fields {
-            let val = args.get(&f.name).ok_or_else(|| PyValueError::new_err(format!("{}: missing required field {}", name, f.name)))?;
-            let fb = encode_field_value(f, val)
+            let v = args.get_item(&f.name).ok().flatten()
+                .ok_or_else(|| PyValueError::new_err(format!("{}: missing required field {}", name, f.name)))?;
+            let fb = encode_field_py(f, &v)
                 .map_err(|e| PyValueError::new_err(format!("{}:{}: {}", name, f.name, e)))?;
             buf.extend_from_slice(&fb);
         }
     }
-
     Ok(buf)
 }
 
-fn encode_field_value(f: &TlFieldDef, val: &serde_json::Value) -> Result<Vec<u8>, String> {
+fn encode_field_py(f: &TlFieldDef, val: &Bound<'_, PyAny>) -> Result<Vec<u8>, String> {
     match f.ftype.as_str() {
-        "#" => {
-            let n = val.as_i64().ok_or("flags not int")? as u32;
-            Ok(n.to_le_bytes().to_vec())
-        }
-        "int" | "Int" => {
-            let n = val.as_i64().ok_or("int expected")? as i32;
+        "#" | "int" | "Int" => {
+            let n = py_i64(val)? as i32;
             Ok(n.to_le_bytes().to_vec())
         }
         "long" | "Long" => {
-            if let Some(s) = val.as_str() {
-                let bytes = hex::decode(s).map_err(|e| format!("hex: {}", e))?;
-                Ok(bytes)
-            } else if val.is_number() {
-                let n = val.as_i64().ok_or("long expected")?;
-                Ok(n.to_le_bytes().to_vec())
-            } else {
-                Err(format!("cannot encode field {} as long", f.name))
+            if val.downcast::<PyBytes>().is_ok() || (val.extract::<String>().map(|s| s.len() == 16 && s.bytes().all(|c| c.is_ascii_hexdigit())).unwrap_or(false)) {
+                let b = py_raw_bytes(val)?;
+                if b.len() == 8 {
+                    return Ok(b);
+                }
             }
+            let n = py_i64(val)?;
+            Ok(n.to_le_bytes().to_vec())
         }
         "int128" => {
-            if let Some(n) = val.as_i64() {
+            let b = py_raw_bytes(val)?;
+            if b.len() == 16 {
+                return Ok(b);
+            }
+            if b.len() == 8 {
                 let mut out = vec![0u8; 16];
-                out[..8].copy_from_slice(&n.to_le_bytes());
-                Ok(out)
-            } else if let Some(s) = val.as_str() {
-                let bytes = hex::decode(s).map_err(|e| format!("hex: {}", e))?;
-                if bytes.len() != 16 { return Err("int128 must be 16 bytes".to_string()); }
-                Ok(bytes)
-            } else { Err(format!("cannot encode field {} as int128", f.name)) }
+                out[..8].copy_from_slice(&b);
+                return Ok(out);
+            }
+            let n = py_i64(val).unwrap_or(0);
+            let mut out = vec![0u8; 16];
+            out[..8].copy_from_slice(&n.to_le_bytes());
+            Ok(out)
         }
         "int256" => {
-            if let Some(n) = val.as_i64() {
-                let mut out = vec![0u8; 32];
-                out[..8].copy_from_slice(&n.to_le_bytes());
-                Ok(out)
-            } else if let Some(s) = val.as_str() {
-                let bytes = hex::decode(s).map_err(|e| format!("hex: {}", e))?;
-                if bytes.len() != 32 { return Err("int256 must be 32 bytes".to_string()); }
-                Ok(bytes)
-            } else { Err(format!("cannot encode field {} as int256", f.name)) }
+            let b = py_raw_bytes(val)?;
+            if b.len() == 32 {
+                return Ok(b);
+            }
+            Err(format!("int256 must be 32 bytes"))
         }
         "string" | "String" => {
-            let s = val.as_str().unwrap_or("");
-            encode_tl_string(s)
-        }
-        "bytes" | "Bytes" => {
-            if let Some(s) = val.as_str() {
-                let b = hex::decode(s).map_err(|e| format!("hex: {}", e))?;
-                encode_tl_bytes(&b)
-            } else if let Some(arr) = val.as_array() {
-                let mut b = Vec::new();
-                for v in arr {
-                    let n = v.as_u64().ok_or("byte expected")? as u8;
-                    b.push(n);
-                }
-                encode_tl_bytes(&b)
+            if let Ok(s) = val.extract::<String>() {
+                encode_tl_string(&s)
+            } else if let Ok(b) = val.downcast::<PyBytes>() {
+                encode_tl_bytes(b.as_bytes())
             } else {
-                Err(format!("cannot encode field {} as bytes", f.name))
+                encode_tl_string("")
             }
         }
+        "bytes" | "Bytes" => encode_tl_bytes(&py_raw_bytes(val)?),
         "double" | "Double" => {
-            let n = val.as_f64().ok_or("double expected")?;
+            let n = val.extract::<f64>().map_err(|_| "double expected".to_string())?;
             Ok(n.to_le_bytes().to_vec())
         }
         "Bool" | "boolTrue" | "boolFalse" => {
-            let b = val.as_bool().unwrap_or(false);
+            let b = val.extract::<bool>().unwrap_or(false);
             if b {
                 Ok(0x997275b5u32.to_le_bytes().to_vec())
             } else {
                 Ok(0xbc799737u32.to_le_bytes().to_vec())
             }
         }
-        "true" | "True" => {
-            Ok(vec![])
-        }
+        "true" | "True" => Ok(vec![]),
         _ => {
             if f.is_vector {
-                encode_tl_vector(f, val)
+                encode_tl_vector_py(f, val)
             } else if f.ftype.starts_with('!') {
-                if let Some(s) = val.as_str() {
-                    if s.is_empty() {
-                        return Ok(vec![]);
-                    }
-                    hex::decode(s).map_err(|e| format!("hex: {}", e))
-                } else {
-                    Ok(vec![])
-                }
-            } else if let Some(s) = val.as_str() {
-                if s.is_empty() {
-                    return Ok(vec![]);
-                }
-                hex::decode(s).map_err(|e| format!("hex: {}", e))
-            } else if val.is_number() {
-                let n = val.as_i64().unwrap_or(0);
-                Ok(n.to_le_bytes().to_vec())
-            } else if val.is_object() {
-                let ctor_name = val.get("_").and_then(|x| x.as_str()).unwrap_or(f.ftype.as_str());
-                let def = schema_arc().and_then(|s| s.ctors.get(ctor_name).cloned());
-                if let Some(def) = def {
-                    serialize_tl(ctor_name, val, def.cid, &def.fields, def.has_flags)
-                        .map_err(|e| e.to_string())
-                } else {
-                    let keys: Vec<&str> = val.as_object().map(|m| m.keys().map(|k| k.as_str()).collect()).unwrap_or_default();
-                    Err(format!("unknown constructor type {} (keys {:?})", ctor_name, keys))
-                }
+                encode_nested(val)
             } else {
-                Err(format!("unknown TL field type {}", f.ftype))
+                encode_nested(val)
             }
         }
     }
 }
 
+fn encode_nested(val: &Bound<'_, PyAny>) -> Result<Vec<u8>, String> {
+    if let Ok(d) = val.downcast::<PyDict>() {
+        let ctor = d.get_item("_")
+            .ok()
+            .flatten()
+            .and_then(|x| x.extract::<String>().ok())
+            .ok_or_else(|| "nested object missing _".to_string())?;
+        return serialize_named(&ctor, d);
+    }
+    if let Ok(b) = val.downcast::<PyBytes>() {
+        return Ok(b.as_bytes().to_vec());
+    }
+    if let Ok(s) = val.extract::<String>() {
+        if s.is_empty() {
+            return Ok(vec![]);
+        }
+        if s.len() % 2 == 0 && s.bytes().all(|c| c.is_ascii_hexdigit()) {
+            if let Ok(b) = hex::decode(&s) {
+                return Ok(b);
+            }
+        }
+        return Err("nested field expected dict or bytes, got string".to_string());
+    }
+    Err("nested field expected dict or bytes".to_string())
+}
+
 fn encode_tl_string(s: &str) -> Result<Vec<u8>, String> {
-    let b = s.as_bytes();
-    let mut buf = Vec::new();
-    if b.len() <= 253 {
-        buf.push(b.len() as u8);
-    } else {
-        buf.push(254);
-        buf.extend_from_slice(&(b.len() as u32).to_le_bytes()[..3]);
-    }
-    buf.extend_from_slice(b);
-    while buf.len() % 4 != 0 {
-        buf.push(0);
-    }
-    Ok(buf)
+    encode_tl_bytes(s.as_bytes())
 }
 
 fn encode_tl_bytes(b: &[u8]) -> Result<Vec<u8>, String> {
@@ -688,15 +654,19 @@ fn encode_tl_bytes(b: &[u8]) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-fn encode_tl_vector(f: &TlFieldDef, val: &serde_json::Value) -> Result<Vec<u8>, String> {
-    let arr = val.as_array().ok_or("vector expected array")?;
+fn encode_tl_vector_py(f: &TlFieldDef, val: &Bound<'_, PyAny>) -> Result<Vec<u8>, String> {
+    let iter: Vec<Bound<'_, PyAny>> = if let Ok(l) = val.downcast::<PyList>() {
+        l.iter().collect()
+    } else if let Ok(t) = val.downcast::<pyo3::types::PyTuple>() {
+        t.iter().collect()
+    } else {
+        return Err("vector expected array".to_string());
+    };
     let inner_type = f.vector_inner.as_deref().unwrap_or("int");
-
     let mut buf: Vec<u8> = Vec::new();
     buf.extend_from_slice(&0x1cb5c415u32.to_le_bytes());
-    buf.extend_from_slice(&(arr.len() as u32).to_le_bytes());
-
-    for item in arr {
+    buf.extend_from_slice(&(iter.len() as u32).to_le_bytes());
+    for item in iter {
         let inner_field = TlFieldDef {
             name: "item".to_string(),
             ftype: inner_type.to_string(),
@@ -707,10 +677,9 @@ fn encode_tl_vector(f: &TlFieldDef, val: &serde_json::Value) -> Result<Vec<u8>, 
             vector_inner: if f.vector_inner_is_vector { Some("int".to_string()) } else { None },
             vector_inner_is_vector: false,
         };
-        let eb = encode_field_value(&inner_field, item)?;
+        let eb = encode_field_py(&inner_field, &item)?;
         buf.extend_from_slice(&eb);
     }
-
     Ok(buf)
 }
 
@@ -719,8 +688,8 @@ fn serialize_method(py: Python<'_>, method: &str, args: Bound<'_, PyAny>) -> PyR
     let schema = schema_arc().ok_or_else(|| PyRuntimeError::new_err("schema not loaded"))?;
     let tl = schema.methods.get(method)
         .ok_or_else(|| PyValueError::new_err(format!("unknown method: {}", method)))?;
-    let value = args_to_value(&args)?;
-    let data = serialize_tl(method, &value, tl.cid, &tl.fields, tl.has_flags)?;
+    let dict = as_dict(py, &args)?;
+    let data = serialize_tl_py(method, &dict, tl.cid, &tl.fields, tl.has_flags)?;
     Ok(PyBytes::new_bound(py, &data).unbind())
 }
 
@@ -729,8 +698,8 @@ fn serialize_constructor(py: Python<'_>, name: &str, args: Bound<'_, PyAny>) -> 
     let schema = schema_arc().ok_or_else(|| PyRuntimeError::new_err("schema not loaded"))?;
     let tl = schema.ctors.get(name)
         .ok_or_else(|| PyValueError::new_err(format!("unknown constructor: {}", name)))?;
-    let value = args_to_value(&args)?;
-    let data = serialize_tl(name, &value, tl.cid, &tl.fields, tl.has_flags)?;
+    let dict = as_dict(py, &args)?;
+    let data = serialize_tl_py(name, &dict, tl.cid, &tl.fields, tl.has_flags)?;
     Ok(PyBytes::new_bound(py, &data).unbind())
 }
 
