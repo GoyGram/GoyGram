@@ -1684,7 +1684,6 @@ class MTNet:
     def _wrap_init_query(self, api_id:int, query:bytes)->bytes:
         if rx is None: raise RuntimeError('rx (goygram.ext) is not available')
         inner = bytes(rx.serialize_method('initConnection', {
-            'flags': 0,
             'api_id': api_id,
             'device_model': self.device_model or 'Unknown',
             'system_version': self.system_version or 'Unknown',
@@ -1692,11 +1691,11 @@ class MTNet:
             'system_lang_code': self.system_lang_code,
             'lang_pack': self.lang_pack,
             'lang_code': self.lang_code,
-            'query': query.hex(),
+            'query': query,
         }))
         return bytes(rx.serialize_method('invokeWithLayer', {
             'layer': self.layer,
-            'query': inner.hex(),
+            'query': inner,
         }))
 
     def _norm_act(self, name:str)->str:
@@ -2168,7 +2167,7 @@ class MTNet:
             inner = {k: v for k, v in kw.items() if k not in ("_dispatch_chat_id", "_dispatch_message_text")}
             inner = {k: self._takeout_encode(v) for k, v in inner.items()}
             inner_body = bytes(_ext.serialize_method(normalized, inner))
-            payload = {"act": "invokeWithTakeout", "takeout_id": int(takeout_id), "query": inner_body.hex()}
+            payload = {"act": "invokeWithTakeout", "takeout_id": int(takeout_id), "query": inner_body}
             if dispatch_chat_id is not None:
                 payload["_dispatch_chat_id"] = dispatch_chat_id
             if dispatch_message_text is not None:

@@ -337,17 +337,12 @@ fn deserialize_fields<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let obj = PyDict::new_bound(py);
     obj.set_item("_", name)?;
-    let mut flags = 0u32;
-    let mut flags2 = 0u32;
+    let mut buckets = [0u32; 8];
 
     for f in fields {
         if f.ftype == "#" {
             let val = read_u32(data, pos).map_err(PyValueError::new_err)?;
-            if f.name == "flags2" {
-                flags2 = val;
-            } else {
-                flags = val;
-            }
+            buckets[flag_index(&f.name)] = val;
             obj.set_item(&f.name, val)?;
             continue;
         }
@@ -355,7 +350,7 @@ fn deserialize_fields<'py>(
         if has_flags {
             if let Some(bit) = f.flag_bit {
                 let group = f.flags_group.as_deref().unwrap_or("flags");
-                let flags_val = if group == "flags2" { flags2 } else { flags };
+                let flags_val = buckets[flag_index(group)];
                 if flags_val & (1 << bit) == 0 {
                     if f.is_bare {
                         obj.set_item(&f.name, false)?;
@@ -411,6 +406,20 @@ fn deserialize_constructor(py: Python<'_>, data: &[u8]) -> PyResult<PyObject> {
     deserialize_tl(py, data, &mut pos)
 }
 
+
+fn flag_index(name: &str) -> usize {
+    if let Some(rest) = name.strip_prefix("flags") {
+        if rest.is_empty() {
+            return 0;
+        }
+        if let Ok(n) = rest.parse::<usize>() {
+            if n >= 2 {
+                return (n - 1).min(7);
+            }
+        }
+    }
+    0
+}
 
 fn as_dict<'py>(py: Python<'py>, args: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
     if let Ok(d) = args.downcast::<PyDict>() {
@@ -485,23 +494,19 @@ fn serialize_tl_py(name: &str, args: &Bound<'_, PyDict>, cid: u32, fields: &[TlF
     let mut buf: Vec<u8> = Vec::new();
     buf.extend_from_slice(&cid.to_le_bytes());
     if has_flags {
-        let mut flags = 0u32;
-        let mut flags2 = 0u32;
+        let mut buckets = [0u32; 8];
         for f in fields {
             if let Some(bit) = f.flag_bit {
                 let val = args.get_item(&f.name).ok().flatten();
                 if flag_set(val.as_ref(), f.is_bare) {
-                    if f.flags_group.as_deref() == Some("flags2") {
-                        flags2 |= 1 << bit;
-                    } else {
-                        flags |= 1 << bit;
-                    }
+                    let group = f.flags_group.as_deref().unwrap_or("flags");
+                    buckets[flag_index(group)] |= 1 << bit;
                 }
             }
         }
         for f in fields {
             if f.ftype == "#" {
-                let fv = if f.name == "flags2" { flags2 } else { flags };
+                let fv = buckets[flag_index(&f.name)];
                 buf.extend_from_slice(&fv.to_le_bytes());
                 continue;
             }
@@ -701,6 +706,25 @@ fn serialize_constructor(py: Python<'_>, name: &str, args: Bound<'_, PyAny>) -> 
     let dict = as_dict(py, &args)?;
     let data = serialize_tl_py(name, &dict, tl.cid, &tl.fields, tl.has_flags)?;
     Ok(PyBytes::new_bound(py, &data).unbind())
+}
+
+#[pyfunction]
+fn dumps(py: Python<'_>, obj: Bound<'_, PyAny>) -> PyResult<Py<PyBytes>> {
+    if let Ok(b) = obj.downcast::<PyBytes>() {
+        return Ok(PyBytes::new_bound(py, b.as_bytes()).unbind());
+    }
+    let dict = as_dict(py, &obj)?;
+    let name = dict
+        .get_item("_")?
+        .and_then(|x| x.extract::<String>().ok())
+        .ok_or_else(|| PyValueError::new_err("dumps requires _ constructor name"))?;
+    let data = serialize_named(&name, &dict).map_err(PyValueError::new_err)?;
+    Ok(PyBytes::new_bound(py, &data).unbind())
+}
+
+#[pyfunction]
+fn loads(py: Python<'_>, data: &[u8]) -> PyResult<PyObject> {
+    deserialize_constructor(py, data)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -973,6 +997,8 @@ fn ext(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(serialize_method, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_constructor, m)?)?;
     m.add_function(wrap_pyfunction!(deserialize_constructor, m)?)?;
+    m.add_function(wrap_pyfunction!(dumps, m)?)?;
+    m.add_function(wrap_pyfunction!(loads, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_enc, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_fast_path, m)?)?;
     m.add_function(wrap_pyfunction!(aes_ige_dec, m)?)?;

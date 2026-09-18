@@ -10,7 +10,7 @@ from typing import Any
 log = logging.getLogger("goygram.tl.schema_loader")
 
 VECTOR_RE = re.compile(r"^(?:Vector|vector)<(.*)>$")
-FLAG_RE = re.compile(r"^(flags2?)\.(\d+)\?(.+)$")
+FLAG_RE = re.compile(r"^(flags\d*)\.(\d+)\?(.+)$")
 
 
 def _parse_field_type(raw: str) -> dict[str, Any]:
