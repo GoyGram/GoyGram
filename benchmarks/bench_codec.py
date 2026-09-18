@@ -1,4 +1,3 @@
-import json
 import secrets
 import time
 
@@ -7,8 +6,8 @@ from goygram.schema_manager import init_schema
 
 init_schema(rx)
 
-peer_hex = rx.serialize_constructor("inputPeerSelf", "{}").hex()
-peer_user_hex = rx.serialize_constructor("peerUser", json.dumps({"user_id": 1})).hex()
+peer_hex = rx.serialize_constructor("inputPeerSelf", {}).hex()
+peer_user_hex = rx.serialize_constructor("peerUser", {"user_id": 1}).hex()
 
 method = "messages.sendMessage"
 args = {
@@ -19,9 +18,9 @@ args = {
 }
 
 for _ in range(200):
-    rx.serialize_method(method, json.dumps(args))
+    rx.serialize_method(method, args)
 tl_obj = {"_": "message", "id": 42, "flags": 0, "flags2": 0, "date": 1700000000, "message": "bench " * 4, "peer_id": peer_user_hex}
-buf = rx.serialize_constructor("message", json.dumps(tl_obj))
+buf = rx.serialize_constructor("message", tl_obj)
 
 
 def bench(fn, budget=0.5):
@@ -33,8 +32,8 @@ def bench(fn, budget=0.5):
     return n / (time.perf_counter() - t0)
 
 
-ser_rate = bench(lambda: rx.serialize_method(method, json.dumps(args)))
-deser_rate = bench(lambda: json.loads(rx.deserialize_constructor(bytes(buf))))
+ser_rate = bench(lambda: rx.serialize_method(method, args))
+deser_rate = bench(lambda: rx.deserialize_constructor(bytes(buf)))
 print(f"TL serialize (messages.sendMessage): {ser_rate:>10,.0f} ops/s")
 print(f"TL deserialize (message obj):        {deser_rate:>10,.0f} ops/s")
 

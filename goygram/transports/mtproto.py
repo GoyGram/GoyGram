@@ -1264,7 +1264,7 @@ class MTNet:
                 return
             try:
                 import json
-                decoded = json.loads(rx.deserialize_constructor(inner))
+                decoded = rx.deserialize_constructor(inner)
                 if isinstance(decoded, dict):
                     decoded_type = str(decoded.get("_", ""))
                     if decoded_type in {"updates", "updatesCombined", "updateShort", "updatesTooLong"}:
@@ -1291,7 +1291,7 @@ class MTNet:
             if cid in {0x313bc7f8, 0x4d6deea5, 0x9015e101}:
                 try:
                     import json
-                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
                 except Exception:
@@ -1300,7 +1300,7 @@ class MTNet:
             if cid in {0x74ae4240, 0x725b04c3}:
                 try:
                     import json
-                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict) and (
                         isinstance(decoded.get("updates"), list)
                         or str(decoded.get("_", "")).startswith("update")
@@ -1313,7 +1313,7 @@ class MTNet:
             if cid in {0x1f2b0afd, 0x62ba04d9}:
                 try:
                     import json
-                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
                 except Exception:
@@ -1322,7 +1322,7 @@ class MTNet:
             if cid == 0x78d4dec1:
                 try:
                     import json
-                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_updates(decoded)
                 except Exception:
@@ -1340,7 +1340,7 @@ class MTNet:
             if cid in {0xf2ebdb4e, 0xe5bdf8de, 0xc32d5b12, 0xc01e857f}:
                 try:
                     import json
-                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
                 except Exception:
@@ -1419,7 +1419,7 @@ class MTNet:
             if cid in {0xd087663a, 0x985d3abb}:
                 try:
                     import json
-                    decoded = json.loads(rx.deserialize_constructor(inner))
+                    decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
                 except Exception:
@@ -1444,7 +1444,7 @@ class MTNet:
                 return
             try:
                 import json
-                decoded = json.loads(rx.deserialize_constructor(inner))
+                decoded = rx.deserialize_constructor(inner)
                 if isinstance(decoded, dict) and str(decoded.get("_", "")).startswith("update"):
                     self._dispatch_update(decoded)
                     return
@@ -1563,7 +1563,7 @@ class MTNet:
             deserializer = getattr(rx, "deserialize_constructor", None)
             if deserializer is None:
                 raise RuntimeError("structured TL deserializer is unavailable")
-            structured = json.loads(deserializer(result))
+            structured = deserializer(result)
             payload = structured.get("result", structured) if isinstance(structured, dict) else None
             if isinstance(payload, dict) and payload.get("_") in {
                 "auth.sentCode",
@@ -1588,7 +1588,7 @@ class MTNet:
         if login_token is not None:
             return login_token
         try:
-            parsed = json.loads(rx.deserialize_constructor(result))
+            parsed = rx.deserialize_constructor(result)
             if isinstance(parsed, dict) and parsed.get("_") == "rpc_result":
                 return {"ok": True, "result": parsed.get("result", parsed)}
             return {"ok": True, "result": parsed}
@@ -1600,12 +1600,12 @@ class MTNet:
         chat_id = obj.get('chat_id') or obj.get('peer')
         access_hash = obj.get('access_hash', 0)
         if chat_id is None:
-            return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
+            return bytes(rx.serialize_constructor('inputPeerSelf', {}))
         if isinstance(chat_id, bytes):
             return chat_id
         if isinstance(chat_id, str):
             if chat_id in ('self', 'me'):
-                return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
+                return bytes(rx.serialize_constructor('inputPeerSelf', {}))
             if chat_id.lstrip('-').isdigit():
                 chat_id = int(chat_id)
             else:
@@ -1617,17 +1617,17 @@ class MTNet:
                 self._entity_touch(("user", chat_id))
         if isinstance(chat_id, int):
             if chat_id == 0:
-                return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
+                return bytes(rx.serialize_constructor('inputPeerSelf', {}))
             if chat_id > 0:
                 if chat_id == getattr(self, 'self_id', None):
-                    return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
+                    return bytes(rx.serialize_constructor('inputPeerSelf', {}))
                 entity = self.entities.get(("user", chat_id))
                 if entity is not None:
                     access_hash = access_hash or entity.get("access_hash", 0)
                     self._entity_touch(("user", chat_id))
                 if not access_hash:
                     raise ValueError('user peer requires a non-zero access_hash')
-                return bytes(rx.serialize_constructor('inputPeerUser', json.dumps({'user_id': chat_id, 'access_hash': int(access_hash)})))
+                return bytes(rx.serialize_constructor('inputPeerUser', {'user_id': chat_id, 'access_hash': int(access_hash)}))
             raw = -chat_id
             if raw > 1000000000000:
                 channel_id = raw - 1000000000000
@@ -1637,9 +1637,9 @@ class MTNet:
                     self._entity_touch(("chat", channel_id))
                 if not access_hash:
                     raise ValueError('channel peer requires a non-zero access_hash')
-                return bytes(rx.serialize_constructor('inputPeerChannel', json.dumps({'channel_id': channel_id, 'access_hash': int(access_hash)})))
-            return bytes(rx.serialize_constructor('inputPeerChat', json.dumps({'chat_id': raw})))
-        return bytes(rx.serialize_constructor('inputPeerSelf', '{}'))
+                return bytes(rx.serialize_constructor('inputPeerChannel', {'channel_id': channel_id, 'access_hash': int(access_hash)}))
+            return bytes(rx.serialize_constructor('inputPeerChat', {'chat_id': raw}))
+        return bytes(rx.serialize_constructor('inputPeerSelf', {}))
 
     async def resolve_peer(self, value: Any) -> bytes:
         if isinstance(value, (bytes, bytearray, memoryview)):
@@ -1692,21 +1692,21 @@ class MTNet:
                     channel_id = raw
             else:
                 channel_id = chat_id
-            return bytes(rx.serialize_constructor('inputChannel', json.dumps({'channel_id': channel_id, 'access_hash': int(access_hash)})))
+            return bytes(rx.serialize_constructor('inputChannel', {'channel_id': channel_id, 'access_hash': int(access_hash)}))
         raise ValueError('channel peer requires an integer channel_id and a non-zero access_hash')
 
     def _resolve_user(self, obj:dict[str,Any])->bytes:
         user_id = obj.get('user_id')
         access_hash = obj.get('access_hash', 0)
         if user_id is None or (isinstance(user_id, str) and user_id in ('self', 'me')):
-            return bytes(rx.serialize_constructor('inputUserSelf', '{}'))
+            return bytes(rx.serialize_constructor('inputUserSelf', {}))
         if isinstance(user_id, bytes):
             return user_id
-        return bytes(rx.serialize_constructor('inputUser', json.dumps({'user_id': int(user_id), 'access_hash': int(access_hash)})))
+        return bytes(rx.serialize_constructor('inputUser', {'user_id': int(user_id), 'access_hash': int(access_hash)}))
 
     def _wrap_init_query(self, api_id:int, query:bytes)->bytes:
         if rx is None: raise RuntimeError('rx (goygram.ext) is not available')
-        inner = bytes(rx.serialize_method('initConnection', json.dumps({
+        inner = bytes(rx.serialize_method('initConnection', {
             'flags': 0,
             'api_id': api_id,
             'device_model': self.device_model or 'Unknown',
@@ -1716,11 +1716,11 @@ class MTNet:
             'lang_pack': self.lang_pack,
             'lang_code': self.lang_code,
             'query': query.hex(),
-        })))
-        return bytes(rx.serialize_method('invokeWithLayer', json.dumps({
+        }))
+        return bytes(rx.serialize_method('invokeWithLayer', {
             'layer': self.layer,
             'query': inner.hex(),
-        })))
+        }))
 
     def _norm_act(self, name:str)->str:
         if '.' in name:
@@ -1739,7 +1739,7 @@ class MTNet:
         if isinstance(v, dict) and '_' in v:
             ctor_name = v.get('_')
             inner = {k: self._takeout_encode(v2) for k, v2 in v.items() if k != '_'}
-            return _ext.serialize_constructor(ctor_name, json.dumps(inner)).hex()
+            return _ext.serialize_constructor(ctor_name, inner).hex()
         if isinstance(v, (bytes, bytearray)):
             return v.hex()
         if isinstance(v, memoryview):
@@ -1757,7 +1757,7 @@ class MTNet:
             if isinstance(v, dict) and '_' in v:
                 ctor_name = v.get('_')
                 inner = {k: _resolve_val(v2) for k, v2 in v.items() if k != '_'}
-                return _ext.serialize_constructor(ctor_name, json.dumps(inner)).hex()
+                return _ext.serialize_constructor(ctor_name, inner).hex()
             if isinstance(v, dict) and len(v) == 1:
                 ctor_name = list(v.keys())[0]
                 inner = v[ctor_name]
@@ -1765,7 +1765,7 @@ class MTNet:
                     inner = {k: _resolve_val(v2) for k, v2 in inner.items()}
                 else:
                     inner = {}
-                return _ext.serialize_constructor(ctor_name, json.dumps(inner)).hex()
+                return _ext.serialize_constructor(ctor_name, inner).hex()
             if isinstance(v, (bytes, bytearray)):
                 return v.hex()
             if isinstance(v, memoryview):
@@ -1778,13 +1778,13 @@ class MTNet:
             data[k] = _resolve_val(v)
         tl_name = self._norm_act(act)
         if tl_name == "auth.sendCode" and "settings" not in data:
-            data["settings"] = _ext.serialize_constructor("codeSettings", json.dumps({"flags": 0})).hex()
-        return bytes(_ext.serialize_method(tl_name, json.dumps(data)))
+            data["settings"] = _ext.serialize_constructor("codeSettings", {"flags": 0}).hex()
+        return bytes(_ext.serialize_method(tl_name, data))
 
     def _parse_new_message(self, data:bytes|dict[str,Any])->dict[str,Any]|None:
         try:
             import json
-            decoded = data if isinstance(data, dict) else json.loads(rx.deserialize_constructor(data))
+            decoded = data if isinstance(data, dict) else rx.deserialize_constructor(data)
             kind = decoded.get("_")
             if kind in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"}:
                 decoded = decoded.get("message", {})
@@ -2209,7 +2209,7 @@ class MTNet:
             from goygram import ext as _ext
             inner = {k: v for k, v in kw.items() if k not in ("_dispatch_chat_id", "_dispatch_message_text")}
             inner = {k: self._takeout_encode(v) for k, v in inner.items()}
-            inner_body = bytes(_ext.serialize_method(normalized, json.dumps(inner)))
+            inner_body = bytes(_ext.serialize_method(normalized, inner))
             payload = {"act": "invokeWithTakeout", "takeout_id": int(takeout_id), "query": inner_body.hex()}
             if dispatch_chat_id is not None:
                 payload["_dispatch_chat_id"] = dispatch_chat_id

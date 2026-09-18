@@ -4,8 +4,6 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from goygram.filters import Filter, me, text
-
 
 def print_methods(app: Any) -> None:
     lines: list[str] = []
@@ -77,4 +75,4 @@ def print_methods(app: Any) -> None:
     print("\n".join(lines))
 
 
-__all__ = ["print_methods", "Filter", "text", "me"]
+__all__ = ["print_methods"]

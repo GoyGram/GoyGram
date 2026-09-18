@@ -129,7 +129,7 @@ def _load_schema(ext_module, api_text: str, mtproto_text: str | None, layer: int
 
 def init_schema(ext_module, bundled_api_tl_path: str | None = None, on_layer=None, can_reload=None):
     try:
-        info = json.loads(ext_module.schema_info())
+        info = ext_module.schema_info()
         log.info("Bootstrap schema active: %s methods, %s ctors", info.get("methods", 0), info.get("constructors", 0))
     except Exception:
         log.warning("No bootstrap schema available, schema_manager may fail")
@@ -161,7 +161,7 @@ def _background_update(ext_module, on_layer=None, can_reload=None):
                 log.debug("No schema update available")
                 continue
             try:
-                current = json.loads(ext_module.schema_info())
+                current = ext_module.schema_info()
             except Exception:
                 current = {}
             if int(current.get("layer", 0) or 0) == layer:

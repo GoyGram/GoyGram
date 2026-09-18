@@ -90,10 +90,9 @@ class KbdBuilder:
 
 def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
     from goygram import ext as rx
-    import json as _json
 
     def ser(ctor: str, fields: dict[str, Any]) -> str:
-        return rx.serialize_constructor(ctor, _json.dumps(fields)).hex()
+        return rx.serialize_constructor(ctor, fields).hex()
 
     def btn_type(b: dict[str, Any]) -> str:
         if b.get("callback_data") is not None:

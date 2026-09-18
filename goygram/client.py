@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TYPE_CHECKING
 
 from goygram.api.methods import BotAPI
 from goygram.core.bus import Bus
@@ -18,9 +18,11 @@ from goygram.core.fsm import FSMEngine
 from goygram.types.obj import Obj
 from goygram.logging import get_logger
 from goygram.security import bootstrap_session
-from goygram.filters import Filter
 from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
 from goygram.utils import print_methods
+
+if TYPE_CHECKING:
+    from goygram.filters import Filter
 
 Fn = Callable[["Obj"], Awaitable[Any]]
 CbFn = Fn
@@ -102,6 +104,11 @@ async def _call(fn: Callable[..., Any], *args: Any, **kw: Any) -> Any:
     return out
 
 
+def _is_filter(obj: object) -> bool:
+    from goygram.filters import Filter
+    return isinstance(obj, Filter)
+
+
 class _UsingCtx:
     __slots__ = ("app", "which", "prev")
 
@@ -145,7 +152,7 @@ class _HandlerGroup:
         target = self._members[key]
 
         def _wrap(fn: Fn) -> Fn:
-            if isinstance(fn, Filter):
+            if _is_filter(fn):
                 raise TypeError("pass filters via filt= keyword")
             target.append(fn)
             host = getattr(self.app, key)
@@ -601,7 +608,7 @@ class AppCore:
         self._entity_cache_flush(final=False)
 
     def _reg(self, host: list[Fn], fn: Fn | None, filt: Filter | None, once: bool = False):
-        if isinstance(fn, Filter):
+        if _is_filter(fn):
             filt = fn
             fn = None
         if once:
@@ -1149,12 +1156,11 @@ class AppCore:
         if not isinstance(source, dict) or "_" not in source:
             up = await self.mt.upload_file(source, file_name=file_name)
             from goygram import ext as rx
-            import json as _json
-            file_hex = bytes(rx.serialize_constructor("inputFile", _json.dumps({"id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")}))).hex()
+            file_hex = bytes(rx.serialize_constructor("inputFile", {"id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")})).hex()
             if kind == "photo":
                 media = {"_": "inputMediaUploadedPhoto", "file": file_hex}
             elif kind == "sticker":
-                st_hex = bytes(rx.serialize_constructor("documentAttributeSticker", _json.dumps({"alt": "", "stickerset": bytes(rx.serialize_constructor("inputStickerSetEmpty", _json.dumps({}))).hex()}))).hex()
+                st_hex = bytes(rx.serialize_constructor("documentAttributeSticker", {"alt": "", "stickerset": bytes(rx.serialize_constructor("inputStickerSetEmpty", {})).hex()})).hex()
                 attr_hex = [st_hex]
                 media = {"_": "inputMediaUploadedDocument", "file": file_hex, "mime_type": "image/webp", "attributes": attr_hex}
             else:
@@ -1173,9 +1179,9 @@ class AppCore:
                     dur = media_duration(p) if p is not None and Path(p).exists() else None
                     if dur:
                         attrs.append({"_": "documentAttributeVideo", "duration": dur, "w": 0, "h": 0})
-                attr_hex = [bytes(rx.serialize_constructor(a["_"], _json.dumps({k: v for k, v in a.items() if k != "_"}))).hex() for a in attrs]
+                attr_hex = [bytes(rx.serialize_constructor(a["_"], {k: v for k, v in a.items() if k != "_"})).hex() for a in attrs]
                 media = {"_": "inputMediaUploadedDocument", "file": file_hex, "mime_type": _guess_mime(source, kind), "attributes": attr_hex}
-            ser = rx.serialize_constructor(media["_"], _json.dumps({k: v for k, v in media.items() if k != "_"}))
+            ser = rx.serialize_constructor(media["_"], {k: v for k, v in media.items() if k != "_"})
             media_raw = bytes(ser).hex()
         else:
             media_raw = source
