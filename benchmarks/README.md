@@ -5,12 +5,13 @@ Reproducible comparisons of GoyGram against the major Python Telegram libraries.
 ## What is measured
 
 1. **AES-256-IGE throughput and latency** — MTProto packet encryption.
-2. **TL codec** — native PyDict `dumps`/`loads` of a realistic `updateNewMessage` (text, forward, inline buttons) plus `messages.sendMessage` serialize. Latency percentiles on `loads`.
-3. **AES-256-GCM throughput** — vault encryption.
-4. **Cold import time**.
-5. **Memory footprint** — RSS after import.
+2. **TL codec (simple)** — serialize `messages.sendMessage`, deserialize a `message` object.
+3. **TL codec (realistic)** — native PyDict `dumps`/`loads` of `updateNewMessage` (text, forward, inline buttons). Latency percentiles on `loads`.
+4. **AES-256-GCM throughput** — vault encryption.
+5. **Cold import time**.
+6. **Memory footprint** — RSS after import.
 
-Not measured: live Telegram, a mock DC, C10K sessions. Those are network/OS tests, not the codec. Flooding api.telegram.org is not a benchmark.
+Not measured: live Telegram, a mock DC, C10K sessions.
 
 ## Environment
 
@@ -24,7 +25,7 @@ Not measured: live Telegram, a mock DC, C10K sessions. Those are network/OS test
 | python-telegram-bot | 22.8 |
 | tgcrypto | 1.2.5 |
 
-A single VPS (AMD Ryzen 9 5950X, 6 vCPU). Codec numbers below were re-run on 0.7.89 after the JSON/hex bridge was removed. IGE/import/RSS rows are the same box as before.
+A single VPS (AMD Ryzen 9 5950X, 6 vCPU). Codec and GCM re-run on 0.7.89. IGE/import/RSS are the same box.
 
 ## Results
 
@@ -39,26 +40,32 @@ A single VPS (AMD Ryzen 9 5950X, 6 vCPU). Codec numbers below were re-run on 0.7
 
 Per-message latency at 256 B (lower is better): goygram 0.4 µs, tgcrypto 1.3 µs, pyrogram 1.4 µs, telethon 23 µs.
 
-### TL codec (ops/s, higher is better)
-
-Payload: `updateNewMessage` with ~200-char text, `messageFwdHeader`, inline keyboard (callback + url). Packet 356 B. `ext.__file__` printed by the script.
+### TL codec, simple (ops/s, higher is better)
 
 | Operation | ops/s |
 |---|---|
-| serialize `messages.sendMessage` (nested dict peer) | 343,991 |
-| dumps `updateNewMessage` | 106,580 |
-| loads `updateNewMessage` | 228,493 |
-| echo loads+dumps | 106,562 |
-| AES-256-IGE enc+dec of that packet | 850,540 |
+| serialize `messages.sendMessage` | 355,320 |
+| loads `message` | 567,799 |
 
-loads latency (µs): p50 3.7, p95 6.6, p99 8.2, p99.9 20.0.
+### TL codec, realistic `updateNewMessage` (ops/s)
+
+Payload: ~200-char text, `messageFwdHeader`, inline keyboard. Packet 356 B.
+
+| Operation | ops/s |
+|---|---|
+| dumps `updateNewMessage` | 105,803 |
+| loads `updateNewMessage` | 235,798 |
+| echo loads+dumps | 107,615 |
+| AES-256-IGE enc+dec of that packet | 862,432 |
+
+loads latency (µs): p50 3.7, p95 6.5, p99 9.1, p99.9 26.5.
 
 ### AES-256-GCM (4 KiB, ops/s)
 
 | Operation | ops/s |
 |---|---|
-| encrypt | 292,099 |
-| decrypt | 308,479 |
+| encrypt | 288,219 |
+| decrypt | 283,700 |
 
 ### Cold import time (ms, lower is better)
 
@@ -82,7 +89,7 @@ loads latency (µs): p50 3.7, p95 6.6, p99 8.2, p99.9 20.0.
 
 ## Honest notes
 
-- **No live Telegram.** A mock MTProto DC, 10k sessions, and hour-long leak runs are not in this folder. The codec+crypto path is what GoyGram claims; the numbers above are that path on loopback.
+- **No live Telegram.** A mock MTProto DC, 10k sessions, and hour-long leak runs are not in this folder.
 - **tgcrypto loses on raw AES-IGE now.** tgcrypto 1.2.5 is table-based software AES; GoyGram dispatches to AES-NI. Network RTT still dominates a real client.
 - **Telethon's default IGE path is slow** because it drives OpenSSL through ctypes. `cryptg` is optional.
 - **aiogram import/RSS** are pydantic v2.

@@ -40,16 +40,17 @@ Under the hood: a Python orchestration layer drives two completely independent n
 
 ## Benchmarks
 
-Cold import, memory footprint, MTProto crypto (AES-256-IGE), and native PyDict TL codec. Full methodology in [`benchmarks/`](./benchmarks).
+Cold import, memory footprint, and MTProto crypto (AES-256-IGE) measured against telethon, pyrogram, aiogram and python-telegram-bot. Full methodology in [`benchmarks/`](./benchmarks).
 
 | | goygram | telethon | pyrogram | aiogram | python-telegram-bot |
 |---|---|---|---|---|---|
 | cold import (ms) | **74** | 272 | 436 | 2699 | 141 |
 | RSS delta (MB) | **13** | 48 | 35 | 152 | 19 |
 | AES-256-IGE (MB/s, 64 KiB) | **1094** | 14 | 228 | — | — |
-| loads `updateNewMessage` (ops/s) | **228,493** | — | — | — | — |
+| loads `message` (ops/s) | **567,799** | — | — | — | — |
+| loads `updateNewMessage` (ops/s) | **235,798** | — | — | — | — |
 
-`loads` latency on that packet: p50 3.7 µs, p99 8.2 µs. Crypto is AES-NI in-process. Schema is layer 229. No live Telegram, no mock DC.
+The crypto runs in Rust with AES-NI intrinsics selected at runtime (built in, no separate C extension; tgcrypto 1.2.5 measures 234 MB/s on the same box), GoyGram starts ~36× faster than aiogram, and uses ~12× less memory. Realistic `updateNewMessage` loads latency: p50 3.7 µs, p99 9.1 µs.
 
 ## Installation
 ```bash

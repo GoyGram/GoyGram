@@ -25,6 +25,9 @@ msg = {
 }
 upd = {"_": "updateNewMessage", "message": msg, "pts": 1, "pts_count": 1}
 pkt = rx.dumps(upd)
+simple = {"_": "message", "id": 42, "peer_id": peer, "date": 1700000000, "message": "bench " * 4}
+plain = rx.dumps(simple)
+
 send = {
     "peer": {"_": "inputPeerUser", "user_id": 1, "access_hash": 1},
     "message": text,
@@ -55,6 +58,7 @@ for _ in range(n):
     samples.append(time.perf_counter() - t0)
 
 ser = rate(lambda: rx.serialize_method("messages.sendMessage", send))
+plainload = rate(lambda: rx.loads(plain))
 dump = rate(lambda: rx.dumps(upd))
 load = rate(lambda: rx.loads(pkt))
 echo = rate(lambda: (rx.loads(pkt), rx.dumps({"_": "message", "id": 43, "peer_id": peer, "date": 1700000001, "message": "pong"})))
@@ -72,6 +76,7 @@ gcm_d = rate(lambda: rx.aes_gcm_decrypt(key, nonce, ct, b""))
 info = rx.schema_info()
 print(f"packet {len(pkt)} B  schema layer {info['layer']} {info['constructors']} ctors")
 print(f"serialize messages.sendMessage     {ser:>10,.0f} ops/s")
+print(f"loads message                      {plainload:>10,.0f} ops/s")
 print(f"dumps updateNewMessage             {dump:>10,.0f} ops/s")
 print(f"loads updateNewMessage             {load:>10,.0f} ops/s")
 print(f"echo loads+dumps                   {echo:>10,.0f} ops/s")
