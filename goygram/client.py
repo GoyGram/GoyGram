@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal, TYPE_CHECKING
 
 from goygram.api.methods import BotAPI
-from goygram.api.types import dump
+from goygram.api.types import dump, camel, mtname
 from goygram.core.bus import Bus
 from goygram.core.disp import Disp
 from goygram.core.fsm import FSMEngine
@@ -427,6 +427,7 @@ class AppCore:
         self.bot = None
         self.mt = None
         self.api = None
+        self._mt_rpc = None
         self.self_id: int | None = None
         self._me_cache: dict[str, Any] | None = None
         self._chats: dict[Any, Any] = {}
@@ -469,6 +470,7 @@ class AppCore:
                 lang_code=lang_code,
                 cursor_path=Path.home() / ".goygram" / "cursors" / f"{hashlib.sha256(session_name.encode()).hexdigest()[:24]}.json",
             )
+            self._mt_rpc = self.mt.call
             if api_id is not None:
                 self.mt._api_id = int(api_id)
             self._init_tl_schema()
@@ -839,21 +841,10 @@ class AppCore:
             target.set_result(msg)
 
     def _bot_method_name(self, name: str) -> str:
-        if "_" in name:
-            parts = name.split("_")
-            return parts[0] + "".join(x[:1].upper() + x[1:] for x in parts[1:])
-        return name
+        return camel(name)
 
     def _mt_method_name(self, name: str) -> str:
-        name = name[3:] if name.startswith("mt_") else name
-        if "." in name:
-            return name
-        parts = name.split("_")
-        if len(parts) < 2:
-            return name
-        ns = parts[0]
-        rest = parts[1:]
-        return ns + "." + rest[0] + "".join(p[:1].upper() + p[1:] for p in rest[1:])
+        return mtname(name)
 
     def _dynamic_method(self, name: str):
         async def call(**kw: Any) -> Any:
@@ -868,27 +859,41 @@ class AppCore:
     _MT_NS = frozenset({"account", "auth", "bots", "channels", "contacts", "folders", "help", "langpack", "messages", "payments", "phone", "premium", "sms", "stats", "stickers", "stories", "upload", "users"})
 
     def __getattr__(self, name: str) -> Any:
-        if self.api is not None and hasattr(self.api, name):
-            return getattr(self.api, name)
+        if self.api is not None:
+            obj = getattr(self.api, name, None)
+            if obj is not None:
+                self.__dict__[name] = obj
+                return obj
         if name[:1].isupper():
             lower = "".join(c if c.islower() or not c.isalpha() else "_" + c.lower() for c in name).lstrip("_")
             for candidate in (lower, "mt_" + lower):
                 try:
                     obj = object.__getattribute__(self, candidate)
                     if callable(obj):
+                        self.__dict__[name] = obj
                         return obj
                 except AttributeError:
                     pass
             if lower.partition("_")[0] in self._MT_NS and self.mt is not None:
-                return self._dynamic_method("mt_" + lower)
+                obj = self._dynamic_method("mt_" + lower)
+                self.__dict__[name] = obj
+                return obj
             if self.bot is not None:
-                return self._dynamic_method(lower)
-            if self.mt is not None and "." in self._mt_method_name(lower):
-                return self._dynamic_method("mt_" + lower)
+                obj = self._dynamic_method(lower)
+                self.__dict__[name] = obj
+                return obj
+            if self.mt is not None and "." in mtname(lower):
+                obj = self._dynamic_method("mt_" + lower)
+                self.__dict__[name] = obj
+                return obj
         if name.startswith("mt_") and self.mt is not None:
-            return self._dynamic_method(name)
+            obj = self._dynamic_method(name)
+            self.__dict__[name] = obj
+            return obj
         if not name.startswith("mt_") and not name.startswith("_") and self.bot is not None:
-            return self._dynamic_method(name)
+            obj = self._dynamic_method(name)
+            self.__dict__[name] = obj
+            return obj
         raise AttributeError(name)
 
     def __dir__(self) -> list[str]:
@@ -963,8 +968,6 @@ class AppCore:
         if self.bot is None:
             raise RuntimeError("bot net is not configured")
         data = {k: v for k, v in kw.items() if v is not None}
-        if hasattr(self.bot, "call"):
-            return await self.bot.call(meth, **data)
         return await self.bot.req(meth, data)
 
     async def download_file(self, file_id: str, destination: str | None = None) -> Any:
@@ -1091,7 +1094,7 @@ class AppCore:
     async def mt_req(self, act: str, **kw: Any) -> Any:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        data = dump(kw)
+        data = dict(kw)
         if act.startswith("messages.") and isinstance(data.get("reply_markup"), dict) and "inline_keyboard" in data.get("reply_markup", {}):
             from goygram.types.kbd import kbd_to_tl
             tl_kbd = kbd_to_tl(data["reply_markup"])
@@ -1101,11 +1104,9 @@ class AppCore:
             data['api_id'] = self.api_id
         if 'api_hash' not in data and self.api_hash is not None:
             data['api_hash'] = self.api_hash
-        if hasattr(self.mt, "call"):
-            return await self.mt.call(act, **data)
-        if hasattr(self.mt, "req"):
-            return await self.mt.req(act, data)
-        return await self.mt.send({"act": act, **data})
+        if self._mt_rpc is None:
+            raise RuntimeError("mt net is not configured")
+        return await self._mt_rpc(act, **data)
 
     async def send_photo(self, chat_id: int | str, photo: Any, caption: str | None = None, *, via: str | None = None, reply_to: int | None = None, kbd: Any | None = None, **kw: Any) -> Any:
         return await self.send_media(chat_id, photo, "photo", caption, via=via, reply_to=reply_to, kbd=kbd, **kw)

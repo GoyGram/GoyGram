@@ -1,8 +1,29 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
+from functools import lru_cache
 from typing import Any
 
 _ATOM = {type(None), bool, int, float, str, bytes, bytearray, memoryview}
+
+
+@lru_cache(maxsize=4096)
+def camel(name: str) -> str:
+    if "_" not in name:
+        return name
+    p = name.split("_")
+    return p[0] + "".join(x[:1].upper() + x[1:] for x in p[1:])
+
+
+@lru_cache(maxsize=4096)
+def mtname(name: str) -> str:
+    if name.startswith("mt_"):
+        name = name[3:]
+    if "." in name:
+        return name
+    p = name.split("_")
+    if len(p) < 2:
+        return name
+    return p[0] + "." + p[1] + "".join(x[:1].upper() + x[1:] for x in p[2:])
 
 
 def dump(v: Any) -> Any:

@@ -5,6 +5,7 @@ from hashlib import sha1, sha256
 from pathlib import Path
 from typing import Any
 from goygram.errors import ConnectionClosedError, FileReferenceExpiredError, FloodWaitError, GoyGramError, RPCError
+from goygram.api.types import mtname
 
 import re as _re
 
@@ -1699,14 +1700,7 @@ class MTNet:
         }))
 
     def _norm_act(self, name:str)->str:
-        if '.' in name:
-            return name
-        parts = name.split('_')
-        if len(parts) < 2:
-            return name
-        ns = parts[0]
-        rest = parts[1:]
-        return ns + '.' + rest[0] + ''.join(p[:1].upper() + p[1:] for p in rest[1:])
+        return mtname(name)
 
     def _takeout_encode(self, v: Any) -> Any:
         if isinstance(v, (list, tuple)):

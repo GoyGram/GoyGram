@@ -141,12 +141,15 @@ def _rget(e: object, *keys: str) -> Any:
         return None
     value: Any = e
     for key in keys:
-        if isinstance(value, dict):
-            value = value.get(key)
-        elif hasattr(value, "get"):
+        t = type(value)
+        if t is dict:
             value = value.get(key)
         else:
-            value = getattr(value, key, None)
+            g = getattr(t, "get", None)
+            if g is not None:
+                value = g(value, key)
+            else:
+                value = getattr(value, key, None)
         if value is None:
             return None
     return value

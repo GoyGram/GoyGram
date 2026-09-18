@@ -421,14 +421,9 @@ fn flag_index(name: &str) -> usize {
     0
 }
 
-fn as_dict<'py>(py: Python<'py>, args: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+fn as_dict<'py>(_py: Python<'py>, args: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
     if let Ok(d) = args.downcast::<PyDict>() {
         return Ok(d.clone());
-    }
-    if let Ok(s) = args.extract::<String>() {
-        let json = PyModule::import_bound(py, "json")?;
-        let loaded = json.call_method1("loads", (s,))?;
-        return Ok(loaded.downcast::<PyDict>()?.clone());
     }
     Err(PyValueError::new_err("TL args must be a dict"))
 }

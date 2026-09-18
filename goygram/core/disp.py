@@ -65,7 +65,7 @@ class Disp:
     async def _report_error(self, e: Exception, data: Any) -> None:
         self.log.error("Handler failure: %r", e)
         await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
-        handlers = list(getattr(self.app, "_error_handlers", []) or [])
+        handlers = getattr(self.app, "_error_handlers", None) or ()
         if handlers:
             try:
                 evt = data if isinstance(data, Obj) else Obj("sys", data if isinstance(data, dict) else {"kind": "unknown"}, self.app)
@@ -93,7 +93,7 @@ class Disp:
         if kind != "update":
             update = Obj(pkt.get("src", "sys"), data, self.app)
             evt = update
-            for fn in list(getattr(self.app, "update_hook", [])):
+            for fn in self.app.update_hook:
                 try:
                     await fn(update)
                 except StopPropagation:
@@ -104,7 +104,7 @@ class Disp:
             msg = Obj(pkt.get("src", "sys"), data, self.app)
             evt = msg
             await self.app._conv_dispatch(msg)
-            for fn in list(self.app.hook):
+            for fn in self.app.hook:
                 try:
                     await fn(msg)
                 except StopPropagation:
@@ -115,7 +115,7 @@ class Disp:
         if kind == "edit":
             msg = Obj(pkt.get("src", "sys"), data, self.app)
             evt = msg
-            for fn in list(getattr(self.app, "edit_hook", [])):
+            for fn in self.app.edit_hook:
                 try:
                     await fn(msg)
                 except StopPropagation:
@@ -126,7 +126,7 @@ class Disp:
         if kind == "poll":
             poll = Obj(pkt.get("src", "sys"), data, self.app)
             evt = poll
-            for fn in list(getattr(self.app, "poll_hook", [])):
+            for fn in self.app.poll_hook:
                 try:
                     await fn(poll)
                 except StopPropagation:
@@ -137,7 +137,7 @@ class Disp:
         if kind == "cb":
             cb = Obj(pkt.get("src", "sys"), data, self.app)
             evt = cb
-            for fn in list(self.app.cb_hook):
+            for fn in self.app.cb_hook:
                 try:
                     await fn(cb)
                 except StopPropagation:
@@ -148,7 +148,7 @@ class Disp:
         if kind == "inline":
             inline = Obj(pkt.get("src", "sys"), data, self.app)
             evt = inline
-            for fn in list(getattr(self.app, "inline_hook", [])):
+            for fn in self.app.inline_hook:
                 try:
                     await fn(inline)
                 except StopPropagation:
@@ -159,7 +159,7 @@ class Disp:
         if kind == "update":
             update = Obj(pkt.get("src", "sys"), data, self.app)
             evt = update
-            for fn in list(getattr(self.app, "update_hook", [])):
+            for fn in self.app.update_hook:
                 try:
                     await fn(update)
                 except StopPropagation:
@@ -171,7 +171,7 @@ class Disp:
             return
         mem = Obj(pkt.get("src", "sys"), data, self.app)
         evt = mem
-        for fn in list(getattr(self.app, "member_hook", [])):
+        for fn in self.app.member_hook:
             try:
                 await fn(mem)
             except StopPropagation:
