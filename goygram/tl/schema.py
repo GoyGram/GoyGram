@@ -51,8 +51,9 @@ def enc_val(tp: str, v: Any) -> bytes:
         return struct.pack("<I", 0x997275b5 if v else 0xbc799737)
     if tp.startswith("Vector<") and tp.endswith(">"):
         return enc_vec(tp[7:-1], list(v))
-    if hasattr(v, "to_bytes"):
-        return v.to_bytes()
+    fn = getattr(type(v), "to_bytes", None)
+    if fn is not None:
+        return fn(v)
     raise TypeError(tp)
 
 class TlObj:

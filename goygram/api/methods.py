@@ -1,16 +1,7 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 from typing import Any
-from goygram.api.types import *
-
-def dump(v: Any) -> Any:
-    if hasattr(v, "to_dict"):
-        return v.to_dict()
-    if isinstance(v, list):
-        return [dump(x) for x in v]
-    if isinstance(v, dict):
-        return {k: dump(x) for k, x in v.items() if x is not None}
-    return v
+from goygram.api.types import dump
 
 class BotAPI:
     __slots__ = ("net",)

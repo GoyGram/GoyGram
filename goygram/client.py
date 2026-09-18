@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Literal, TYPE_CHECKING
 
 from goygram.api.methods import BotAPI
+from goygram.api.types import dump
 from goygram.core.bus import Bus
 from goygram.core.disp import Disp
 from goygram.core.fsm import FSMEngine
@@ -1090,7 +1091,7 @@ class AppCore:
     async def mt_req(self, act: str, **kw: Any) -> Any:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        data = {k: v.to_dict() if hasattr(v, "to_dict") else v for k, v in kw.items() if v is not None}
+        data = dump(kw)
         if act.startswith("messages.") and isinstance(data.get("reply_markup"), dict) and "inline_keyboard" in data.get("reply_markup", {}):
             from goygram.types.kbd import kbd_to_tl
             tl_kbd = kbd_to_tl(data["reply_markup"])
@@ -1137,7 +1138,7 @@ class AppCore:
             if reply_to is not None:
                 data["reply_parameters"] = {"message_id": reply_to}
             if kbd is not None:
-                data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
+                data["reply_markup"] = dump(kbd)
             if isinstance(source, (bytes, bytearray)):
                 data[kind] = (file_name or "file.bin", bytes(source))
             elif isinstance(source, str) and (source.startswith("http://") or source.startswith("https://")):
@@ -1232,7 +1233,7 @@ class AppCore:
         if transport == "bot":
             data = dict(kw)
             if kbd is not None:
-                data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
+                data["reply_markup"] = dump(kbd)
             return await self.bot_req("editMessageText", chat_id=target, message_id=msg_id, text=text, **data)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")

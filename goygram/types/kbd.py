@@ -115,7 +115,11 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
     def btn(b: Any) -> dict[str, Any]:
         if isinstance(b, dict) and b.get("_") == "keyboardInlineButton":
             return b
-        d = b.to_dict() if hasattr(b, "to_dict") else dict(b) if isinstance(b, dict) else {"text": str(b)}
+        if isinstance(b, dict):
+            d = b
+        else:
+            fn = getattr(type(b), "to_dict", None)
+            d = fn(b) if fn is not None else {"text": str(b)}
         fields: dict[str, Any] = {"_": "keyboardInlineButton", "text": str(d.get("text", "")), "type": btn_type(d)}
         icon = d.get("icon_custom_emoji_id")
         if icon is not None:

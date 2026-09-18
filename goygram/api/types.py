@@ -2,14 +2,22 @@
 from __future__ import annotations
 from typing import Any
 
+_ATOM = {type(None), bool, int, float, str, bytes, bytearray, memoryview}
+
+
 def dump(v: Any) -> Any:
-    if hasattr(v, "to_dict"):
-        return v.to_dict()
-    if isinstance(v, list):
-        return [dump(x) for x in v]
-    if isinstance(v, dict):
+    t = type(v)
+    if t in _ATOM:
+        return v
+    if t is dict:
         return {k: dump(x) for k, x in v.items() if x is not None}
+    if t is list or t is tuple:
+        return [dump(x) for x in v]
+    fn = getattr(t, "to_dict", None)
+    if fn is not None:
+        return dump(fn(v))
     return v
+
 
 class User:
     __slots__ = ('id', 'is_bot', 'first_name', 'username')
@@ -20,12 +28,8 @@ class User:
         self.username = username
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": dump(self.id),
-            "is_bot": dump(self.is_bot),
-            "first_name": dump(self.first_name),
-            "username": dump(self.username),
-        }
+        return {"id": self.id, "is_bot": self.is_bot, "first_name": self.first_name, "username": self.username}
+
 
 class Chat:
     __slots__ = ('id', 'type', 'title', 'username')
@@ -36,12 +40,8 @@ class Chat:
         self.username = username
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": dump(self.id),
-            "type": dump(self.type),
-            "title": dump(self.title),
-            "username": dump(self.username),
-        }
+        return {"id": self.id, "type": self.type, "title": self.title, "username": self.username}
+
 
 class Message:
     __slots__ = ('message_id', 'date', 'chat', 'text')
@@ -52,11 +52,7 @@ class Message:
         self.text = text
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "message_id": dump(self.message_id),
-            "date": dump(self.date),
-            "chat": dump(self.chat),
-            "text": dump(self.text),
-        }
+        return {"message_id": self.message_id, "date": self.date, "chat": dump(self.chat), "text": self.text}
 
-__all__ = ['User', 'Chat', 'Message']
+
+__all__ = ['dump', 'User', 'Chat', 'Message']

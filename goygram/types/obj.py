@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import secrets
 from typing import Any
+from goygram.api.types import dump
 
 
 class Obj:
@@ -400,7 +401,7 @@ class Obj:
             raise RuntimeError("bot net is not configured")
         data = dict(kw)
         if kbd is not None:
-            data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
+            data["reply_markup"] = dump(kbd)
         if self.chat_id is None or self.msg_id is None:
             if self.inline_message_id is None:
                 return None
@@ -420,7 +421,7 @@ class Obj:
             if topic_id is not None:
                 data["message_thread_id"] = topic_id
             if link_options is not None:
-                data["link_preview_options"] = link_options.to_dict() if hasattr(link_options, "to_dict") else link_options
+                data["link_preview_options"] = dump(link_options)
             return await self.app.bot_req("sendMessage", chat_id=self.chat_id, text=txt, **data)
         if self.app.mt is not None:
             data = dict(kw)
@@ -439,7 +440,7 @@ class Obj:
         return None
 
     def _kbd(self, data: dict[str, Any], kbd: Any) -> None:
-        data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
+        data["reply_markup"] = dump(kbd)
 
     async def forward_to(self, chat_id: int | str, *, via: str | None = None, **kw: Any) -> Any:
         if self.chat_id is None or self.id is None:
@@ -535,7 +536,7 @@ class Obj:
             "input_message_content": message,
         }
         if kbd is not None:
-            markup = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
+            markup = dump(kbd)
             if isinstance(markup, list):
                 markup = {"inline_keyboard": markup}
             result["reply_markup"] = markup

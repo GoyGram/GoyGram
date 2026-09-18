@@ -13,6 +13,7 @@ from typing import Any
 
 from goygram.logging import get_logger
 from goygram.errors import FloodWaitError
+from goygram.api.types import dump
 
 try:
     import aiohttp
@@ -265,8 +266,9 @@ class BotNet:
     def add_form(self, form: Any, k: str, v: Any) -> None:
         if v is None:
             return
-        if hasattr(v, "to_dict"):
-            self.add_form(form, k, v.to_dict())
+        fn = getattr(type(v), "to_dict", None)
+        if fn is not None:
+            self.add_form(form, k, fn(v))
             return
         if isinstance(v, tuple) and len(v) >= 2 and isinstance(v[1], (bytes, bytearray, memoryview)):
             name = str(v[0])
@@ -421,14 +423,14 @@ class BotNet:
         if reply_to is not None:
             data["reply_parameters"] = {"message_id": reply_to}
         if kbd is not None:
-            data["reply_markup"] = kbd.to_dict() if hasattr(kbd, "to_dict") else kbd
+            data["reply_markup"] = dump(kbd)
         if topic_id is not None:
             data["message_thread_id"] = topic_id
         if media is not None:
-            data["media"] = media.to_dict() if hasattr(media, "to_dict") else media
+            data["media"] = dump(media)
         opts = link_preview_options if link_preview_options is not None else link_options
         if opts is not None:
-            data["link_preview_options"] = opts.to_dict() if hasattr(opts, "to_dict") else opts
+            data["link_preview_options"] = dump(opts)
         return await self.req("sendMessage", data)
 
     async def del_msg(self, chat_id: int | str, msg_id: int) -> bool:
