@@ -1,6 +1,8 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 
+import re as _re
+from html import unescape as _unescape
 from typing import Any
 
 
@@ -253,82 +255,108 @@ def extract_sent_message(result: Any) -> dict[str, Any] | None:
     return None
 
 
+_TOKEN_RE = _re.compile(r"<[^>]+>|[^<]+")
+_OPEN_RE = _re.compile(r"<([a-zA-Z][\w-]*)(?:\s[^>]*)?>")
+_CLOSE_RE = _re.compile(r"</([a-zA-Z][\w-]*)>")
+_NAME_RE = _re.compile(r"<([a-zA-Z][\w-]*)")
+_TAG_RE = _re.compile(r"</?([A-Za-z][\w-]*)([^>]*)>")
+_ATTR_RE = _re.compile(r'([^\s=]+)(?:\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|(\S+)))?')
+_VOID = frozenset(("br", "input", "img"))
+
+
+def _u16n(s: str) -> int:
+    n = 0
+    for c in s:
+        n += 1 + (ord(c) > 0xFFFF)
+    return n
+
+
+def _utf16_fix(plain: str, ents: list[dict[str, Any]]) -> None:
+    n = len(plain)
+    m = [0] * (n + 1)
+    u = 0
+    i = 0
+    while i < n:
+        m[i] = u
+        u += 1 + (ord(plain[i]) > 0xFFFF)
+        i += 1
+    m[n] = u
+    for e in ents:
+        o = e["offset"]
+        ln = e["length"]
+        e["offset"] = m[o]
+        e["length"] = m[o + ln] - m[o]
+
+
 def split_html_text(text: str, limit: int = 4096) -> list[str]:
-    import re
     if limit < 256:
         raise ValueError("limit must be at least 256")
-    units = lambda s: len(s.encode("utf-16-le")) // 2
-    tokens = re.findall(r"<[^>]+>|[^<]+", text)
+    tokens = _TOKEN_RE.findall(text)
     parts: list[str] = []
     stack: list[str] = []
 
     def open_tags() -> str:
-        names = []
-        for tag in stack:
-            match = re.match(r"<([a-zA-Z][\w-]*)", tag)
-            if match is not None:
-                names.append(match.group(1))
-        return "".join(f"<{name}>" for name in names)
+        return "".join(f"<{name}>" for name in stack)
 
     def close_tags() -> str:
-        names = []
-        for tag in stack:
-            match = re.match(r"<([a-zA-Z][\w-]*)", tag)
-            if match is not None:
-                names.append(match.group(1))
-        return "".join(f"</{name}>" for name in reversed(names))
+        return "".join(f"</{name}>" for name in reversed(stack))
 
     def close_units() -> int:
-        total = 0
-        for tag in stack:
-            match = re.match(r"<([a-zA-Z][\w-]*)", tag)
-            if match is not None:
-                total += units(f"</{match.group(1)}>")
-        return total
+        n = 0
+        for name in stack:
+            n += 3 + len(name)
+        return n
 
     current = [open_tags()]
-    size = units(current[0])
+    size = _u16n(current[0])
 
     def flush() -> None:
         nonlocal current, size
         parts.append("".join(current) + close_tags())
         current = [open_tags()]
-        size = units(current[0])
+        size = _u16n(current[0])
 
     for token in tokens:
         if token.startswith("<"):
-            opening = re.fullmatch(r"<([a-zA-Z][\w-]*)(?:\s[^>]*)?>", token)
-            closing = re.fullmatch(r"</([a-zA-Z][\w-]*)>", token)
+            opening = _OPEN_RE.fullmatch(token)
+            closing = _CLOSE_RE.fullmatch(token)
             if opening is not None:
                 name = opening.group(1)
-                if name not in ("br", "input", "img"):
-                    stack.append(token)
+                if name not in _VOID:
+                    stack.append(name)
                 current.append(token)
-                size += units(token)
+                size += _u16n(token)
                 continue
             if closing is not None:
                 name = closing.group(1)
                 for i in range(len(stack) - 1, -1, -1):
-                    match = re.match(r"<([a-zA-Z][\w-]*)", stack[i])
-                    if match is not None and match.group(1) == name:
+                    if stack[i] == name:
                         stack.pop(i)
                         break
                 current.append(token)
-                size += units(token)
+                size += _u16n(token)
                 continue
             current.append(token)
-            size += units(token)
+            size += _u16n(token)
             continue
         while token:
             budget = max(limit - size - close_units(), 1)
-            if units(token) <= budget:
+            tu = _u16n(token)
+            if tu <= budget:
                 current.append(token)
-                size += units(token)
+                size += tu
                 break
-            cut = token.encode("utf-16-le")[: budget * 2].decode("utf-16-le", errors="ignore")
-            current.append(cut)
+            cut_n = 0
+            acc = 0
+            for c in token:
+                w = 1 + (ord(c) > 0xFFFF)
+                if acc + w > budget:
+                    break
+                acc += w
+                cut_n += 1
+            current.append(token[:cut_n])
             flush()
-            token = token[len(cut):]
+            token = token[cut_n:]
     tail = "".join(current)
     if tail.strip() or tail != open_tags():
         parts.append(tail + close_tags())
@@ -353,10 +381,6 @@ _ENT_MAP = {
     "blockquote": "messageEntityBlockquote",
     "quote": "messageEntityBlockquote",
 }
-
-
-def _u16(o: int, s: str) -> int:
-    return len(s[:o].encode("utf-16-le")) // 2
 
 
 def media_duration(path: str) -> int | None:
@@ -397,45 +421,50 @@ def media_duration(path: str) -> int | None:
     return None
 
 
+_MD2 = {
+    "__": "messageEntityUnderline",
+    "||": "messageEntitySpoiler",
+    "~~": "messageEntityStrike",
+}
+_MD1 = {
+    "*": "messageEntityBold",
+    "_": "messageEntityItalic",
+    "`": "messageEntityCode",
+}
+_MD_LINK_RE = _re.compile(r"\[([^\]]*)\]\(([^)]*)\)")
+_MD_ESC_RE = _re.compile(r"([_*\[\]()~`>#\+\-=|{}.!\\])")
+
+
 def md_to_entities(src: str) -> tuple[str, list[dict[str, Any]]]:
-    import re as _re
-    _md2 = {
-        "__": "messageEntityUnderline",
-        "||": "messageEntitySpoiler",
-        "~~": "messageEntityStrike",
-    }
-    _md1 = {
-        "*": "messageEntityBold",
-        "_": "messageEntityItalic",
-        "`": "messageEntityCode",
-    }
     out: list[str] = []
     ents: list[dict[str, Any]] = []
     stack: list[tuple[str, int]] = []
     i = 0
     n = len(src)
-
-    def cur() -> int:
-        return len("".join(out))
+    pos = 0
 
     def close(mark: str) -> bool:
-        for k in range(len(stack) - 1, -1, -1):
+        k = len(stack) - 1
+        while k >= 0:
             if stack[k][0] == mark:
                 _, off = stack.pop(k)
-                ents.append({"_": _md2.get(mark) or _md1[mark], "offset": off, "length": cur() - off})
+                ents.append({"_": _MD2.get(mark) or _MD1[mark], "offset": off, "length": pos - off})
                 return True
+            k -= 1
         return False
 
     while i < n:
         c = src[i]
         if c == "\\" and i + 1 < n:
             out.append(src[i + 1])
+            pos += 1
             i += 2
             continue
-        if src[i:i + 3] == "```":
+        if src.startswith("```", i):
             j = src.find("```", i + 3)
             if j == -1:
                 out.append("```")
+                pos += 3
                 i += 3
                 continue
             head = src[i + 3:j]
@@ -443,137 +472,139 @@ def md_to_entities(src: str) -> tuple[str, list[dict[str, Any]]]:
                 lang, _, body = head.partition("\n")
             else:
                 lang, body = "", head
-            ents.append({"_": "messageEntityPre", "language": lang, "offset": cur(), "length": len(body)})
+            ents.append({"_": "messageEntityPre", "language": lang, "offset": pos, "length": len(body)})
             out.append(body)
+            pos += len(body)
             i = j + 3
             continue
         two = src[i:i + 2]
-        if two in _md2:
-            if close(two):
-                pass
-            elif two in src[i + 2:]:
-                stack.append((two, cur()))
-            else:
-                out.append(two)
+        if two in _MD2:
+            if not close(two):
+                if src.find(two, i + 2) != -1:
+                    stack.append((two, pos))
+                else:
+                    out.append(two)
+                    pos += 2
             i += 2
             continue
-        if c in _md1:
-            if close(c):
-                pass
-            elif c in src[i + 1:]:
-                stack.append((c, cur()))
-            else:
-                out.append(c)
+        if c in _MD1:
+            if not close(c):
+                if src.find(c, i + 1) != -1:
+                    stack.append((c, pos))
+                else:
+                    out.append(c)
+                    pos += 1
             i += 1
             continue
         if c == "[":
-            m = _re.match(r"\[([^\]]*)\]\(([^)]*)\)", src[i:])
+            m = _MD_LINK_RE.match(src, i)
             if m:
-                start = cur()
-                out.append(m.group(1))
+                start = pos
+                g1 = m.group(1)
+                out.append(g1)
+                pos += len(g1)
                 url = m.group(2)
                 if url.startswith("tg://user?id="):
-                    ents.append({"_": "inputMessageEntityMentionName", "user_id": int(url.split("id=", 1)[1]), "offset": start, "length": len(m.group(1))})
+                    ents.append({"_": "inputMessageEntityMentionName", "user_id": int(url.split("id=", 1)[1]), "offset": start, "length": len(g1)})
                 else:
-                    ents.append({"_": "messageEntityTextUrl", "url": url, "offset": start, "length": len(m.group(1))})
-                i += m.end()
+                    ents.append({"_": "messageEntityTextUrl", "url": url, "offset": start, "length": len(g1)})
+                i = m.end()
                 continue
         out.append(c)
+        pos += 1
         i += 1
     plain = "".join(out)
-    fixed = []
-    for e in ents:
-        o16 = _u16(e["offset"], plain)
-        l16 = _u16(e["offset"] + e["length"], plain) - o16
-        fixed.append({**e, "offset": o16, "length": l16})
-    return plain, fixed
+    _utf16_fix(plain, ents)
+    return plain, ents
 
 
 def md_escape(text: str) -> str:
-    import re as _re
-    return _re.sub(r"([_*\[\]()~`>#\+\-=|{}.!\\])", r"\\\1", text)
+    return _MD_ESC_RE.sub(r"\\\1", text)
+
+
+def _attrs(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for m in _ATTR_RE.finditer(raw):
+        out[m.group(1)] = m.group(2) or m.group(3) or m.group(4) or ""
+    return out
 
 
 def html_to_entities(html_src: str) -> tuple[str, list[dict[str, Any]]]:
-    from html.parser import HTMLParser
-
-    class _P(HTMLParser):
-        def __init__(self) -> None:
-            super().__init__(convert_charrefs=True)
-            self.out: list[str] = []
-            self.ents: list[dict[str, Any]] = []
-            self.stack: list[tuple[str, int, dict[str, Any]]] = []
-
-        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-            at = dict(attrs)
-            if tag == "br":
-                self.out.append("\n")
-                return
-            if tag == "a":
-                ent: dict[str, Any] | None = None
-                href = at.get("href", "")
-                if href.startswith("tg://user?id="):
-                    ent = {"_": "inputMessageEntityMentionName", "user_id": int(href.split("id=", 1)[1])}
-                elif href.startswith("tg://emoji?id="):
-                    self.stack.append((tag, len("".join(self.out)), {"emoji_id": int(href.split("id=", 1)[1])}))
-                    return
-                elif href:
-                    ent = {"_": "messageEntityTextUrl", "url": href}
-                if ent is not None:
-                    self.stack.append((tag, len("".join(self.out)), ent))
-                else:
-                    self.stack.append((tag, len("".join(self.out)), {}))
-                return
-            if tag == "tg-emoji":
-                self.stack.append((tag, len("".join(self.out)), {"emoji_id": int(at.get("emoji-id", 0))}))
-                return
-            ctor = _ENT_MAP.get(tag)
-            if ctor is None:
-                return
-            for _, _, prev in self.stack:
-                if prev.get("_") == "messageEntityPre":
-                    if at.get("class", "").startswith("language-"):
-                        prev["language"] = at["class"][9:]
-                    return
-            ent = {"_": ctor}
-            if tag == "pre":
-                lang = str(at.get("class") or "")
-                ent["language"] = lang[9:] if lang.startswith("language-") else ""
-            elif tag == "blockquote" and str(at.get("expandable", "")).lower() == "true":
-                ent["collapsed"] = True
-            self.stack.append((tag, len("".join(self.out)), ent))
-
-        def handle_endtag(self, tag: str) -> None:
-            for i in range(len(self.stack) - 1, -1, -1):
-                t, off, ent = self.stack[i]
+    out: list[str] = []
+    ents: list[dict[str, Any]] = []
+    stack: list[tuple[str, int, dict[str, Any]]] = []
+    pos = 0
+    last = 0
+    for m in _TAG_RE.finditer(html_src):
+        chunk = _unescape(html_src[last:m.start()])
+        if chunk:
+            out.append(chunk)
+            pos += len(chunk)
+        tag = m.group(1).lower()
+        close = m.group(0).startswith("</")
+        last = m.end()
+        if close:
+            i = len(stack) - 1
+            while i >= 0:
+                t, off, ent = stack[i]
                 if t == tag:
-                    self.stack.pop(i)
-                    text = "".join(self.out)
-                    if not ent:
-                        return
-                    ent["offset"] = off
-                    ent["length"] = len(text) - off
-                    if "user_id" in ent:
-                        ent["_"] = "inputMessageEntityMentionName"
-                    if "emoji_id" in ent:
-                        ent["_"] = "messageEntityCustomEmoji"
-                        ent["document_id"] = ent.pop("emoji_id")
-                    self.ents.append(ent)
-                    return
-
-        def handle_data(self, data: str) -> None:
-            self.out.append(data)
-
-    p = _P()
-    p.feed(html_src)
-    p.close()
-    plain = "".join(p.out)
-    fixed = []
-    for e in p.ents:
-        o16 = _u16(e["offset"], plain)
-        l16 = _u16(e["offset"] + e["length"], plain) - o16
-        fixed.append({**e, "offset": o16, "length": l16})
-    return plain, fixed
+                    stack.pop(i)
+                    if ent:
+                        ent["offset"] = off
+                        ent["length"] = pos - off
+                        if "emoji_id" in ent:
+                            ent["_"] = "messageEntityCustomEmoji"
+                            ent["document_id"] = ent.pop("emoji_id")
+                        ents.append(ent)
+                    break
+                i -= 1
+            continue
+        if tag == "br":
+            out.append("\n")
+            pos += 1
+            continue
+        at = _attrs(m.group(2) or "")
+        if tag == "a":
+            href = at.get("href") or ""
+            ent: dict[str, Any] = {}
+            if href.startswith("tg://user?id="):
+                ent = {"_": "inputMessageEntityMentionName", "user_id": int(href.split("id=", 1)[1])}
+            elif href.startswith("tg://emoji?id="):
+                ent = {"emoji_id": int(href.split("id=", 1)[1])}
+            elif href:
+                ent = {"_": "messageEntityTextUrl", "url": href}
+            stack.append((tag, pos, ent))
+            continue
+        if tag == "tg-emoji":
+            stack.append((tag, pos, {"emoji_id": int(at.get("emoji-id") or 0)}))
+            continue
+        ctor = _ENT_MAP.get(tag)
+        if ctor is None:
+            continue
+        nested = False
+        for _, _, prev in stack:
+            if prev.get("_") == "messageEntityPre":
+                cls = at.get("class") or ""
+                if cls.startswith("language-"):
+                    prev["language"] = cls[9:]
+                nested = True
+                break
+        if nested:
+            continue
+        ent = {"_": ctor}
+        if tag == "pre":
+            lang = at.get("class") or ""
+            ent["language"] = lang[9:] if lang.startswith("language-") else ""
+        elif tag == "blockquote" and (at.get("expandable") or "").lower() == "true":
+            ent["collapsed"] = True
+        stack.append((tag, pos, ent))
+    tail = _unescape(html_src[last:])
+    if tail:
+        out.append(tail)
+        pos += len(tail)
+    plain = "".join(out)
+    _utf16_fix(plain, ents)
+    return plain, ents
 
 
 __all__ = [

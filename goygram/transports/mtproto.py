@@ -6,63 +6,7 @@ from pathlib import Path
 from typing import Any
 from goygram.errors import ConnectionClosedError, FileReferenceExpiredError, FloodWaitError, GoyGramError, RPCError
 from goygram.api.types import mtname
-
 import re as _re
-
-def _html_to_entities(text:str)->tuple[str, list[tuple[int,int,int,str|None]]]:
-    tags = {
-        'b': 1, 'strong': 1,
-        'i': 2, 'em': 2,
-        'u': 3, 'ins': 3,
-        's': 4, 'strike': 4, 'del': 4,
-        'code': 5,
-        'pre': 6,
-    }
-    entities: list[tuple[int,int,int,str|None]] = []
-    stack: list[tuple[int,str,str|None]] = []
-    result: list[str] = []
-    pos = 0
-    it = _re.finditer(r'</?([a-zA-Z][a-zA-Z0-9]*)(?:\s+[^>]*)?>', text)
-    last_end = 0
-    for m in it:
-        tag = m.group(1).lower()
-        is_close = m.group(0).startswith('</')
-        result.append(text[last_end:m.start()])
-        written = len(''.join(result))
-        if is_close:
-            while stack:
-                start, otag, url = stack.pop()
-                if otag == tag:
-                    length = written - start
-                    if length > 0:
-                        if otag in tags:
-                            entities.append((start, length, tags[otag], None))
-                        elif otag == 'a':
-                            if url:
-                                entities.append((start, length, 7, url))
-                    break
-        else:
-            if tag in tags:
-                stack.append((written, tag, None))
-            elif tag == 'a':
-                href = _re.search(r'href=["\']([^"\']*)["\']', m.group(0))
-                url = href.group(1) if href else None
-                stack.append((written, 'a', url))
-        last_end = m.end()
-        pos = written
-    result.append(text[last_end:])
-    cleaned = ''.join(result)
-
-    written = len(cleaned)
-    while stack:
-        start, otag, url = stack.pop()
-        length = written - start
-        if length > 0:
-            if otag in tags:
-                entities.append((start, length, tags[otag], None))
-            elif otag == 'a' and url:
-                entities.append((start, length, 7, url))
-    return cleaned, entities
 
 log = logging.getLogger("goygram.mtproto")
 

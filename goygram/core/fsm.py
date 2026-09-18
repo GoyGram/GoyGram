@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import time
 from collections.abc import Callable
 from typing import Any
@@ -40,7 +39,7 @@ class FSMEngine:
                 "chat_id": chat_id,
                 "user_id": user_id,
                 "state": item.state,
-                "data": copy.deepcopy(item.data),
+                "data": item.data.copy(),
                 "expiry": item.expiry,
             }
             for (chat_id, user_id), item in self._states.items()
@@ -49,11 +48,11 @@ class FSMEngine:
 
     def restore(self, snapshot: Any) -> None:
         self._states.clear()
-        if not isinstance(snapshot, list):
+        if type(snapshot) is not list:
             return
         now = time.time()
         for item in snapshot:
-            if not isinstance(item, dict):
+            if type(item) is not dict:
                 continue
             try:
                 chat_id = int(item["chat_id"])
@@ -63,29 +62,28 @@ class FSMEngine:
             except (KeyError, TypeError, ValueError):
                 continue
             data = item.get("data", {})
-            if expiry > now and isinstance(data, dict):
-                self._states[(chat_id, user_id)] = StateItem(state, copy.deepcopy(data), expiry)
+            if expiry > now and type(data) is dict:
+                self._states[(chat_id, user_id)] = StateItem(state, data.copy(), expiry)
 
     def _changed(self) -> None:
-        snapshot = self.snapshot()
+        snap = self.snapshot()
         if self._backend is not None:
-            self._backend.save(copy.deepcopy(snapshot))
+            self._backend.save(snap)
         if self._on_change is not None:
-            self._on_change(copy.deepcopy(snapshot))
+            self._on_change(snap)
 
     def set(self, chat_id: int | str, user_id: int | str, state: str, data: dict[str, Any] | None = None, ttl: float | None = None) -> None:
         key = (int(chat_id), int(user_id))
         existing = self._states.get(key)
         now = time.time()
+        exp = now + (ttl if ttl is not None else self._ttl)
         if existing is not None:
             if data is not None:
-                existing.data.update(copy.deepcopy(data))
+                existing.data.update(data)
             existing.state = state
-            existing.expiry = now + (ttl if ttl is not None else self._ttl)
+            existing.expiry = exp
         else:
-            merged_data = copy.deepcopy(data) if data is not None else {}
-            expiry = now + (ttl if ttl is not None else self._ttl)
-            self._states[key] = StateItem(state, merged_data, expiry)
+            self._states[key] = StateItem(state, dict(data) if data is not None else {}, exp)
         self._changed()
 
     def get(self, chat_id: int | str, user_id: int | str) -> str | None:
@@ -108,7 +106,7 @@ class FSMEngine:
             del self._states[key]
             self._changed()
             return None
-        return copy.deepcopy(item.data)
+        return item.data.copy()
 
     def clear(self, chat_id: int | str, user_id: int | str) -> None:
         self._states.pop((int(chat_id), int(user_id)), None)
