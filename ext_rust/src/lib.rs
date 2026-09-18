@@ -337,12 +337,17 @@ fn deserialize_fields<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let obj = PyDict::new_bound(py);
     obj.set_item("_", name)?;
-    let mut flags_map: HashMap<String, u32> = HashMap::new();
+    let mut flags = 0u32;
+    let mut flags2 = 0u32;
 
     for f in fields {
         if f.ftype == "#" {
             let val = read_u32(data, pos).map_err(PyValueError::new_err)?;
-            flags_map.insert(f.name.clone(), val);
+            if f.name == "flags2" {
+                flags2 = val;
+            } else {
+                flags = val;
+            }
             obj.set_item(&f.name, val)?;
             continue;
         }
@@ -350,7 +355,7 @@ fn deserialize_fields<'py>(
         if has_flags {
             if let Some(bit) = f.flag_bit {
                 let group = f.flags_group.as_deref().unwrap_or("flags");
-                let flags_val = flags_map.get(group).copied().unwrap_or(0);
+                let flags_val = if group == "flags2" { flags2 } else { flags };
                 if flags_val & (1 << bit) == 0 {
                     if f.is_bare {
                         obj.set_item(&f.name, false)?;
@@ -372,7 +377,6 @@ fn deserialize_fields<'py>(
 }
 
 fn deserialize_tl(py: Python<'_>, data: &[u8], pos: &mut usize) -> PyResult<PyObject> {
-    let start = *pos;
     let cid = read_u32(data, pos).map_err(PyValueError::new_err)?;
     if cid == 0x1cb5c415 {
         let count = read_i32(data, pos).map_err(PyValueError::new_err)?;
@@ -388,8 +392,6 @@ fn deserialize_tl(py: Python<'_>, data: &[u8], pos: &mut usize) -> PyResult<PyOb
     }
     if let Some((name, ctor)) = get_ctor_by_cid(cid) {
         let result = deserialize_fields(py, data, pos, &ctor.fields, ctor.has_flags, name.as_ref())?;
-        let end = (*pos).min(data.len());
-        result.set_item("raw", hex::encode(&data[start..end]))?;
         Ok(result.into_any().unbind())
     } else {
         let start = *pos - 4;
@@ -472,7 +474,8 @@ fn serialize_tl(name: &str, args: &serde_json::Value, cid: u32, fields: &[TlFiel
     buf.extend_from_slice(&cid.to_le_bytes());
 
     if has_flags {
-        let mut flags_map: HashMap<String, u32> = HashMap::new();
+        let mut flags = 0u32;
+        let mut flags2 = 0u32;
 
         for f in fields {
             if let Some(bit) = f.flag_bit {
@@ -485,15 +488,18 @@ fn serialize_tl(name: &str, args: &serde_json::Value, cid: u32, fields: &[TlFiel
                     _ => val.is_some(),
                 };
                 if has_val {
-                    *flags_map.entry(group.to_string()).or_insert(0) |= 1 << bit;
+                    if group == "flags2" {
+                        flags2 |= 1 << bit;
+                    } else {
+                        flags |= 1 << bit;
+                    }
                 }
             }
         }
 
         for f in fields {
             if f.ftype == "#" {
-                let group = &f.name;
-                let fv = flags_map.get(group).copied().unwrap_or(0);
+                let fv = if f.name == "flags2" { flags2 } else { flags };
                 buf.extend_from_slice(&fv.to_le_bytes());
                 continue;
             }
@@ -635,12 +641,14 @@ fn encode_field_value(f: &TlFieldDef, val: &serde_json::Value) -> Result<Vec<u8>
                 let n = val.as_i64().unwrap_or(0);
                 Ok(n.to_le_bytes().to_vec())
             } else if val.is_object() {
-                let def = schema_arc().and_then(|s| s.ctors.get(&f.ftype).cloned());
+                let ctor_name = val.get("_").and_then(|x| x.as_str()).unwrap_or(f.ftype.as_str());
+                let def = schema_arc().and_then(|s| s.ctors.get(ctor_name).cloned());
                 if let Some(def) = def {
-                    serialize_tl(&f.ftype, val, def.cid, &def.fields, def.has_flags)
+                    serialize_tl(ctor_name, val, def.cid, &def.fields, def.has_flags)
                         .map_err(|e| e.to_string())
                 } else {
-                    Err(format!("unknown constructor type {}", f.ftype))
+                    let keys: Vec<&str> = val.as_object().map(|m| m.keys().map(|k| k.as_str()).collect()).unwrap_or_default();
+                    Err(format!("unknown constructor type {} (keys {:?})", ctor_name, keys))
                 }
             } else {
                 Err(format!("unknown TL field type {}", f.ftype))

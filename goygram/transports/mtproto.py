@@ -695,31 +695,8 @@ class MTNet:
             message = update.get("message")
             if update_type in {"updateShortMessage", "updateShortChatMessage", "updateShortSentMessage"}:
                 parsed = self._parse_new_message(update)
-            elif isinstance(raw, bytes):
-                parsed = self._parse_new_message(raw)
             elif isinstance(message, dict):
-                parsed = self._parse_new_message(bytes.fromhex(message["raw"])) if isinstance(message.get("raw"), str) else None
-                if parsed is None:
-                    peer = message.get("peer_id", {})
-                    peer_kind = peer.get("_") if isinstance(peer, dict) else None
-                    peer_id = peer.get("user_id") if peer_kind == "peerUser" else peer.get("chat_id") if peer_kind == "peerChat" else peer.get("channel_id") if peer_kind == "peerChannel" else None
-                    if peer_id is not None:
-                        from_peer = message.get("from_id")
-                        if isinstance(from_peer, dict):
-                            from_id = from_peer.get("user_id")
-                        else:
-                            from_id = from_peer if isinstance(from_peer, int) else None
-                        is_out = bool(message.get("out")) or from_id == self.self_id or (peer_kind == "peerUser" and int(peer_id) == self.self_id)
-                        parsed = {
-                            "kind": "msg",
-                            "msg_id": message.get("id"),
-                            "chat_id": int(peer_id) if peer_kind == "peerUser" else -int(peer_id) if peer_kind == "peerChat" else -1000000000000 - int(peer_id),
-                            "from_id": self.self_id if is_out else from_id,
-                            "text": message.get("message", ""),
-                            "is_me": is_out,
-                            "media": message.get("media"),
-                            "reply_to": message.get("reply_to"),
-                        }
+                parsed = self._parse_new_message(message)
             else:
                 parsed = None
             if parsed:
@@ -1263,7 +1240,6 @@ class MTNet:
                     fut.set_exception(exc)
                 return
             try:
-                import json
                 decoded = rx.deserialize_constructor(inner)
                 if isinstance(decoded, dict):
                     decoded_type = str(decoded.get("_", ""))
@@ -1290,7 +1266,6 @@ class MTNet:
                 return
             if cid in {0x313bc7f8, 0x4d6deea5, 0x9015e101}:
                 try:
-                    import json
                     decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
@@ -1299,7 +1274,6 @@ class MTNet:
                 return
             if cid in {0x74ae4240, 0x725b04c3}:
                 try:
-                    import json
                     decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict) and (
                         isinstance(decoded.get("updates"), list)
@@ -1312,7 +1286,6 @@ class MTNet:
                 return
             if cid in {0x1f2b0afd, 0x62ba04d9}:
                 try:
-                    import json
                     decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
@@ -1321,7 +1294,6 @@ class MTNet:
                 return
             if cid == 0x78d4dec1:
                 try:
-                    import json
                     decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_updates(decoded)
@@ -1339,7 +1311,6 @@ class MTNet:
                 return
             if cid in {0xf2ebdb4e, 0xe5bdf8de, 0xc32d5b12, 0xc01e857f}:
                 try:
-                    import json
                     decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
@@ -1418,7 +1389,6 @@ class MTNet:
                 return
             if cid in {0xd087663a, 0x985d3abb}:
                 try:
-                    import json
                     decoded = rx.deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
@@ -1443,7 +1413,6 @@ class MTNet:
                     pass
                 return
             try:
-                import json
                 decoded = rx.deserialize_constructor(inner)
                 if isinstance(decoded, dict) and str(decoded.get("_", "")).startswith("update"):
                     self._dispatch_update(decoded)
@@ -1733,43 +1702,25 @@ class MTNet:
         return ns + '.' + rest[0] + ''.join(p[:1].upper() + p[1:] for p in rest[1:])
 
     def _takeout_encode(self, v: Any) -> Any:
-        from goygram import ext as _ext
         if isinstance(v, (list, tuple)):
             return [self._takeout_encode(item) for item in v]
-        if isinstance(v, dict) and '_' in v:
-            ctor_name = v.get('_')
-            inner = {k: self._takeout_encode(v2) for k, v2 in v.items() if k != '_'}
-            return _ext.serialize_constructor(ctor_name, inner).hex()
-        if isinstance(v, (bytes, bytearray)):
-            return v.hex()
+        if isinstance(v, dict):
+            return {k: self._takeout_encode(x) for k, x in v.items()}
         if isinstance(v, memoryview):
-            return bytes(v).hex()
+            return bytes(v)
         return v
 
     def _build_body(self, act:str, obj:dict[str,Any])->bytes:
-        import json
         from goygram import ext as _ext
         if _ext is None:
             raise RuntimeError('rx (goygram.ext._ext) is not available')
         def _resolve_val(v: Any) -> Any:
             if isinstance(v, (list, tuple)):
                 return [_resolve_val(item) for item in v]
-            if isinstance(v, dict) and '_' in v:
-                ctor_name = v.get('_')
-                inner = {k: _resolve_val(v2) for k, v2 in v.items() if k != '_'}
-                return _ext.serialize_constructor(ctor_name, inner).hex()
-            if isinstance(v, dict) and len(v) == 1:
-                ctor_name = list(v.keys())[0]
-                inner = v[ctor_name]
-                if isinstance(inner, dict):
-                    inner = {k: _resolve_val(v2) for k, v2 in inner.items()}
-                else:
-                    inner = {}
-                return _ext.serialize_constructor(ctor_name, inner).hex()
-            if isinstance(v, (bytes, bytearray)):
-                return v.hex()
+            if isinstance(v, dict):
+                return {k: _resolve_val(x) for k, x in v.items()}
             if isinstance(v, memoryview):
-                return bytes(v).hex()
+                return bytes(v)
             return v
         data = {}
         for k, v in obj.items():
@@ -1778,12 +1729,11 @@ class MTNet:
             data[k] = _resolve_val(v)
         tl_name = self._norm_act(act)
         if tl_name == "auth.sendCode" and "settings" not in data:
-            data["settings"] = _ext.serialize_constructor("codeSettings", {"flags": 0}).hex()
+            data["settings"] = {"_": "codeSettings", "flags": 0}
         return bytes(_ext.serialize_method(tl_name, data))
 
     def _parse_new_message(self, data:bytes|dict[str,Any])->dict[str,Any]|None:
         try:
-            import json
             decoded = data if isinstance(data, dict) else rx.deserialize_constructor(data)
             kind = decoded.get("_")
             if kind in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"}:
