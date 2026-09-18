@@ -651,6 +651,14 @@ class MTNet:
             peer = update.get("peer") or {}
             peer_kind = peer.get("_") if isinstance(peer, dict) else None
             chat_id = peer.get("user_id") if peer_kind == "peerUser" else -(peer.get("chat_id") or 0) if peer_kind == "peerChat" else -1000000000000 - peer.get("channel_id", 0) if peer_kind == "peerChannel" else None
+            payload = update.get("data")
+            if isinstance(payload, str):
+                try:
+                    payload = bytes.fromhex(payload)
+                except ValueError:
+                    payload = payload.encode()
+            if isinstance(payload, (bytes, bytearray)):
+                payload = payload.decode("utf-8", "replace")
             cb = {
                 "kind": "cb",
                 "src": "mt",
@@ -659,7 +667,7 @@ class MTNet:
                 "msg_id": update.get("msg_id"),
                 "chat_id": chat_id,
                 "from_id": update.get("user_id"),
-                "data": bytes.fromhex(update["data"]).decode("utf-8", "replace") if isinstance(update.get("data"), str) else update.get("data"),
+                "data": payload,
                 "chat_instance": update.get("chat_instance"),
                 "raw_update": update,
             }

@@ -281,7 +281,7 @@ fn read_field_value(py: Python<'_>, data: &[u8], pos: &mut usize, f: &TlFieldDef
         }
         "bytes" | "Bytes" => {
             let b = read_tl_bytes_raw(data, pos).map_err(PyValueError::new_err)?;
-            Ok(hex::encode(b).to_object(py))
+            Ok(PyBytes::new_bound(py, &b).to_object(py))
         }
         "double" | "Double" => Ok(read_f64(data, pos).map_err(PyValueError::new_err)?.to_object(py)),
         "Bool" | "boolTrue" | "boolFalse" => {

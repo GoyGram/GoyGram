@@ -96,7 +96,10 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
 
     def btn_type(b: dict[str, Any]) -> str:
         if b.get("callback_data") is not None:
-            return ser("inlineButtonTypeCallback", {"data": str(b["callback_data"]).encode().hex()})
+            raw = b["callback_data"]
+            if not isinstance(raw, (bytes, bytearray)):
+                raw = str(raw).encode()
+            return ser("inlineButtonTypeCallback", {"data": bytes(raw)})
         if b.get("url") is not None:
             return ser("inlineButtonTypeUrl", {"url": str(b["url"])})
         if b.get("web_app") is not None:
