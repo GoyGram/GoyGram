@@ -2176,6 +2176,10 @@ class MTNet:
                         fut = entry[0]
                         if not fut.done():
                             fut.set_exception(ConnectionClosedError("MTProto connection lost"))
+                        try:
+                            fut.exception()
+                        except (asyncio.CancelledError, asyncio.InvalidStateError):
+                            pass
                 self.pending.clear()
                 try:
                     if self.wr:
