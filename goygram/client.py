@@ -860,11 +860,14 @@ class AppCore:
     _MT_NS = frozenset({"account", "auth", "bots", "channels", "contacts", "folders", "help", "langpack", "messages", "payments", "phone", "premium", "sms", "stats", "stickers", "stories", "upload", "users"})
 
     def __getattr__(self, name: str) -> Any:
-        if self.api is not None:
-            obj = getattr(self.api, name, None)
-            if obj is not None:
-                self.__dict__[name] = obj
-                return obj
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name.startswith("mt_"):
+            if self.mt is None:
+                raise AttributeError(name)
+            obj = self._dynamic_method(name)
+            self.__dict__[name] = obj
+            return obj
         if name[:1].isupper():
             lower = "".join(c if c.islower() or not c.isalpha() else "_" + c.lower() for c in name).lstrip("_")
             for candidate in (lower, "mt_" + lower):

@@ -12,6 +12,8 @@ class BotAPI:
         return await self.net.req(meth, kw)
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("_") or name.startswith("mt_"):
+            raise AttributeError(name)
         meth = camel(name)
         async def dyn(**kw: Any) -> Any:
             return await self.call(meth, **kw)
