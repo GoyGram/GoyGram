@@ -38,7 +38,13 @@ A single VPS (AMD Ryzen 9 5950X, 6 vCPU). Codec and GCM re-run on 0.7.89. IGE/im
 | pyrogram | 168 | 223 | 228 |
 | telethon (default) | 12 | 14 | 14 |
 
+![AES-256-IGE throughput](03-aes-ige-throughput.png)
+
+GoyGram dispatches to AES-NI at runtime. tgcrypto 1.2.5 is table-based software AES. Network RTT still dominates a real client.
+
 Per-message latency at 256 B (lower is better): goygram 0.4 µs, tgcrypto 1.3 µs, pyrogram 1.4 µs, telethon 23 µs.
+
+![AES-256-IGE latency](04-aes-ige-latency.png)
 
 ### TL codec, simple (ops/s, higher is better)
 
@@ -46,6 +52,8 @@ Per-message latency at 256 B (lower is better): goygram 0.4 µs, tgcrypto 1.3 µ
 |---|---|
 | serialize `messages.sendMessage` | 355,320 |
 | loads `message` | 567,799 |
+
+![TL codec](05-tl-codec.png)
 
 ### TL codec, realistic `updateNewMessage` (ops/s)
 
@@ -60,12 +68,16 @@ Payload: ~200-char text, `messageFwdHeader`, inline keyboard. Packet 356 B.
 
 loads latency (µs): p50 3.7, p95 6.5, p99 9.1, p99.9 26.5.
 
+![loads latency](06-loads-latency.png)
+
 ### AES-256-GCM (4 KiB, ops/s)
 
 | Operation | ops/s |
 |---|---|
 | encrypt | 288,219 |
 | decrypt | 283,700 |
+
+![AES-256-GCM vault](07-aes-gcm-vault.png)
 
 ### Cold import time (ms, lower is better)
 
@@ -77,6 +89,8 @@ loads latency (µs): p50 3.7, p95 6.5, p99 9.1, p99.9 26.5.
 | pyrogram | 436 |
 | aiogram | 2699 |
 
+![Cold import](01-cold-import.png)
+
 ### Memory footprint, RSS delta after import (MB, lower is better)
 
 | Library | MB |
@@ -86,6 +100,8 @@ loads latency (µs): p50 3.7, p95 6.5, p99 9.1, p99.9 26.5.
 | pyrogram | 35 |
 | telethon | 48 |
 | aiogram | 152 |
+
+![RSS after import](02-rss-memory.png)
 
 ## Honest notes
 
