@@ -1046,13 +1046,13 @@ class AppCore:
             if asyncio.iscoroutinefunction(progress):
                 async def _prog(done: int, _t: int) -> Any:
                     return await progress(done, wrap_total or done)
-            return await self.mt.download_file(location, destination, progress=_prog, media_source=media)
-        return await self.mt.download_file(location, destination, media_source=media)
+            return await self.charged_download(location, destination, size=size, progress=_prog, media_source=media)
+        return await self.charged_download(location, destination, media_source=media)
 
     async def upload_file(self, source: Any, **kw: Any) -> Any:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        return await self.mt.upload_file(source, **kw)
+        return await self.charged_upload(source, **kw)
 
     async def charged_upload(self, source: Any, **kw: Any) -> Any:
         if self.mt is None:
@@ -1160,8 +1160,11 @@ class AppCore:
         from goygram.types.kbd import kbd_to_tl
         peer = await self.mt.resolve_peer(target)
         if not isinstance(source, dict) or "_" not in source:
-            up = await self.mt.upload_file(source, file_name=file_name)
-            file_obj = {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")}
+            up = await self.charged_upload(source, file_name=file_name)
+            if up.get("big"):
+                file_obj = {"_": "inputFileBig", "id": up["id"], "parts": up["parts"], "name": up["name"]}
+            else:
+                file_obj = {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")}
             if kind == "photo":
                 media = {"_": "inputMediaUploadedPhoto", "file": file_obj}
             elif kind == "sticker":
