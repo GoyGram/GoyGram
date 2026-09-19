@@ -21,7 +21,6 @@ from goygram.logging import get_logger
 from goygram.security import bootstrap_session
 from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
 from goygram.utils import print_methods
-from goygram.transports.charged import charged_upload as _charged_upload, charged_download as _charged_download
 
 if TYPE_CHECKING:
     from goygram.filters import Filter
@@ -1047,23 +1046,25 @@ class AppCore:
             if asyncio.iscoroutinefunction(progress):
                 async def _prog(done: int, _t: int) -> Any:
                     return await progress(done, wrap_total or done)
-            return await self.charged_download(location, destination, size=size, progress=_prog, media_source=media)
-        return await self.charged_download(location, destination, media_source=media)
+            return await self.mt.download_file(location, destination, progress=_prog, media_source=media)
+        return await self.mt.download_file(location, destination, media_source=media)
 
     async def upload_file(self, source: Any, **kw: Any) -> Any:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        return await self.charged_upload(source, **kw)
+        return await self.mt.upload_file(source, **kw)
 
     async def charged_upload(self, source: Any, **kw: Any) -> Any:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        return await _charged_upload(self.mt, source, **kw)
+        from goygram.transports.charged import charged_upload
+        return await charged_upload(self.mt, source, **kw)
 
     async def charged_download(self, location: Any, destination: Any, **kw: Any) -> int:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        return await _charged_download(self.mt, location, destination, **kw)
+        from goygram.transports.charged import charged_download
+        return await charged_download(self.mt, location, destination, **kw)
 
     async def send_msg(self, chat_id: int | str, text: str, *, via: str | None = None, reply_to: int | None = None, kbd: Any | None = None, **kw: Any) -> Any:
         transport = self.via(chat_id, via)
@@ -1159,11 +1160,8 @@ class AppCore:
         from goygram.types.kbd import kbd_to_tl
         peer = await self.mt.resolve_peer(target)
         if not isinstance(source, dict) or "_" not in source:
-            up = await self.charged_upload(source, file_name=file_name)
-            if up.get("big"):
-                file_obj = {"_": "inputFileBig", "id": up["id"], "parts": up["parts"], "name": up["name"]}
-            else:
-                file_obj = {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")}
+            up = await self.mt.upload_file(source, file_name=file_name)
+            file_obj = {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")}
             if kind == "photo":
                 media = {"_": "inputMediaUploadedPhoto", "file": file_obj}
             elif kind == "sticker":
