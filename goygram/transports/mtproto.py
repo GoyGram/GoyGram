@@ -988,11 +988,19 @@ class MTNet:
                 if not isinstance(entity, dict) or not isinstance(entity.get("id"), int):
                     continue
                 item = dict(entity)
-                self.entities[(kind, int(item["id"]))] = item
+                slot = (kind, int(item["id"]))
+                prev = self.entities.get(slot)
+                if prev is not None:
+                    old_h = prev.get("access_hash")
+                    if old_h and not item.get("access_hash"):
+                        item["access_hash"] = old_h
+                    old_u = prev.get("username")
+                    if old_u and not item.get("username"):
+                        item["username"] = old_u
+                self.entities[slot] = item
                 username = item.get("username")
                 if isinstance(username, str) and username:
                     self.entity_usernames[username.casefold()] = item
-                self._entity_atime.setdefault((kind, int(item["id"])), time.monotonic())
         self._entity_cache_maybe_flush()
 
     def _entity_keep_fields(self, entity: dict[str, Any]) -> dict[str, Any]:
@@ -1013,38 +1021,34 @@ class MTNet:
         users: list[dict[str, Any]] = []
         chats: list[dict[str, Any]] = []
         for (kind, _id), entity in self.entities.items():
+            item = self._entity_keep_fields(entity)
             if kind == "user":
-                users.append(entity)
+                users.append(item)
             else:
-                chats.append(entity)
+                chats.append(item)
+        return {"users": users, "chats": chats}
 
-        def rank(kind: str, entity: dict[str, Any]) -> tuple[int, float]:
-            eid = int(entity.get("id") or 0)
-            pinned = self._entity_pinned(kind, entity)
-            weight = self._entity_weights.get((kind, eid), 1.0)
-            age = time.monotonic() - self._entity_atime.get((kind, eid), 0.0)
-            return (0 if pinned else 1, -weight / (1.0 + age / 3600.0))
-
-        users.sort(key=lambda e: rank("user", e))
-        chats.sort(key=lambda e: rank("chat", e))
-        kept_users = users[: self._user_limit]
-        kept_chats = chats[: self._chat_limit]
-        total = 0
-        kept_users_out = []
-        for entity in kept_users:
-            if total >= self._entity_bytes_limit:
-                break
-            item = self._entity_keep_fields(entity)
-            total += len(str(item))
-            kept_users_out.append(item)
-        kept_chats_out = []
-        for entity in kept_chats:
-            if total >= self._entity_bytes_limit:
-                break
-            item = self._entity_keep_fields(entity)
-            total += len(str(item))
-            kept_chats_out.append(item)
-        return {"users": kept_users_out, "chats": kept_chats_out}
+    def _entity_cache_merge(self, old: dict[str, Any] | None, new: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(old, dict):
+            old = {}
+        out: dict[str, Any] = {"users": [], "chats": []}
+        for key in ("users", "chats"):
+            by_id: dict[int, dict[str, Any]] = {}
+            for entity in old.get(key) or []:
+                if isinstance(entity, dict) and isinstance(entity.get("id"), int):
+                    by_id[int(entity["id"])] = entity
+            for entity in new.get(key) or []:
+                if not isinstance(entity, dict) or not isinstance(entity.get("id"), int):
+                    continue
+                eid = int(entity["id"])
+                prev = by_id.get(eid)
+                if prev is not None and prev.get("access_hash") and not entity.get("access_hash"):
+                    entity = {**entity, "access_hash": prev["access_hash"]}
+                if prev is not None and prev.get("username") and not entity.get("username"):
+                    entity = {**entity, "username": prev["username"]}
+                by_id[eid] = entity
+            out[key] = list(by_id.values())
+        return out
 
     def _entity_cache_restore(self, data: dict[str, Any]) -> None:
         if not isinstance(data, dict):

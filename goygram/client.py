@@ -587,6 +587,7 @@ class AppCore:
             if not isinstance(data, dict):
                 data = {}
             snapshot = self.mt._entity_cache_snapshot()
+            snapshot = self.mt._entity_cache_merge(data.get("entities"), snapshot)
             if snapshot.get("users") or snapshot.get("chats") or self.mt.dc_auth_keys:
                 data["entities"] = snapshot
                 data["dc_auth_keys"] = {str(dc_id): {"key": entry["key"].hex(), "salt": (entry.get("salt") or b"").hex()} for dc_id, entry in self.mt.dc_auth_keys.items()}
