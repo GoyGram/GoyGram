@@ -21,6 +21,7 @@ from goygram.logging import get_logger
 from goygram.security import bootstrap_session
 from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
 from goygram.utils import print_methods
+from goygram.transports.charged import charged_upload as _charged_upload, charged_download as _charged_download
 
 if TYPE_CHECKING:
     from goygram.filters import Filter
@@ -1057,14 +1058,12 @@ class AppCore:
     async def charged_upload(self, source: Any, **kw: Any) -> Any:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        from goygram.transports.charged import charged_upload
-        return await charged_upload(self.mt, source, **kw)
+        return await _charged_upload(self.mt, source, **kw)
 
     async def charged_download(self, location: Any, destination: Any, **kw: Any) -> int:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        from goygram.transports.charged import charged_download
-        return await charged_download(self.mt, location, destination, **kw)
+        return await _charged_download(self.mt, location, destination, **kw)
 
     async def send_msg(self, chat_id: int | str, text: str, *, via: str | None = None, reply_to: int | None = None, kbd: Any | None = None, **kw: Any) -> Any:
         transport = self.via(chat_id, via)
