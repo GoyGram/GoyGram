@@ -10,6 +10,33 @@ import re as _re
 
 log = logging.getLogger("goygram.mtproto")
 
+
+def _inline_dc(obj: Any) -> int | None:
+    if isinstance(obj, dict):
+        if "InlineMessageID" in str(obj.get("_") or "") and isinstance(obj.get("dc_id"), int):
+            return int(obj["dc_id"])
+        for value in obj.values():
+            found = _inline_dc(value)
+            if found is not None:
+                return found
+    elif isinstance(obj, (list, tuple)):
+        for value in obj:
+            found = _inline_dc(value)
+            if found is not None:
+                return found
+    return None
+
+
+def _parse_migrate(exc: BaseException) -> tuple[str, int] | None:
+    text = str(exc).upper()
+    match = _re.search(r"(USER|PHONE|NETWORK)_MIGRATE_(\d+)", text)
+    if match:
+        return ("home", int(match.group(2)))
+    match = _re.search(r"(FILE|STATS)_MIGRATE_(\d+)", text)
+    if match:
+        return ("export", int(match.group(2)))
+    return None
+
 from goygram.protocol.tl_core import IntermediateTransport, MTCodec, MTMessage, MsgIdGen, Reader, build_msg_container, factorize, i32, i64, kdf, kdf_msg, rsa_pad_encrypt, tl_bytes, tl_str, u32
 
 try:
@@ -1827,7 +1854,6 @@ class MTNet:
             target = None
             handle = destination
         total = 0
-        migration_attempted = False
         reference_refresh_attempted = False
         refresh_source = media_source
         try:
@@ -1839,23 +1865,6 @@ class MTNet:
                         raise
                     reference_refresh_attempted = True
                     location = await self._refresh_file_reference(refresh_source, location)
-                    continue
-                except GoyGramError as exc:
-                    match = _re.search(r"FILE_MIGRATE_(\d+)", str(exc).upper())
-                    if match is None or migration_attempted:
-                        raise
-                    from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
-                    endpoint = pick_dc_endpoint(get_dynamic_dc_config(), preferred_dc=int(match.group(1)))
-                    await self.close()
-                    self.stop_ev.clear()
-                    self.host, self.port = endpoint.host, endpoint.port
-                    self._preferred_dc = endpoint.dc_id
-                    self.auth_key = None
-                    self.seq = 0
-                    self._init_done = False
-                    await self.boot()
-                    await self.ensure_auth_key()
-                    migration_attempted = True
                     continue
                 body = response.get("result") if isinstance(response, dict) and isinstance(response.get("result"), dict) else response
                 payload = body.get("bytes") if isinstance(body, dict) else None
@@ -2161,15 +2170,30 @@ class MTNet:
                 self._dc_senders[dc_id] = sender
         return await sender.call(act, _on_dc=True, **kw)
 
+    async def _switch_home_dc(self, dc_id: int) -> None:
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+        endpoint = pick_dc_endpoint(get_dynamic_dc_config(), preferred_dc=int(dc_id))
+        if endpoint.host == self.host and endpoint.port == self.port:
+            return
+        await self.close()
+        self.stop_ev.clear()
+        self.host, self.port = endpoint.host, endpoint.port
+        self._preferred_dc = int(dc_id)
+        self.auth_key = None
+        self.seq = 0
+        self._init_done = False
+        self.session_id = secrets.token_bytes(8)
+        await self.boot()
+        await self.ensure_auth_key()
+        await self._ensure_reader()
+
     async def call(self, act:str, **kw:Any)->dict[str,Any]:
         normalized = self._norm_act(act)
         on_dc = bool(kw.pop("_on_dc", False))
         target_dc = kw.pop("_dc", None)
         if not on_dc:
-            if target_dc is None and normalized == "messages.editInlineBotMessage":
-                mid = kw.get("id")
-                if isinstance(mid, dict) and isinstance(mid.get("dc_id"), int):
-                    target_dc = mid["dc_id"]
+            if target_dc is None:
+                target_dc = _inline_dc(kw)
             if target_dc is not None:
                 return await self.call_dc(int(target_dc), act, **kw)
         retry_budget = int(kw.pop("retry", 3))
@@ -2207,6 +2231,19 @@ class MTNet:
                     raise
                 attempt += 1
                 await asyncio.sleep(max(1, min(int(exc.seconds), 300)))
+            except GoyGramError as exc:
+                if on_dc or attempt >= retry_budget:
+                    raise
+                kind = _parse_migrate(exc)
+                if kind is None:
+                    raise
+                attempt += 1
+                kw.pop("_dispatch_chat_id", None)
+                kw.pop("_dispatch_message_text", None)
+                if kind[0] == "home":
+                    await self._switch_home_dc(kind[1])
+                    continue
+                return await self.call_dc(kind[1], act, **kw)
 
     async def _connect(self) -> None:
         from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint

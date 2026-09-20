@@ -395,6 +395,7 @@ _ERROR_PATTERNS: list[tuple[str, type[RPCError]]] = [
     ("NETWORK_MIGRATE_", SeeOtherError),
     ("USER_MIGRATE_", SeeOtherError),
     ("FILE_MIGRATE_", SeeOtherError),
+    ("STATS_MIGRATE_", SeeOtherError),
 ]
 
 
