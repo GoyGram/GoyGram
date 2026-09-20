@@ -386,6 +386,17 @@ class Obj:
             if self.app is None or self.app.mt is None:
                 raise RuntimeError("mt net is not configured")
             data = dict(kw)
+            pm = str(data.pop("parse_mode", "")).lower()
+            if pm == "html":
+                from goygram.sugar import html_to_entities
+                text, ents = html_to_entities(text)
+                if ents:
+                    data["entities"] = ents
+            elif pm == "md":
+                from goygram.sugar import md_to_entities
+                text, ents = md_to_entities(text)
+                if ents:
+                    data["entities"] = ents
             if kbd is not None:
                 data["reply_markup"] = kbd
             inline_mid = self.inline_message_id
