@@ -2096,8 +2096,82 @@ class MTNet:
         srp = u32(0xd27ff082) + i64(srp_id) + tl_bytes(a_pub) + tl_bytes(m1)
         return await self._rpc_call('auth.checkPassword', password=srp)
 
+    async def _open_dc(self, dc_id: int, endpoint: Any) -> "MTNet":
+        cached = (self.dc_auth_keys or {}).get(int(dc_id))
+        sender = _AuxSender(
+            endpoint.host,
+            endpoint.port,
+            None,
+            None,
+            proxy=self.proxy_url,
+            app_name=self.app_name,
+            app_version=self.app_version,
+            device_model=self.device_model,
+            system_version=self.system_version,
+            system_lang_code=self.system_lang_code,
+            lang_pack=self.lang_pack,
+            lang_code=self.lang_code,
+        )
+        sender._api_id = self._api_id
+        sender.layer = self.layer
+        if isinstance(cached, dict) and cached.get("key"):
+            sender.auth_key = cached["key"]
+            sender.server_salt = cached.get("salt") or b"\x00" * 8
+        await sender.ensure_auth_key()
+        await sender._ensure_reader()
+        if isinstance(cached, dict) and cached.get("key"):
+            return sender
+        export = await self.call("auth.exportAuthorization", dc_id=int(dc_id), _on_dc=True)
+        body = export.get("result") if isinstance(export, dict) and isinstance(export.get("result"), dict) else export
+        export_id = body.get("id") if isinstance(body, dict) else None
+        export_bytes = body.get("bytes") if isinstance(body, dict) else None
+        if isinstance(export_bytes, str):
+            try:
+                export_bytes = bytes.fromhex(export_bytes)
+            except ValueError:
+                export_bytes = None
+        if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
+            raise RuntimeError("auth.exportAuthorization returned no usable payload")
+        await sender.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes), _on_dc=True)
+        if not getattr(self, "dc_auth_keys", None):
+            self.dc_auth_keys = {}
+        self.dc_auth_keys[int(dc_id)] = {"key": sender.auth_key, "salt": sender.server_salt}
+        hook = getattr(self, "_entity_flush_hook", None)
+        if callable(hook):
+            try:
+                hook()
+            except Exception:
+                pass
+        return sender
+
+    async def call_dc(self, dc_id: int, act: str, **kw: Any) -> dict[str, Any]:
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+        dc_id = int(dc_id)
+        endpoint = pick_dc_endpoint(get_dynamic_dc_config(), preferred_dc=dc_id)
+        if endpoint.host == self.host and endpoint.port == self.port:
+            return await self.call(act, _on_dc=True, **kw)
+        if not hasattr(self, "_dc_senders"):
+            self._dc_senders = {}
+            self._dc_locks = {}
+        lock = self._dc_locks.setdefault(dc_id, asyncio.Lock())
+        async with lock:
+            sender = self._dc_senders.get(dc_id)
+            if sender is None or getattr(sender, "wr", None) is None:
+                sender = await self._open_dc(dc_id, endpoint)
+                self._dc_senders[dc_id] = sender
+        return await sender.call(act, _on_dc=True, **kw)
+
     async def call(self, act:str, **kw:Any)->dict[str,Any]:
         normalized = self._norm_act(act)
+        on_dc = bool(kw.pop("_on_dc", False))
+        target_dc = kw.pop("_dc", None)
+        if not on_dc:
+            if target_dc is None and normalized == "messages.editInlineBotMessage":
+                mid = kw.get("id")
+                if isinstance(mid, dict) and isinstance(mid.get("dc_id"), int):
+                    target_dc = mid["dc_id"]
+            if target_dc is not None:
+                return await self.call_dc(int(target_dc), act, **kw)
         retry_budget = int(kw.pop("retry", 3))
         dispatch_chat_id = kw.pop("_dispatch_chat_id", None)
         dispatch_message_text = kw.pop("_dispatch_message_text", None)
@@ -2202,3 +2276,14 @@ class MTNet:
             except Exception as exc:
                 log.debug("MTProto packet handling failed: %s", type(exc).__name__)
                 await asyncio.sleep(0.1)
+
+
+class _AuxSender(MTNet):
+    def _dispatch_update(self, update: Any) -> None:
+        return
+
+    def _dispatch_updates(self, result: Any) -> None:
+        return
+
+    async def _post_reconnect_recovery(self) -> None:
+        return
