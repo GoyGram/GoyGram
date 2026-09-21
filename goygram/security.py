@@ -981,11 +981,24 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                 bot_api_hash = api_hash if api_hash is not None else data.get("api_hash")
                 if bot_api_id is None or not bot_api_hash:
                     raise RuntimeError("bot_token over MTProto requires api_id and api_hash")
+                reauthorize = False
                 try:
                     current = await _mt_req_with_migrate(app, "users.getUsers", id=[{"_": "inputUserSelf"}])
                 except Exception as exc:
                     if not _session_auth_error(exc):
                         raise
+                    reauthorize = True
+                    user = None
+                else:
+                    user = _extract_user(current)
+                    token_id = str(bot_token).split(":", 1)[0]
+                    expected_id = int(token_id) if token_id.isdigit() else 0
+                    current_id = int(user.get("id", 0)) if user is not None else 0
+                    reauthorize = not current_id or bool(expected_id and current_id != expected_id)
+                    if reauthorize:
+                        app.mt.auth_key = None
+                        await app.mt.ensure_auth_key()
+                if reauthorize:
                     result = await _mt_bot_auth_flow(app, vault, session_name=name, api_id=int(str(bot_api_id).strip()), api_hash=str(bot_api_hash).strip(), bot_token=str(bot_token).strip())
                     if not result:
                         raise RuntimeError("bot authorization did not complete")
@@ -993,7 +1006,6 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                     if isinstance(fresh, dict):
                         session.data = fresh
                     return result
-                user = _extract_user(current)
                 if user is not None:
                     data["user"] = user
                     data["self_id"] = user.get("id", 0)
