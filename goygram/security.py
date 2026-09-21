@@ -30,6 +30,11 @@ log = get_logger("goygram.security")
 VAULT_MAGIC = b"GGV2"
 
 
+def _session_auth_error(exc: BaseException) -> bool:
+    text = str(exc).upper()
+    return any(value in text for value in ("AUTH_KEY_UNREGISTERED", "AUTH_KEY_INVALID", "AUTH_KEY_PERM_EMPTY", "AUTH_KEY_DUPLICATED", "SESSION_REVOKED", "SESSION_EXPIRED"))
+
+
 def _get_machine_id() -> str:
     for p in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
         try:
@@ -306,7 +311,21 @@ def _extract_phone_code_hash(obj: dict[str, Any]) -> str | None:
     return _field(obj, "phone_code_hash", "code_hash")
 
 
-def _extract_user(obj: dict[str, Any]) -> dict[str, Any] | None:
+def _extract_user(obj: Any) -> dict[str, Any] | None:
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            user = _extract_user(item)
+            if user is not None:
+                return user
+        return None
+    if not isinstance(obj, dict):
+        return None
+    for key in ("result", "users"):
+        nested = obj.get(key)
+        if isinstance(nested, (dict, list, tuple)):
+            user = _extract_user(nested)
+            if user is not None:
+                return user
     user = _field(obj, "user", "me")
     if isinstance(user, dict):
         uid = user.get("id") or user.get("user_id", 0)
@@ -882,8 +901,10 @@ async def _mt_bot_auth_flow(app: Any, vault: Path, session_name: str, api_id: in
         else:
             print("Bot authorization did not return user/session data")
         return None
+    uid = user.get("id", 0)
     payload = {
         "user": user,
+        "self_id": uid,
         "auth_key": auth_blob.hex(),
         "server_salt": app.mt.server_salt.hex(),
         "dc": _current_dc_id(app),
@@ -893,7 +914,9 @@ async def _mt_bot_auth_flow(app: Any, vault: Path, session_name: str, api_id: in
         "is_bot": True,
     }
     _write_vault(vault, payload, session_name)
-    uid = user.get("id", 0)
+    target_session = getattr(app, "session", None)
+    if target_session is not None:
+        target_session.data = payload
     if uid and uid != 0:
         app.self_id = uid
         app.mt.self_id = uid
@@ -953,6 +976,37 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                             app.mt.dc_auth_keys[int(dc_id)] = {"key": key, "salt": salt or b"\x00" * 8}
                     except Exception:
                         continue
+            if bot_token is not None:
+                bot_api_id = api_id if api_id is not None else data.get("api_id")
+                bot_api_hash = api_hash if api_hash is not None else data.get("api_hash")
+                if bot_api_id is None or not bot_api_hash:
+                    raise RuntimeError("bot_token over MTProto requires api_id and api_hash")
+                try:
+                    current = await _mt_req_with_migrate(app, "users.getUsers", id=[{"_": "inputUserSelf"}])
+                except Exception as exc:
+                    if not _session_auth_error(exc):
+                        raise
+                    result = await _mt_bot_auth_flow(app, vault, session_name=name, api_id=int(str(bot_api_id).strip()), api_hash=str(bot_api_hash).strip(), bot_token=str(bot_token).strip())
+                    if not result:
+                        raise RuntimeError("bot authorization did not complete")
+                    fresh = _read_vault(vault, Path(name).name)
+                    if isinstance(fresh, dict):
+                        session.data = fresh
+                    return result
+                user = _extract_user(current)
+                if user is not None:
+                    data["user"] = user
+                    data["self_id"] = user.get("id", 0)
+                data.update({
+                    "auth_key": app.mt.auth_key.hex(),
+                    "server_salt": app.mt.server_salt.hex(),
+                    "dc": _current_dc_id(app),
+                    "api_id": int(str(bot_api_id).strip()),
+                    "api_hash": str(bot_api_hash).strip(),
+                    "bot_token": str(bot_token).strip(),
+                    "is_bot": True,
+                })
+                _write_vault(vault, data, name)
             session.data = data
             log.info("Vault %s detected. Session restored from vault into MT runtime.", vault.name)
             return {"source": "vault"}

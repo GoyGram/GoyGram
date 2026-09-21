@@ -474,7 +474,7 @@ class AppCore:
             if api_id is not None:
                 self.mt._api_id = int(api_id)
             self._init_tl_schema()
-            self._load_vault_from_disk(session_name, api_id, api_hash)
+            self._load_vault_from_disk(session_name, api_id, api_hash, session)
             self.mt._entity_flush_hook = self._entity_cache_schedule
         self.fsm = FSMEngine(backend=fsm_backend, on_change=fsm_on_change)
         self.disp = Disp(self, self.bus)
@@ -521,20 +521,23 @@ class AppCore:
     def _can_reload_schema(self) -> bool:
         return self.mt is not None and self.mt.auth_ready.is_set() and not self.mt.pending
 
-    def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any) -> None:
+    def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any, session: Any | None = None) -> None:
         import logging
         from pathlib import Path
         from goygram.security import _read_vault, _extract_auth_blob
         from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
         log = logging.getLogger("goygram.dc")
-        vault = Path(f"{session_name}.vault")
+        session_path = getattr(session, "path", None)
+        vault = Path(session_path) if session_path is not None else Path(f"{session_name}.vault")
         if not vault.exists() or vault.stat().st_size == 0:
             return
-        vault_key = Path(session_name).name
+        vault_key = Path(getattr(session, "name", session_name)).name
         try:
             data = _read_vault(vault, vault_key)
             if not isinstance(data, dict):
                 return
+            if session is not None:
+                session.data = data
             auth_key = data.get("auth_key")
             if auth_key and self.mt is not None:
                 self.mt.auth_key = _extract_auth_blob({"auth_key": auth_key})
