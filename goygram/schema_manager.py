@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Callable, Mapping, Optional, Protocol
 
 log = logging.getLogger("goygram.schema_manager")
 
@@ -36,6 +37,11 @@ CACHE_LAYER_PATH = CACHE_DIR / "schema.layer"
 CACHE_LAYER_ETAG_PATH = CACHE_DIR / "schema.layer.etag"
 
 _fetch_lock = threading.Lock()
+
+
+class SchemaExtension(Protocol):
+    def load_schema(self, schema_json: str) -> Mapping[str, int]: ...
+    def schema_info(self) -> Mapping[str, int]: ...
 
 
 def _http_get(url: str, etag: str | None = None) -> tuple[str | None, str | None]:
@@ -108,7 +114,7 @@ def _fetch_and_cache_schema(layer: int) -> tuple[str | None, str | None]:
         return api_text, mtp_text
 
 
-def _load_schema(ext_module, api_text: str, mtproto_text: str | None, layer: int) -> None:
+def _load_schema(ext_module: SchemaExtension, api_text: str, mtproto_text: str | None, layer: int) -> None:
     from goygram.protocol.tl_schema import parse_api_tl
 
     merged = mtproto_text + "\n---types---\n" + api_text if mtproto_text else api_text
@@ -127,7 +133,12 @@ def _load_schema(ext_module, api_text: str, mtproto_text: str | None, layer: int
             pass
 
 
-def init_schema(ext_module, bundled_api_tl_path: str | None = None, on_layer=None, can_reload=None):
+def init_schema(
+    ext_module: SchemaExtension,
+    bundled_api_tl_path: str | None = None,
+    on_layer: Optional[Callable[[int], None]] = None,
+    can_reload: Optional[Callable[[], bool]] = None,
+) -> int:
     try:
         info = ext_module.schema_info()
         log.info("Bootstrap schema active: %s methods, %s ctors", info.get("methods", 0), info.get("constructors", 0))
@@ -151,7 +162,11 @@ def init_schema(ext_module, bundled_api_tl_path: str | None = None, on_layer=Non
     return cached_layer
 
 
-def _background_update(ext_module, on_layer=None, can_reload=None):
+def _background_update(
+    ext_module: SchemaExtension,
+    on_layer: Optional[Callable[[int], None]] = None,
+    can_reload: Optional[Callable[[], bool]] = None,
+) -> None:
     while True:
         time.sleep(REFRESH_INTERVAL)
         try:

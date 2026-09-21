@@ -46,7 +46,7 @@ class _UploadLane:
         self.total = total
         self.index = index
         self.stride = stride
-        self.previous: asyncio.Task | None = None
+        self.previous: asyncio.Task[None] | None = None
 
     async def push(self, data: bytes) -> None:
         if self.previous is not None:
@@ -130,14 +130,17 @@ async def _file_dc_senders(mtnet: MTNet, count: int, dc_id: int) -> list[Charged
         raise RuntimeError("auth.exportAuthorization returned no usable payload")
     first = await _spawn_sender(mtnet, endpoint.host, endpoint.port, None, b"\x00" * 8)
     await first.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes))
-    mtnet.dc_auth_keys[int(dc_id)] = {"key": first.auth_key, "salt": first.server_salt}
+    auth_key = first.auth_key
+    if auth_key is None:
+        raise RuntimeError("file DC authorization produced no auth key")
+    mtnet.dc_auth_keys[int(dc_id)] = {"key": auth_key, "salt": first.server_salt}
     hook = getattr(mtnet, "_entity_flush_hook", None)
     if callable(hook):
         try:
             hook()
         except Exception:
             pass
-    rest = [await _spawn_sender(mtnet, endpoint.host, endpoint.port, first.auth_key, first.server_salt) for _ in range(count - 1)]
+    rest = [await _spawn_sender(mtnet, endpoint.host, endpoint.port, auth_key, first.server_salt) for _ in range(count - 1)]
     return [first, *rest]
 
 

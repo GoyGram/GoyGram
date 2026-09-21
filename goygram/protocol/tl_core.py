@@ -103,7 +103,7 @@ def kdf(new_nonce:bytes, server_nonce:bytes)->tuple[bytes,bytes]:
     iv=b[12:20]+c+new_nonce[:4]
     return key,iv
 
-def kdf_msg(auth_key:bytes, msg_key:bytes, to_server=True)->tuple[bytes,bytes]:
+def kdf_msg(auth_key:bytes, msg_key:bytes, to_server:bool=True)->tuple[bytes,bytes]:
     x=0 if to_server else 8
     a=sha256(msg_key+auth_key[x:x+36]).digest()
     b=sha256(auth_key[40+x:76+x]+msg_key).digest()

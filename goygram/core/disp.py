@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time as _time
-from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from goygram.logging import get_logger
 
@@ -24,10 +23,10 @@ class Disp:
         self.bus = bus
         self.stop_ev = asyncio.Event()
         self.log = get_logger("goygram.disp")
-        self._seen: dict[tuple, float] = {}
+        self._seen: dict[tuple[object, ...], float] = {}
         self._seen_sweep = 0.0
 
-    def _dedup_key(self, data: dict[str, Any]) -> tuple | None:
+    def _dedup_key(self, data: dict[str, Any]) -> tuple[object, ...] | None:
         kind = data.get("kind")
         if kind not in {"msg", "edit", "cb", "inline"}:
             return None

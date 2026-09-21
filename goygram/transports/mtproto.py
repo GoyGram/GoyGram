@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio, hashlib, json, os, secrets, struct, tempfile, time, urllib.parse, logging
 from hashlib import sha1, sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Literal, Protocol, Tuple, TypedDict, TYPE_CHECKING, Union, cast
 from goygram.errors import ConnectionClosedError, FileReferenceExpiredError, FloodWaitError, GoyGramError, RPCError
 from goygram.api.types import mtname
 import re as _re
@@ -43,6 +43,40 @@ try:
     from goygram import ext as rx
 except Exception:
     rx = None
+
+
+class _Rx(Protocol):
+    def serialize_method(self, method: str, args: dict[str, Any]) -> bytes: ...
+    def serialize_constructor(self, name: str, args: dict[str, Any]) -> bytes: ...
+    def deserialize_constructor(self, data: bytes) -> dict[str, Any]: ...
+    def aes_ige_enc_raw(self, data: bytes, key: bytes, iv: bytes) -> list[int]: ...
+    def aes_ige_dec_raw(self, data: bytes, key: bytes, iv: bytes) -> list[int]: ...
+
+
+class _PendingContainer(TypedDict):
+    type: Literal["container"]
+    msg_ids: list[int]
+
+
+if TYPE_CHECKING:
+    _RpcFuture = asyncio.Future[Dict[str, Any]]
+    _PendingRequest = Union[
+        Tuple[_RpcFuture, Dict[str, Any]],
+        Tuple[_RpcFuture, Dict[str, Any], Union[int, str, None], Union[str, None]],
+    ]
+    _PendingEntry = Union[_PendingRequest, _PendingContainer]
+    _Cursor = Dict[str, Union[int, Dict[int, int]]]
+else:
+    _RpcFuture = object
+    _PendingRequest = object
+    _PendingEntry = object
+    _Cursor = object
+
+
+def _require_rx() -> _Rx:
+    if rx is None:
+        raise RuntimeError('rx (goygram.ext) is not available')
+    return cast(_Rx, rx)
 
 TELEGRAM_RSA_KEYS: dict[int, int] = {
     847625836280919973: int("22081946531037833540524260580660774032207476521197121128740358761486364763467087828766873972338019078976854986531076484772771735399701424566177039926855356719497736439289455286277202113900509554266057302466528985253648318314129246825219640197356165626774276930672688973278712614800066037531599375044750753580126415613086372604312320014358994394131667022861767539879232149461579922316489532682165746762569651763794500923643656753278887871955676253526661694459370047843286685859688756429293184148202379356802488805862746046071921830921840273062124571073336369210703400985851431491295910187179045081526826572515473914151"),
@@ -219,7 +253,7 @@ def _parse_user_obj_v4(b:bytes, cid:int)->dict[str,Any]|None:
             if flags & (1 << 4):
                 raw, p = _tl_bytes_at(b, p)
                 phone = raw.decode("utf-8", errors="ignore")
-            out = {"id": user_id}
+            out: dict[str, Any] = {"id": user_id}
             if access_hash is not None:
                 out["access_hash"] = access_hash
             if first_name:
@@ -276,8 +310,8 @@ class MTNet:
         self.system_lang_code = system_lang_code
         self.lang_pack = lang_pack
         self.lang_code = lang_code
-        self.rd=None; self.wr=None; self.buf=bytearray(); self.stop_ev=asyncio.Event(); self.seq=0
-        self.pending:dict[int,tuple[asyncio.Future[dict[str,Any]],dict[str,Any]]]={}
+        self.rd: asyncio.StreamReader | None = None; self.wr: asyncio.StreamWriter | None = None; self.buf=bytearray(); self.stop_ev=asyncio.Event(); self.seq=0
+        self.pending: dict[int, _PendingEntry] = {}
         self.transport=IntermediateTransport(); self.msg_ids=MsgIdGen(); self.wrote_tag=False
         self.auth_key:bytes|None=None; self.server_salt:bytes=b'\x00'*8; self.session_id=secrets.token_bytes(8)
         self._seen_server_msg_ids: set[int] = set()
@@ -292,7 +326,7 @@ class MTNet:
         self._chat_limit = 1500
         self._entity_bytes_limit = 512 * 1024
         self.cursor_path = Path(cursor_path) if cursor_path is not None else None
-        self.cursor: dict[str, int] = {}
+        self.cursor: _Cursor = {}
         self._difference_lock = asyncio.Lock()
         if self.cursor_path is not None:
             try:
@@ -313,6 +347,7 @@ class MTNet:
             self.layer = CURRENT_LAYER_FLOOR
         self._preferred_dc: int | None = None
         self._reader_task: asyncio.Task[None] | None = None
+        self._keepalive_task: asyncio.Task[None] | None = None
         self._reader_lock = asyncio.Lock()
         self._auth_lock = asyncio.Lock()
 
@@ -320,14 +355,15 @@ class MTNet:
         self.layer = int(layer)
         self._init_done = False
 
-    def get_cursor(self) -> dict[str, int]:
+    def get_cursor(self) -> _Cursor:
         return dict(self.cursor)
 
     def update_cursor(self, cursor: dict[str, Any]) -> None:
         changed = False
         for key in ("pts", "qts", "date", "seq"):
             value = cursor.get(key)
-            if isinstance(value, int) and value > self.cursor.get(key, -1):
+            current = self.cursor.get(key, -1)
+            if isinstance(value, int) and isinstance(current, int) and value > current:
                 self.cursor[key] = value
                 changed = True
         if not changed or self.cursor_path is None:
@@ -480,9 +516,12 @@ class MTNet:
                 log.debug(f"[RX] Possible Telegram int32 error: {err}")
 
     async def read_packet(self)->bytes:
+        reader = self.rd
+        if reader is None:
+            raise ConnectionError('mt socket is not open')
         while True:
             for p in self.cut(): return p
-            raw=await self.rd.read(65536)
+            raw=await reader.read(65536)
             if not raw:
                 self._log_socket_close()
                 raise ConnectionError('mt socket closed')
@@ -551,7 +590,7 @@ class MTNet:
         if dcid!=0xd0e8075c: raise RuntimeError(f'unexpected dh params cid={dcid:x}')
         _=rd.take(16); _=rd.take(16); encrypted_answer=rd.tl_bytes()
         tmp_key,tmp_iv=kdf(new_nonce,server_nonce)
-        dec=bytes(rx.aes_ige_dec_raw(encrypted_answer,tmp_key,tmp_iv))
+        dec=bytes(_require_rx().aes_ige_dec_raw(encrypted_answer,tmp_key,tmp_iv))
         answer=dec[20:]
         ra=Reader(answer); aid=ra.u32()
         log.debug(f'[DH] server_DH_inner_data cid={aid:#010x} (expected 0xb5890dba), dec_first32={dec[:32].hex()}')
@@ -565,7 +604,7 @@ class MTNet:
             g_b=g_b,
         )
         payload=sha1(cli).digest()+cli; payload+=b'\x00'*((16-len(payload)%16)%16)
-        enc2=bytes(rx.aes_ige_enc_raw(payload,tmp_key,tmp_iv))
+        enc2=bytes(_require_rx().aes_ige_enc_raw(payload,tmp_key,tmp_iv))
         ans_req=codec.set_client_dh_params(
             nonce=nonce,
             server_nonce=server_nonce,
@@ -711,7 +750,9 @@ class MTNet:
             story = update.get("story")
             peer = update.get("peer") or {}
             peer_kind = peer.get("_") if isinstance(peer, dict) else None
-            owner_id = peer.get("user_id") if peer_kind == "peerUser" else -peer.get("channel_id") if peer_kind == "peerChannel" else update.get("user_id")
+            peer_user_id = peer.get("user_id") if isinstance(peer, dict) else None
+            peer_channel_id = peer.get("channel_id") if isinstance(peer, dict) else None
+            owner_id = peer_user_id if peer_kind == "peerUser" else -peer_channel_id if peer_kind == "peerChannel" and isinstance(peer_channel_id, int) else update.get("user_id")
             evt = {
                 "kind": "update",
                 "src": "mt",
@@ -737,12 +778,13 @@ class MTNet:
             return
         if update_type == "updateBotChatBoost":
             boost = update.get("boost")
+            channel_id = update.get("channel_id")
             evt = {
                 "kind": "update",
                 "src": "mt",
                 "update_type": update_type,
                 "boost": boost,
-                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else None,
+                "chat_id": -1000000000000 - channel_id if isinstance(channel_id, int) else None,
                 "from_id": update.get("user_id"),
                 "raw_update": update,
             }
@@ -750,11 +792,12 @@ class MTNet:
             return
         if update_type in {"updateMessageReactions", "updateBotMessageReaction", "updateBotMessageReactions"}:
             reactor = update.get("actor_id") or update.get("user_id") or update.get("from_id")
+            channel_id = update.get("channel_id")
             evt = {
                 "kind": "update",
                 "src": "mt",
                 "update_type": update_type,
-                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else update.get("chat_id"),
+                "chat_id": -1000000000000 - channel_id if isinstance(channel_id, int) else update.get("chat_id"),
                 "msg_id": update.get("msg_id") or update.get("message_id") or update.get("id"),
                 "reactions": update.get("reactions") or update.get("new_reactions"),
                 "from_id": reactor,
@@ -765,7 +808,9 @@ class MTNet:
         if update_type in {"updatePendingJoinRequests", "updateBotChatInviteRequester"}:
             peer = update.get("peer") or {}
             peer_kind = peer.get("_") if isinstance(peer, dict) else None
-            chat_id = peer.get("chat_id") if peer_kind == "peerChat" else -1000000000000 - peer.get("channel_id") if peer_kind == "peerChannel" else None
+            peer_chat_id = peer.get("chat_id") if isinstance(peer, dict) else None
+            peer_channel_id = peer.get("channel_id") if isinstance(peer, dict) else None
+            chat_id = peer_chat_id if peer_kind == "peerChat" else -1000000000000 - peer_channel_id if peer_kind == "peerChannel" and isinstance(peer_channel_id, int) else None
             if isinstance(chat_id, int) and peer_kind == "peerChat":
                 chat_id = -chat_id
             evt = {
@@ -783,7 +828,10 @@ class MTNet:
         if update_type == "updateDraftMessage":
             peer = update.get("peer") or {}
             peer_kind = peer.get("_") if isinstance(peer, dict) else None
-            draft_chat = peer.get("user_id") if peer_kind == "peerUser" else -peer.get("chat_id") if peer_kind == "peerChat" else -1000000000000 - peer.get("channel_id") if peer_kind == "peerChannel" else None
+            peer_user_id = peer.get("user_id") if isinstance(peer, dict) else None
+            peer_chat_id = peer.get("chat_id") if isinstance(peer, dict) else None
+            peer_channel_id = peer.get("channel_id") if isinstance(peer, dict) else None
+            draft_chat = peer_user_id if peer_kind == "peerUser" else -peer_chat_id if peer_kind == "peerChat" and isinstance(peer_chat_id, int) else -1000000000000 - peer_channel_id if peer_kind == "peerChannel" and isinstance(peer_channel_id, int) else None
             evt = {
                 "kind": "update",
                 "src": "mt",
@@ -795,11 +843,12 @@ class MTNet:
             asyncio.create_task(self.bus.push("mt", evt))
             return
         if update_type in {"updatePinnedMessages", "updatePinnedChannelMessages"}:
+            channel_id = update.get("channel_id")
             evt = {
                 "kind": "update",
                 "src": "mt",
                 "update_type": update_type,
-                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else update.get("chat_id"),
+                "chat_id": -1000000000000 - channel_id if isinstance(channel_id, int) else update.get("chat_id"),
                 "msg_ids": update.get("messages"),
                 "pinned": bool(update.get("pinned", True)),
                 "pts": update.get("pts"),
@@ -810,12 +859,16 @@ class MTNet:
         if update_type in {"updateReadHistoryInbox", "updateReadHistoryOutbox", "updateReadChannelInbox", "updateReadChannelOutbox", "updateReadMessagesContents", "updateReadChannelDiscussionInbox", "updateReadChannelDiscussionOutbox"}:
             peer = update.get("peer") or {}
             peer_kind = peer.get("_") if isinstance(peer, dict) else None
-            read_chat = peer.get("user_id") if peer_kind == "peerUser" else -peer.get("chat_id") if peer_kind == "peerChat" else -1000000000000 - peer.get("channel_id") if peer_kind == "peerChannel" else None
+            peer_user_id = peer.get("user_id") if isinstance(peer, dict) else None
+            peer_chat_id = peer.get("chat_id") if isinstance(peer, dict) else None
+            peer_channel_id = peer.get("channel_id") if isinstance(peer, dict) else None
+            read_chat = peer_user_id if peer_kind == "peerUser" else -peer_chat_id if peer_kind == "peerChat" and isinstance(peer_chat_id, int) else -1000000000000 - peer_channel_id if peer_kind == "peerChannel" and isinstance(peer_channel_id, int) else None
+            channel_id = update.get("channel_id")
             evt = {
                 "kind": "update",
                 "src": "mt",
                 "update_type": update_type,
-                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else read_chat,
+                "chat_id": -1000000000000 - channel_id if isinstance(channel_id, int) else read_chat,
                 "max_id": update.get("max_id") or update.get("max_read_id"),
                 "raw_update": update,
             }
@@ -846,11 +899,12 @@ class MTNet:
             asyncio.create_task(self.bus.push("mt", evt))
             return
         if update_type in {"updateDeleteMessages", "updateDeleteChannelMessages"}:
+            channel_id = update.get("channel_id")
             evt = {
                 "kind": "update",
                 "src": "mt",
                 "update_type": update_type,
-                "chat_id": -1000000000000 - int(update.get("channel_id")) if isinstance(update.get("channel_id"), int) else None,
+                "chat_id": -1000000000000 - channel_id if isinstance(channel_id, int) else None,
                 "msg_ids": update.get("messages"),
                 "pts": update.get("pts"),
                 "raw_update": update,
@@ -950,12 +1004,14 @@ class MTNet:
 
     def _channel_pts(self, channel_id: int) -> int:
         try:
-            return int(self.cursor.get("channels", {}).get(int(channel_id), 0))
+            channels = self.cursor.get("channels")
+            return int(channels.get(int(channel_id), 0)) if isinstance(channels, dict) else 0
         except (TypeError, ValueError):
             return 0
 
     def _update_channel_pts(self, channel_id: int, pts: int) -> None:
-        channels = dict(self.cursor.get("channels", {}))
+        current = self.cursor.get("channels")
+        channels = dict(current) if isinstance(current, dict) else {}
         channels[int(channel_id)] = int(pts)
         self.cursor["channels"] = channels
         if self.cursor_path is not None:
@@ -1174,7 +1230,7 @@ class MTNet:
             return
         try:
             aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, False)
-            dec = bytes(rx.aes_ige_dec_raw(enc, aes_key, aes_iv))
+            dec = bytes(_require_rx().aes_ige_dec_raw(enc, aes_key, aes_iv))
             r = Reader(dec)
             salt = r.take(8); sid = r.take(8); msg_id = r.i64(); _seq = r.i32(); ln = r.i32()
             msg = r.take(ln)
@@ -1203,8 +1259,10 @@ class MTNet:
                 req_msg_id = rm.i64()
                 result = inner[12:]
                 entry = self.pending.pop(req_msg_id, None)
-                fut = entry[0] if isinstance(entry, tuple) else entry
-                if not fut or fut.done():
+                if not isinstance(entry, tuple):
+                    return
+                fut = entry[0]
+                if fut.done():
                     return
                 try:
                     parsed = self._parse_rpc_result(result)
@@ -1224,7 +1282,7 @@ class MTNet:
                     fut.set_exception(exc)
                 return
             try:
-                decoded = rx.deserialize_constructor(inner)
+                decoded = _require_rx().deserialize_constructor(inner)
                 if isinstance(decoded, dict):
                     decoded_type = str(decoded.get("_", ""))
                     if decoded_type in {"updates", "updatesCombined", "updateShort", "updatesTooLong"}:
@@ -1250,7 +1308,7 @@ class MTNet:
                 return
             if cid in {0x313bc7f8, 0x4d6deea5, 0x9015e101}:
                 try:
-                    decoded = rx.deserialize_constructor(inner)
+                    decoded = _require_rx().deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
                 except Exception:
@@ -1258,7 +1316,7 @@ class MTNet:
                 return
             if cid in {0x74ae4240, 0x725b04c3}:
                 try:
-                    decoded = rx.deserialize_constructor(inner)
+                    decoded = _require_rx().deserialize_constructor(inner)
                     if isinstance(decoded, dict) and (
                         isinstance(decoded.get("updates"), list)
                         or str(decoded.get("_", "")).startswith("update")
@@ -1270,7 +1328,7 @@ class MTNet:
                 return
             if cid in {0x1f2b0afd, 0x62ba04d9}:
                 try:
-                    decoded = rx.deserialize_constructor(inner)
+                    decoded = _require_rx().deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
                 except Exception:
@@ -1278,7 +1336,7 @@ class MTNet:
                 return
             if cid == 0x78d4dec1:
                 try:
-                    decoded = rx.deserialize_constructor(inner)
+                    decoded = _require_rx().deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_updates(decoded)
                 except Exception:
@@ -1295,7 +1353,7 @@ class MTNet:
                 return
             if cid in {0xf2ebdb4e, 0xe5bdf8de, 0xc32d5b12, 0xc01e857f}:
                 try:
-                    decoded = rx.deserialize_constructor(inner)
+                    decoded = _require_rx().deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
                 except Exception:
@@ -1352,11 +1410,11 @@ class MTNet:
                     _bad_seq = rm.i32()
                     _error_code = rm.i32()
                     log.warning('bad_msg_notification for msg_id=%s code=%s', bad_msg_id, _error_code)
-                    fut = self.pending.pop(bad_msg_id, None)
-                    if isinstance(fut, tuple):
-                        fut = fut[0]
-                    if fut is not None and not fut.done():
-                        fut.set_exception(ConnectionError(f'bad_msg_notification code={_error_code}'))
+                    entry = self.pending.pop(bad_msg_id, None)
+                    if isinstance(entry, tuple):
+                        fut = entry[0]
+                        if not fut.done():
+                            fut.set_exception(ConnectionError(f'bad_msg_notification code={_error_code}'))
                 except Exception:
                     pass
                 return
@@ -1373,7 +1431,7 @@ class MTNet:
                 return
             if cid in {0xd087663a, 0x985d3abb}:
                 try:
-                    decoded = rx.deserialize_constructor(inner)
+                    decoded = _require_rx().deserialize_constructor(inner)
                     if isinstance(decoded, dict):
                         self._dispatch_update(decoded)
                 except Exception:
@@ -1397,7 +1455,7 @@ class MTNet:
                     pass
                 return
             try:
-                decoded = rx.deserialize_constructor(inner)
+                decoded = _require_rx().deserialize_constructor(inner)
                 if isinstance(decoded, dict) and str(decoded.get("_", "")).startswith("update"):
                     self._dispatch_update(decoded)
                     return
@@ -1425,7 +1483,7 @@ class MTNet:
         if flags & (1 << 2):
             _, p = _tl_bytes_at(result, p)
         user = _parse_user_obj(result[p:])
-        out = {"ok": True, "auth_key": self.auth_key or b""}
+        out: dict[str, Any] = {"ok": True, "auth_key": self.auth_key or b""}
         if user is not None:
             out["user"] = user
         return out
@@ -1541,7 +1599,7 @@ class MTNet:
         if login_token is not None:
             return login_token
         try:
-            parsed = rx.deserialize_constructor(result)
+            parsed = _require_rx().deserialize_constructor(result)
             if isinstance(parsed, dict) and parsed.get("_") == "rpc_result":
                 return {"ok": True, "result": parsed.get("result", parsed)}
             return {"ok": True, "result": parsed}
@@ -1553,12 +1611,12 @@ class MTNet:
         chat_id = obj.get('chat_id') or obj.get('peer')
         access_hash = obj.get('access_hash', 0)
         if chat_id is None:
-            return bytes(rx.serialize_constructor('inputPeerSelf', {}))
+            return bytes(_require_rx().serialize_constructor('inputPeerSelf', {}))
         if isinstance(chat_id, bytes):
             return chat_id
         if isinstance(chat_id, str):
             if chat_id in ('self', 'me'):
-                return bytes(rx.serialize_constructor('inputPeerSelf', {}))
+                return bytes(_require_rx().serialize_constructor('inputPeerSelf', {}))
             if chat_id.lstrip('-').isdigit():
                 chat_id = int(chat_id)
             else:
@@ -1570,17 +1628,17 @@ class MTNet:
                 self._entity_touch(("user", chat_id))
         if isinstance(chat_id, int):
             if chat_id == 0:
-                return bytes(rx.serialize_constructor('inputPeerSelf', {}))
+                return bytes(_require_rx().serialize_constructor('inputPeerSelf', {}))
             if chat_id > 0:
                 if chat_id == getattr(self, 'self_id', None):
-                    return bytes(rx.serialize_constructor('inputPeerSelf', {}))
+                    return bytes(_require_rx().serialize_constructor('inputPeerSelf', {}))
                 entity = self.entities.get(("user", chat_id))
                 if entity is not None:
                     access_hash = access_hash or entity.get("access_hash", 0)
                     self._entity_touch(("user", chat_id))
                 if not access_hash:
                     raise ValueError('user peer requires a non-zero access_hash')
-                return bytes(rx.serialize_constructor('inputPeerUser', {'user_id': chat_id, 'access_hash': int(access_hash)}))
+                return bytes(_require_rx().serialize_constructor('inputPeerUser', {'user_id': chat_id, 'access_hash': int(access_hash)}))
             raw = -chat_id
             if raw > 1000000000000:
                 channel_id = raw - 1000000000000
@@ -1590,9 +1648,9 @@ class MTNet:
                     self._entity_touch(("chat", channel_id))
                 if not access_hash:
                     raise ValueError('channel peer requires a non-zero access_hash')
-                return bytes(rx.serialize_constructor('inputPeerChannel', {'channel_id': channel_id, 'access_hash': int(access_hash)}))
-            return bytes(rx.serialize_constructor('inputPeerChat', {'chat_id': raw}))
-        return bytes(rx.serialize_constructor('inputPeerSelf', {}))
+                return bytes(_require_rx().serialize_constructor('inputPeerChannel', {'channel_id': channel_id, 'access_hash': int(access_hash)}))
+            return bytes(_require_rx().serialize_constructor('inputPeerChat', {'chat_id': raw}))
+        return bytes(_require_rx().serialize_constructor('inputPeerSelf', {}))
 
     async def resolve_peer(self, value: Any) -> bytes:
         if isinstance(value, (bytes, bytearray, memoryview)):
@@ -1645,21 +1703,21 @@ class MTNet:
                     channel_id = raw
             else:
                 channel_id = chat_id
-            return bytes(rx.serialize_constructor('inputChannel', {'channel_id': channel_id, 'access_hash': int(access_hash)}))
+            return bytes(_require_rx().serialize_constructor('inputChannel', {'channel_id': channel_id, 'access_hash': int(access_hash)}))
         raise ValueError('channel peer requires an integer channel_id and a non-zero access_hash')
 
     def _resolve_user(self, obj:dict[str,Any])->bytes:
         user_id = obj.get('user_id')
         access_hash = obj.get('access_hash', 0)
         if user_id is None or (isinstance(user_id, str) and user_id in ('self', 'me')):
-            return bytes(rx.serialize_constructor('inputUserSelf', {}))
+            return bytes(_require_rx().serialize_constructor('inputUserSelf', {}))
         if isinstance(user_id, bytes):
             return user_id
-        return bytes(rx.serialize_constructor('inputUser', {'user_id': int(user_id), 'access_hash': int(access_hash)}))
+        return bytes(_require_rx().serialize_constructor('inputUser', {'user_id': int(user_id), 'access_hash': int(access_hash)}))
 
     def _wrap_init_query(self, api_id:int, query:bytes)->bytes:
         if rx is None: raise RuntimeError('rx (goygram.ext) is not available')
-        inner = bytes(rx.serialize_method('initConnection', {
+        inner = bytes(_require_rx().serialize_method('initConnection', {
             'api_id': api_id,
             'device_model': self.device_model or 'Unknown',
             'system_version': self.system_version or 'Unknown',
@@ -1669,7 +1727,7 @@ class MTNet:
             'lang_code': self.lang_code,
             'query': query,
         }))
-        return bytes(rx.serialize_method('invokeWithLayer', {
+        return bytes(_require_rx().serialize_method('invokeWithLayer', {
             'layer': self.layer,
             'query': inner,
         }))
@@ -1710,7 +1768,7 @@ class MTNet:
 
     def _parse_new_message(self, data:bytes|dict[str,Any])->dict[str,Any]|None:
         try:
-            decoded = data if isinstance(data, dict) else rx.deserialize_constructor(data)
+            decoded = data if isinstance(data, dict) else _require_rx().deserialize_constructor(data)
             kind = decoded.get("_")
             if kind in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"}:
                 decoded = decoded.get("message", {})
@@ -1733,6 +1791,8 @@ class MTNet:
                 }
             if kind == "updateShortChatMessage":
                 chat_id = decoded.get("chat_id")
+                if not isinstance(chat_id, (int, str)):
+                    return None
                 return {
                     "kind": "msg", "msg_id": decoded["id"], "chat_id": -int(chat_id),
                     "from_id": self_id if is_out else decoded.get("from_id"), "text": decoded.get("message", ""),
@@ -1826,7 +1886,7 @@ class MTNet:
                 media = source.get("media")
                 document = media.get("document") if isinstance(media, dict) else None
         if not isinstance(document, dict) or not isinstance(document.get("id"), int):
-            raise FileReferenceExpiredError("file reference expired and source is unknown")
+            raise FileReferenceExpiredError(400, "file reference expired and source is unknown")
         result = await self.call("messages.getMessages", id=[{"_": "inputDocument", "id": document.get("id"), "access_hash": document.get("access_hash") or 0, "file_reference": b""}])
         body = result.get("result") if isinstance(result, dict) and isinstance(result.get("result"), dict) else result
         messages = body.get("messages") if isinstance(body, dict) else None
@@ -1837,7 +1897,7 @@ class MTNet:
             updated = dict(location)
             updated["file_reference"] = bytes(doc["file_reference"])
             return updated
-        raise FileReferenceExpiredError("file reference refresh returned no document")
+        raise FileReferenceExpiredError(400, "file reference refresh returned no document")
 
     async def download_file(self, location: Any, destination: Any, *, offset: int = 0, limit: int = 524288, progress: Any = None, media_source: Any = None) -> int:
         if limit < 1024 or limit > 524288 or limit % 1024:
@@ -1922,7 +1982,7 @@ class MTNet:
         for _ in bodies:
             self.seq += 1
             seq_list.append(self.seq * 2 - 1)
-        container_body = build_msg_container([(sid, seq, bd) for (sid, seq), bd in zip(sub_ids, seq_list, bodies)])
+        container_body = build_msg_container([(sid, seq, body) for sid, seq, body in zip(sub_ids, seq_list, bodies)])
         api_id = None
         for _, kw in calls:
             if kw.get('api_id'):
@@ -1938,18 +1998,22 @@ class MTNet:
         self.seq += 1
         outer_seq_no = self.seq * 2 - 1
         container_msg_id = self.msg_ids.next()
+        auth_key = self.auth_key
+        writer = self.wr
+        if auth_key is None or writer is None:
+            raise ConnectionClosedError("MTProto transport is not ready")
         m = b''
         m += self.server_salt + self.session_id + container_msg_id.to_bytes(8, 'little', signed=True) + outer_seq_no.to_bytes(4, 'little', signed=True)
         m += len(container_body).to_bytes(4, 'little', signed=True) + container_body
         pad = secrets.token_bytes((16 - (len(m) + 12) % 16) % 16 + 12)
-        msg_key_large = sha256(self.auth_key[88:120] + m + pad).digest()
+        msg_key_large = sha256(auth_key[88:120] + m + pad).digest()
         msg_key = msg_key_large[8:24]
-        aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, True)
-        enc = bytes(rx.aes_ige_enc_raw(m + pad, aes_key, aes_iv))
-        pkt = self.pack(int.from_bytes(sha1(self.auth_key).digest()[-8:], 'little').to_bytes(8, 'little') + msg_key + enc)
+        aes_key, aes_iv = kdf_msg(auth_key, msg_key, True)
+        enc = bytes(_require_rx().aes_ige_enc_raw(m + pad, aes_key, aes_iv))
+        pkt = self.pack(int.from_bytes(sha1(auth_key).digest()[-8:], 'little').to_bytes(8, 'little') + msg_key + enc)
         log.debug('[TX] container packet sent, message_count=%s', len(sub_ids))
-        self.wr.write(pkt)
-        await self.wr.drain()
+        writer.write(pkt)
+        await writer.drain()
         self.pending[container_msg_id] = {'type': 'container', 'msg_ids': sub_ids}
         return container_msg_id
 
@@ -1966,24 +2030,28 @@ class MTNet:
             for _ in bodies:
                 self.seq += 1
                 seq_list.append(self.seq * 2 - 1)
-            container_body = build_msg_container([(sid, seq, bd) for (sid, seq), bd in zip(sub_msg_ids, seq_list, bodies)])
+            container_body = build_msg_container([(sid, seq, body) for sid, seq, body in zip(sub_msg_ids, seq_list, bodies)])
             if not self._init_done and self._api_id:
                 container_body = self._wrap_init_query(self._api_id, container_body)
                 self._init_done = True
             self.seq += 1
             outer_seq_no = self.seq * 2 - 1
+            auth_key = self.auth_key
+            writer = self.wr
+            if auth_key is None or writer is None:
+                raise ConnectionClosedError("MTProto transport is not ready")
             m = b''
             m += self.server_salt + self.session_id + container_msg_id.to_bytes(8, 'little', signed=True) + outer_seq_no.to_bytes(4, 'little', signed=True)
             m += len(container_body).to_bytes(4, 'little', signed=True) + container_body
             pad = secrets.token_bytes((16 - (len(m) + 12) % 16) % 16 + 12)
-            msg_key_large = sha256(self.auth_key[88:120] + m + pad).digest()
+            msg_key_large = sha256(auth_key[88:120] + m + pad).digest()
             msg_key = msg_key_large[8:24]
-            aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, True)
-            enc = bytes(rx.aes_ige_enc_raw(m + pad, aes_key, aes_iv))
-            pkt = self.pack(int.from_bytes(sha1(self.auth_key).digest()[-8:], 'little').to_bytes(8, 'little') + msg_key + enc)
+            aes_key, aes_iv = kdf_msg(auth_key, msg_key, True)
+            enc = bytes(_require_rx().aes_ige_enc_raw(m + pad, aes_key, aes_iv))
+            pkt = self.pack(int.from_bytes(sha1(auth_key).digest()[-8:], 'little').to_bytes(8, 'little') + msg_key + enc)
             log.debug('[TX] resend container msg_ids=%s', sub_msg_ids)
-            self.wr.write(pkt)
-            await self.wr.drain()
+            writer.write(pkt)
+            await writer.drain()
         except Exception as e:
             log.error('Resend container failed for container_msg_id=%s: %r', container_msg_id, e)
             self.pending.pop(container_msg_id, None)
@@ -1991,25 +2059,28 @@ class MTNet:
                 entry = self.pending.pop(sub_id, None)
                 if entry is None:
                     continue
-                fut = entry[0] if isinstance(entry, tuple) else entry
-                if fut and not fut.done():
-                    fut.set_exception(e)
+                if isinstance(entry, tuple):
+                    fut = entry[0]
+                    if not fut.done():
+                        fut.set_exception(e)
 
     async def _resend(self, msg_id:int, obj:dict[str,Any])->None:
         try:
             await self.send(obj, req_msg_id=msg_id)
         except Exception as e:
             log.error('Resend failed for msg_id=%s: %r', msg_id, e)
-            fut = self.pending.pop(msg_id, None)
-            if isinstance(fut, tuple):
-                fut = fut[0]
-            if fut and not fut.done():
-                fut.set_exception(e)
+            entry = self.pending.pop(msg_id, None)
+            if isinstance(entry, tuple):
+                fut = entry[0]
+                if not fut.done():
+                    fut.set_exception(e)
 
     async def send(self, obj:dict[str,Any], req_msg_id:int|None=None)->int:
         await self.ensure_auth_key()
         if rx is None: raise RuntimeError('rx (goygram.ext._ext) is not available; cannot encrypt')
         act = obj.get('act', '')
+        if not isinstance(act, str):
+            raise TypeError("act must be a string")
         api_id = obj.get('api_id') or self._api_id
         if api_id is not None:
             self._api_id = int(api_id)
@@ -2019,24 +2090,29 @@ class MTNet:
             self._init_done = True
         msg_id=req_msg_id if req_msg_id is not None else self.msg_ids.next()
         self.seq += 1; seq_no = self.seq * 2 - 1
+        auth_key = self.auth_key
+        writer = self.wr
+        if auth_key is None or writer is None:
+            raise ConnectionClosedError("MTProto transport is not ready")
         m=b''
         m += self.server_salt + self.session_id + msg_id.to_bytes(8,'little',signed=True) + seq_no.to_bytes(4,'little',signed=True)
         m += len(body).to_bytes(4,'little',signed=True) + body
         pad=secrets.token_bytes((16-(len(m)+12)%16)%16 + 12)
-        msg_key_large=sha256(self.auth_key[88:120]+m+pad).digest(); msg_key=msg_key_large[8:24]
-        aes_key,aes_iv=kdf_msg(self.auth_key,msg_key,True)
-        enc=bytes(rx.aes_ige_enc_raw(m+pad,aes_key,aes_iv))
-        pkt=self.pack(int.from_bytes(sha1(self.auth_key).digest()[-8:],'little').to_bytes(8,'little')+msg_key+enc)
+        msg_key_large=sha256(auth_key[88:120]+m+pad).digest(); msg_key=msg_key_large[8:24]
+        aes_key,aes_iv=kdf_msg(auth_key,msg_key,True)
+        enc=bytes(_require_rx().aes_ige_enc_raw(m+pad,aes_key,aes_iv))
+        pkt=self.pack(int.from_bytes(sha1(auth_key).digest()[-8:],'little').to_bytes(8,'little')+msg_key+enc)
         log.debug(f"[TX] >>> {len(pkt)} bytes")
-        self.wr.write(pkt); await self.wr.drain()
+        writer.write(pkt); await writer.drain()
         return msg_id
 
     async def close(self)->None:
         self.stop_ev.set()
         task = self._reader_task
-        if getattr(self, "_keepalive_task", None) is not None:
-            self._keepalive_task.cancel()
-            await asyncio.gather(self._keepalive_task, return_exceptions=True)
+        keepalive = self._keepalive_task
+        if keepalive is not None:
+            keepalive.cancel()
+            await asyncio.gather(keepalive, return_exceptions=True)
             self._keepalive_task = None
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
@@ -2144,7 +2220,10 @@ class MTNet:
         await sender.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes), _on_dc=True)
         if not getattr(self, "dc_auth_keys", None):
             self.dc_auth_keys = {}
-        self.dc_auth_keys[int(dc_id)] = {"key": sender.auth_key, "salt": sender.server_salt}
+        auth_key = sender.auth_key
+        if auth_key is None:
+            raise RuntimeError("exported DC authorization produced no auth key")
+        self.dc_auth_keys[int(dc_id)] = {"key": auth_key, "salt": sender.server_salt}
         hook = getattr(self, "_entity_flush_hook", None)
         if callable(hook):
             try:
@@ -2207,12 +2286,12 @@ class MTNet:
             inner = {k: v for k, v in kw.items() if k not in ("_dispatch_chat_id", "_dispatch_message_text")}
             inner = {k: self._takeout_encode(v) for k, v in inner.items()}
             inner_body = bytes(_ext.serialize_method(normalized, inner))
-            payload = {"act": "invokeWithTakeout", "takeout_id": int(takeout_id), "query": inner_body}
+            payload = {"takeout_id": int(takeout_id), "query": inner_body}
             if dispatch_chat_id is not None:
                 payload["_dispatch_chat_id"] = dispatch_chat_id
             if dispatch_message_text is not None:
                 payload["_dispatch_message_text"] = dispatch_message_text
-            return await self._rpc_call(**payload)
+            return await self._rpc_call("invokeWithTakeout", **payload)
         if normalized.startswith("messages.") and "peer" in kw and not isinstance(kw["peer"], (bytes, bytearray, memoryview, dict)):
             kw = dict(kw)
             kw["peer"] = await self.resolve_peer(kw["peer"])

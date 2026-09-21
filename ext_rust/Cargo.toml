@@ -1,7 +1,7 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 [package]
 name = "goygram_ext"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2021"
 description = "Rust core for GoyGram"
 license = "AGPL-3.0-only"
@@ -12,7 +12,7 @@ name = "goygram_ext"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.21.2", features = ["extension-module", "abi3", "abi3-py311"] }
+pyo3 = { version = "0.21.2", features = ["extension-module", "abi3", "abi3-py38"] }
 aes = "0.8.4"
 aes-gcm = "0.10.3"
 cipher = "0.4.4"

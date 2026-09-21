@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re as _re
+import importlib
 from html import unescape as _unescape
 from typing import Any
 
@@ -397,7 +398,7 @@ def media_duration(path: str) -> int | None:
         except Exception:
             pass
     try:
-        import mutagen
+        mutagen = importlib.import_module("mutagen")
         audio = mutagen.File(str(path))
         secs = int(round(float(getattr(getattr(audio, "info", None), "length", 0) or 0)))
         if secs > 0:

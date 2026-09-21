@@ -5,18 +5,26 @@ import json as _json
 import re as _re
 import time as _time
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from importlib import import_module
+from typing import Any, Callable, Protocol, cast, no_type_check
+
+from goygram.types.obj import Obj
+
+
+class _LanguageProbability(Protocol):
+    lang: str
+    prob: float
 
 
 @dataclass
 class Filter:
-    fn: Callable[[object], bool]
+    fn: Callable[[Obj], bool]
     _name: str | None = None
     _left: Filter | None = field(default=None, repr=False)
     _right: Filter | None = field(default=None, repr=False)
     _op: str | None = field(default=None, repr=False)
 
-    def __call__(self, event: object) -> bool:
+    def __call__(self, event: Obj) -> bool:
         return bool(self.fn(event))
 
     def __and__(self, other: Filter) -> Filter:
@@ -54,13 +62,13 @@ class Filter:
             return f"Filter({self._name})"
         return "Filter(<lambda>)"
 
-    def explain(self, event: object) -> str:
+    def explain(self, event: Obj) -> str:
         lines: list[str] = []
         ok = self._explain(event, lines, 0)
         lines.append(f"RESULT: {'✓' if ok else '✗'}")
         return "\n".join(lines)
 
-    def _explain(self, event: object, lines: list[str], depth: int) -> bool:
+    def _explain(self, event: Obj, lines: list[str], depth: int) -> bool:
         prefix = "  " * depth
         if self._op == "&":
             la = self._left._explain(event, lines, depth) if self._left else False
@@ -124,7 +132,7 @@ class Filter:
         return f"{prefix}{self._name or 'custom'}\n"
 
 
-def _rext(e: object, path: str, default: Any = None) -> Any:
+def _rext(e: Obj, path: str, default: Any = None) -> Any:
     val = e
     for seg in path.split("."):
         if val is None:
@@ -136,7 +144,7 @@ def _rext(e: object, path: str, default: Any = None) -> Any:
     return val if val is not None else default
 
 
-def _rget(e: object, *keys: str) -> Any:
+def _rget(e: Obj, *keys: str) -> Any:
     if not keys:
         return None
     value: Any = e
@@ -155,7 +163,7 @@ def _rget(e: object, *keys: str) -> Any:
     return value
 
 
-def _ct(e: object) -> str | None:
+def _ct(e: Obj) -> str | None:
     raw = getattr(e, "raw", None)
     if isinstance(raw, dict):
         for src in (raw, raw.get("message") or {}, raw.get("edited_message") or {}, raw.get("callback_query", {}).get("message") or {}):
@@ -176,7 +184,7 @@ def _ct(e: object) -> str | None:
     return None
 
 
-def _mkey(e: object) -> str | None:
+def _mkey(e: Obj) -> str | None:
     for k in ("photo", "video", "audio", "document", "sticker", "animation",
               "voice", "video_note", "location", "contact", "venue", "dice",
               "game", "invoice", "story", "giveaway"):
@@ -185,7 +193,7 @@ def _mkey(e: object) -> str | None:
     return None
 
 
-def _mdur(e: object) -> float:
+def _mdur(e: Obj) -> float:
     for k in ("video", "audio", "animation", "voice", "video_note"):
         obj = _rget(e, k)
         if isinstance(obj, dict):
@@ -193,7 +201,7 @@ def _mdur(e: object) -> float:
     return 0
 
 
-def _msize(e: object) -> int:
+def _msize(e: Obj) -> int:
     for k in ("photo", "video", "audio", "document", "animation", "voice", "video_note", "sticker"):
         obj = _rget(e, k)
         sz = 0
@@ -206,7 +214,7 @@ def _msize(e: object) -> int:
     return 0
 
 
-def _mime(e: object) -> str:
+def _mime(e: Obj) -> str:
     for k in ("document", "video", "audio", "animation", "voice", "video_note", "sticker"):
         obj = _rget(e, k)
         if isinstance(obj, dict):
@@ -214,7 +222,7 @@ def _mime(e: object) -> str:
     return ""
 
 
-def _has_entity(e: object, etype: str) -> bool:
+def _has_entity(e: Obj, etype: str) -> bool:
     for src in ("entities", "caption_entities"):
         lst = _rget(e, src)
         if isinstance(lst, list):
@@ -228,6 +236,12 @@ def _has_entity(e: object, etype: str) -> bool:
     return False
 
 
+def _same_int(a: Any, b: Any) -> bool:
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return False
+
 
 text = Filter(lambda e: bool(getattr(e, "text", None)), _name="text")
 
@@ -240,7 +254,7 @@ class command(Filter):
         self._sep = sep
         super().__init__(fn=self._chk, _name=f"command({','.join(cmds)})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = (getattr(e, "text", "") or "").strip()
         if not txt:
             return False
@@ -272,7 +286,7 @@ class regex(Filter):
         self._rx = _re.compile(pattern, flags)
         super().__init__(fn=self._chk, _name=f"regex({pattern!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         m = self._rx.search(txt)
         if m:
@@ -289,7 +303,7 @@ class fullmatch(Filter):
         self._rx = _re.compile(pattern, flags)
         super().__init__(fn=self._chk, _name=f"fullmatch({pattern!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         m = self._rx.fullmatch(txt)
         if m:
@@ -306,7 +320,7 @@ class findall(Filter):
         self._rx = _re.compile(pattern, flags)
         super().__init__(fn=self._chk, _name=f"findall({pattern!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         res = self._rx.findall(txt)
         if res:
@@ -323,7 +337,7 @@ class finditer(Filter):
         self._rx = _re.compile(pattern, flags)
         super().__init__(fn=self._chk, _name=f"finditer({pattern!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         it = self._rx.finditer(txt)
         try:
@@ -343,7 +357,7 @@ class split(Filter):
         self._ms = maxsplit
         super().__init__(fn=self._chk, _name=f"split({pattern!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         parts = self._rx.split(txt, maxsplit=self._ms)
         try:
@@ -359,7 +373,7 @@ class contains(Filter):
         self._ic = ignore_case
         super().__init__(fn=self._chk, _name=f"contains({substring!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         return self._s in (txt.lower() if self._ic else txt)
 
@@ -370,7 +384,7 @@ class contains_any(Filter):
         self._ic = ignore_case
         super().__init__(fn=self._chk, _name=f"contains_any({substrings})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         t = txt.lower() if self._ic else txt
         return any(s in t for s in self._ss)
@@ -382,7 +396,7 @@ class contains_all(Filter):
         self._ic = ignore_case
         super().__init__(fn=self._chk, _name=f"contains_all({substrings})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         t = txt.lower() if self._ic else txt
         return all(s in t for s in self._ss)
@@ -394,7 +408,7 @@ class startswith(Filter):
         self._ic = ignore_case
         super().__init__(fn=self._chk, _name=f"startswith({prefix!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         return (txt.lower() if self._ic else txt).startswith(self._p)
 
@@ -405,7 +419,7 @@ class endswith(Filter):
         self._ic = ignore_case
         super().__init__(fn=self._chk, _name=f"endswith({suffix!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         return (txt.lower() if self._ic else txt).endswith(self._s)
 
@@ -416,7 +430,7 @@ class text_len(Filter):
         self._mx = max_len
         super().__init__(fn=self._chk, _name=f"text_len({min_len},{max_len})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         n = len(getattr(e, "text", None) or "")
         if self._mn is not None and n < self._mn:
             return False
@@ -431,7 +445,7 @@ class word_count(Filter):
         self._mx = max_w
         super().__init__(fn=self._chk, _name=f"word_count({min_w},{max_w})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         n = len((getattr(e, "text", None) or "").split())
         if self._mn is not None and n < self._mn:
             return False
@@ -446,7 +460,7 @@ class line_count(Filter):
         self._mx = max_l
         super().__init__(fn=self._chk, _name=f"line_count({min_l},{max_l})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         n = (getattr(e, "text", None) or "").count("\n") + 1
         if self._mn is not None and n < self._mn:
             return False
@@ -465,12 +479,12 @@ class is_language(Filter):
         self._conf = min_confidence
         super().__init__(fn=self._chk, _name=f"is_language({lang})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
         if len(txt) < 4:
             return False
         try:
-            from langdetect import detect_langs
+            detect_langs = cast(Callable[[str], list[_LanguageProbability]], getattr(import_module("langdetect"), "detect_langs"))
             for r in detect_langs(txt):
                 if r.lang == self._lang and r.prob >= self._conf:
                     return True
@@ -506,12 +520,12 @@ has_text_mention = Filter(lambda e: _has_entity(e, "text_mention"), _name="has_t
 has_bank_card = Filter(lambda e: _has_entity(e, "bank_card"), _name="has_bank_card")
 
 
-class mentioned(Filter):
+class _mentioned(Filter):
     def __init__(self, user_id: int | None = None):
         self._uid = user_id
         super().__init__(fn=self._chk, _name=f"mentioned({user_id})" if user_id else "mentioned")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         raw = getattr(e, "raw", None)
         if not isinstance(raw, dict):
             return False
@@ -541,7 +555,7 @@ class mentioned(Filter):
         return False
 
 
-mentioned = mentioned()
+mentioned = _mentioned()
 
 
 photo = Filter(lambda e: _mkey(e) == "photo", _name="photo")
@@ -562,7 +576,6 @@ story = Filter(lambda e: _mkey(e) == "story", _name="story")
 giveaway = Filter(lambda e: _mkey(e) == "giveaway", _name="giveaway")
 media = Filter(lambda e: _mkey(e) is not None, _name="media")
 media_group = Filter(lambda e: bool(_rget(e, "media_group_id")), _name="media_group")
-caption = Filter(lambda e: bool(_rget(e, "caption")), _name="caption")
 
 
 class media_size(Filter):
@@ -571,7 +584,7 @@ class media_size(Filter):
         self._mx = max_bytes
         super().__init__(fn=self._chk, _name=f"media_size({min_bytes},{max_bytes})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         sz = _msize(e)
         if sz <= 0:
             return False
@@ -588,7 +601,7 @@ class media_duration(Filter):
         self._mx = max_secs
         super().__init__(fn=self._chk, _name=f"media_duration({min_secs},{max_secs})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         dur = _mdur(e)
         if dur <= 0:
             return False
@@ -604,7 +617,7 @@ class media_mime(Filter):
         self._mp = mime_prefix.lower()
         super().__init__(fn=self._chk, _name=f"media_mime({mime_prefix})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         return _mime(e).lower().startswith(self._mp)
 
 
@@ -614,7 +627,7 @@ class media_width(Filter):
         self._mx = max_w
         super().__init__(fn=self._chk, _name=f"media_width({min_w},{max_w})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         for k in ("photo", "video", "animation", "sticker", "video_note"):
             obj = _rget(e, k)
             w = 0
@@ -637,7 +650,7 @@ class media_height(Filter):
         self._mx = max_h
         super().__init__(fn=self._chk, _name=f"media_height({min_h},{max_h})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         for k in ("photo", "video", "animation", "sticker", "video_note"):
             obj = _rget(e, k)
             h = 0
@@ -659,7 +672,7 @@ class file_name(Filter):
         self._rx = _re.compile(pattern, flags)
         super().__init__(fn=self._chk, _name=f"file_name({pattern!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         for k in ("document", "audio", "video", "animation", "voice", "video_note", "sticker"):
             obj = _rget(e, k)
             if isinstance(obj, dict):
@@ -674,7 +687,7 @@ class specific_media_group(Filter):
         self._mg = str(mgid)
         super().__init__(fn=self._chk, _name=f"specific_media_group({mgid})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         mg = _rget(e, "media_group_id")
         return str(mg) == self._mg if mg is not None else False
 
@@ -685,7 +698,7 @@ class album_len(Filter):
         self._mx = max_n
         super().__init__(fn=self._chk, _name=f"album_len({min_n},{max_n})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         arr = _rget(e, "photo") or _rget(e, "media") or []
         if not isinstance(arr, list):
             return False
@@ -703,7 +716,7 @@ class caption_regex(Filter):
         self._rx = _re.compile(pattern, flags)
         super().__init__(fn=self._chk, _name=f"caption_regex({pattern!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         cap = _rget(e, "caption") or ""
         m = self._rx.search(str(cap))
         if m:
@@ -721,7 +734,7 @@ class caption_contains(Filter):
         self._ic = ignore_case
         super().__init__(fn=self._chk, _name=f"caption_contains({substring!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         cap = str(_rget(e, "caption") or "")
         return self._s in (cap.lower() if self._ic else cap)
 
@@ -732,7 +745,7 @@ class caption_len(Filter):
         self._mx = max_len
         super().__init__(fn=self._chk, _name=f"caption_len({min_len},{max_len})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         n = len(str(_rget(e, "caption") or ""))
         if self._mn is not None and n < self._mn:
             return False
@@ -760,7 +773,7 @@ class chat(Filter):
         self._cid = chat_id
         super().__init__(fn=self._chk, _name=f"chat({chat_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
         if cid is None:
             return False
@@ -775,7 +788,7 @@ class any_chat(Filter):
         self._ids = {str(c) for c in chat_ids}
         super().__init__(fn=self._chk, _name=f"any_chat({chat_ids})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
         return str(cid) in self._ids if cid is not None else False
 
@@ -785,7 +798,7 @@ class not_chat(Filter):
         self._ids = {str(c) for c in chat_ids}
         super().__init__(fn=self._chk, _name=f"not_chat({chat_ids})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
         return str(cid) not in self._ids if cid is not None else True
 
@@ -795,7 +808,7 @@ class topic(Filter):
         self._tid = topic_id
         super().__init__(fn=self._chk, _name=f"topic({topic_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         tid = _rget(e, "message_thread_id")
         if tid is None:
             return False
@@ -817,14 +830,11 @@ class from_user(Filter):
         self._uid = user_id
         super().__init__(fn=self._chk, _name=f"from_user({user_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
         if fid is None:
             return False
-        try:
-            return int(fid) == int(self._uid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(fid, self._uid)
 
 
 class from_any(Filter):
@@ -832,7 +842,7 @@ class from_any(Filter):
         self._ids = set(user_ids)
         super().__init__(fn=self._chk, _name=f"from_any({user_ids})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
         if fid is None:
             return False
@@ -847,7 +857,7 @@ class not_from(Filter):
         self._ids = set(user_ids)
         super().__init__(fn=self._chk, _name=f"not_from({user_ids})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
         if fid is None:
             return True
@@ -872,7 +882,7 @@ class lang_code(Filter):
         self._lang = lang.lower()
         super().__init__(fn=self._chk, _name=f"lang_code({lang})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         lc = _rget(e, "from", "language_code")
         return str(lc or "").lower() == self._lang
 
@@ -911,7 +921,7 @@ class views(Filter):
         self._min = min_views
         super().__init__(fn=self._chk, _name=f"views({min_views})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         v = _rget(e, "views")
         return int(v or 0) >= self._min
 
@@ -921,7 +931,7 @@ class forwards(Filter):
         self._min = min_forwards
         super().__init__(fn=self._chk, _name=f"forwards({min_forwards})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         f = _rget(e, "forwards")
         return int(f or 0) >= self._min
 
@@ -936,12 +946,9 @@ class message_id(Filter):
         self._mid = msg_id
         super().__init__(fn=self._chk, _name=f"message_id({msg_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         mid = getattr(e, "id", None) or getattr(e, "msg_id", None)
-        try:
-            return int(mid) == int(self._mid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(mid, self._mid)
 
 
 
@@ -1001,7 +1008,7 @@ class cb_data(Filter):
         self._d = data
         super().__init__(fn=self._chk, _name=f"cb_data({data!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         return getattr(e, "data", None) == self._d
 
 
@@ -1010,7 +1017,7 @@ class cb_startswith(Filter):
         self._p = prefix
         super().__init__(fn=self._chk, _name=f"cb_startswith({prefix!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
         return d.startswith(self._p)
 
@@ -1020,7 +1027,7 @@ class cb_endswith(Filter):
         self._s = suffix
         super().__init__(fn=self._chk, _name=f"cb_endswith({suffix!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
         return d.endswith(self._s)
 
@@ -1030,7 +1037,7 @@ class cb_contains(Filter):
         self._s = substring
         super().__init__(fn=self._chk, _name=f"cb_contains({substring!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
         return self._s in d
 
@@ -1040,7 +1047,7 @@ class cb_regex(Filter):
         self._rx = _re.compile(pattern, flags)
         super().__init__(fn=self._chk, _name=f"cb_regex({pattern!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
         m = self._rx.search(d)
         if m:
@@ -1057,7 +1064,7 @@ class cb_payload(Filter):
         self._p = prefix + sep
         super().__init__(fn=self._chk, _name=f"cb_payload({prefix!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
         if d.startswith(self._p):
             try:
@@ -1074,7 +1081,7 @@ class cb_json(Filter):
         self._val = value
         super().__init__(fn=self._chk, _name=f"cb_json({key!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
         try:
             obj = _json.loads(d)
@@ -1101,7 +1108,7 @@ class cb_kvp(Filter):
         self._ps = pair_sep
         super().__init__(fn=self._chk, _name=f"cb_kvp({key!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
         for pair in d.split(self._ps):
             if self._sep in pair:
@@ -1120,12 +1127,9 @@ class cb_from(Filter):
         self._uid = user_id
         super().__init__(fn=self._chk, _name=f"cb_from({user_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
-        try:
-            return int(fid) == int(self._uid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(fid, self._uid)
 
 
 class cb_chat(Filter):
@@ -1133,12 +1137,9 @@ class cb_chat(Filter):
         self._cid = chat_id
         super().__init__(fn=self._chk, _name=f"cb_chat({chat_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
-        try:
-            return int(cid) == int(self._cid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(cid, self._cid)
 
 
 class cb_msg(Filter):
@@ -1146,12 +1147,9 @@ class cb_msg(Filter):
         self._mid = msg_id
         super().__init__(fn=self._chk, _name=f"cb_msg({msg_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         mid = getattr(e, "msg_id", None)
-        try:
-            return int(mid) == int(self._mid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(mid, self._mid)
 
 
 cb_game = Filter(lambda e: bool(_rget(e, "game_short_name")), _name="cb_game")
@@ -1169,7 +1167,7 @@ class poll_question(Filter):
         self._q = question
         super().__init__(fn=self._chk, _name=f"poll_question({question!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         return (getattr(e, "question", None) or "") == self._q
 
 
@@ -1178,7 +1176,7 @@ class poll_contains(Filter):
         self._t = text.lower()
         super().__init__(fn=self._chk, _name=f"poll_contains({text!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         q = (getattr(e, "question", None) or "").lower()
         return self._t in q
 
@@ -1188,7 +1186,7 @@ class poll_regex(Filter):
         self._rx = _re.compile(pattern, flags)
         super().__init__(fn=self._chk, _name=f"poll_regex({pattern!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         q = getattr(e, "question", None) or ""
         return bool(self._rx.search(q))
 
@@ -1198,7 +1196,7 @@ class poll_type(Filter):
         self._pt = pt
         super().__init__(fn=self._chk, _name=f"poll_type({pt})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         return getattr(e, "kind", None) == self._pt
 
 
@@ -1207,12 +1205,9 @@ class poll_chat(Filter):
         self._cid = chat_id
         super().__init__(fn=self._chk, _name=f"poll_chat({chat_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
-        try:
-            return int(cid) == int(self._cid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(cid, self._cid)
 
 
 class poll_option(Filter):
@@ -1220,7 +1215,7 @@ class poll_option(Filter):
         self._idx = idx
         super().__init__(fn=self._chk, _name=f"poll_option({idx})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         raw = getattr(e, "raw", None)
         if not isinstance(raw, dict):
             return False
@@ -1229,11 +1224,8 @@ class poll_option(Filter):
             if isinstance(opts, list):
                 for o in opts:
                     v = o if not isinstance(o, dict) else (o.get("option_id") or o.get("option") or o.get("id"))
-                    try:
-                        if int(v) == self._idx:
-                            return True
-                    except (TypeError, ValueError):
-                        pass
+                    if _same_int(v, self._idx):
+                        return True
         return False
 
 
@@ -1242,7 +1234,7 @@ poll_answer = Filter(lambda e: getattr(e, "kind", None) == "poll_answer", _name=
 
 
 
-def _mtrans(e: object, old_s: str | None, new_s: str | None) -> bool:
+def _mtrans(e: Obj, old_s: str | None, new_s: str | None) -> bool:
     old_ok = old_s is None or getattr(e, "old", None) == old_s
     new_ok = new_s is None or getattr(e, "new", None) == new_s
     return old_ok and new_ok
@@ -1269,7 +1261,7 @@ class member_status(Filter):
         self._st = status
         super().__init__(fn=self._chk, _name=f"member_status({status})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         return getattr(e, "new", None) == self._st
 
 
@@ -1278,12 +1270,9 @@ class member_chat(Filter):
         self._cid = chat_id
         super().__init__(fn=self._chk, _name=f"member_chat({chat_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
-        try:
-            return int(cid) == int(self._cid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(cid, self._cid)
 
 
 class member_user(Filter):
@@ -1291,12 +1280,9 @@ class member_user(Filter):
         self._uid = user_id
         super().__init__(fn=self._chk, _name=f"member_user({user_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         uid = getattr(e, "user_id", None)
-        try:
-            return int(uid) == int(self._uid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(uid, self._uid)
 
 
 class member_by(Filter):
@@ -1304,12 +1290,9 @@ class member_by(Filter):
         self._aid = admin_id
         super().__init__(fn=self._chk, _name=f"member_by({admin_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
-        try:
-            return int(fid) == int(self._aid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(fid, self._aid)
 
 
 member_self = Filter(
@@ -1327,7 +1310,7 @@ class update_type(Filter):
         self._ts = {self._MAP.get(t, t) for t in types}
         super().__init__(fn=self._chk, _name=f"update_type({types})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         return getattr(e, "kind", None) in self._ts or getattr(e, "update_type", None) in self._ts
 
 
@@ -1336,7 +1319,7 @@ class network(Filter):
         self._net = net
         super().__init__(fn=self._chk, _name=f"network({net})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         return getattr(e, "src", None) == self._net
 
 
@@ -1345,12 +1328,9 @@ class user(Filter):
         self._uid = user_id
         super().__init__(fn=self._chk, _name=f"user({user_id})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None) or getattr(e, "user_id", None)
-        try:
-            return int(fid) == int(self._uid)
-        except (TypeError, ValueError):
-            return False
+        return _same_int(fid, self._uid)
 
 
 class state(Filter):
@@ -1358,7 +1338,7 @@ class state(Filter):
         self._name_val = name
         super().__init__(fn=self._chk, _name=f"state({name!r})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         chat_id = getattr(e, 'chat_id', None)
         from_id = getattr(e, 'from_id', None)
         if chat_id is None or from_id is None:
@@ -1379,7 +1359,7 @@ class state_any(Filter):
         self._names = set(names)
         super().__init__(fn=self._chk, _name=f"state_any({names})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         chat_id = getattr(e, 'chat_id', None)
         from_id = getattr(e, 'from_id', None)
         if chat_id is None or from_id is None:
@@ -1402,7 +1382,7 @@ none_filter = Filter(lambda e: False, _name="none")
 
 
 class func(Filter):
-    def __init__(self, fn: Callable[[object], bool], name: str | None = None):
+    def __init__(self, fn: Callable[[Obj], bool], name: str | None = None):
         super().__init__(fn=fn, _name=name or f"func({getattr(fn, '__name__', 'λ')})")
 
 
@@ -1462,7 +1442,7 @@ class once(Filter):
         self._inner = inner
         super().__init__(fn=self._chk, _name="once")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         if self._ok:
             return False
         ok = self._inner(e) if self._inner else True
@@ -1478,7 +1458,7 @@ class limit(Filter):
         self._inner = inner
         super().__init__(fn=self._chk, _name=f"limit({n})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         if self._cnt >= self._max:
             return False
         ok = self._inner(e) if self._inner else True
@@ -1494,7 +1474,7 @@ class every_n(Filter):
         self._inner = inner
         super().__init__(fn=self._chk, _name=f"every_n({n})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         ok = self._inner(e) if self._inner else True
         if not ok:
             return False
@@ -1510,7 +1490,7 @@ class cooldown(Filter):
         self._key = key
         super().__init__(fn=self._chk, _name=f"cooldown({seconds}s)")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         k = str(getattr(e, self._key, "__g__"))
         now = _time.monotonic()
         if now - self._last.get(k, 0) < self._secs:
@@ -1530,7 +1510,7 @@ class throttled(Filter):
         self._key = key
         super().__init__(fn=self._chk, _name=f"throttled({rate}/{per}s)")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         k = str(getattr(e, self._key, "__g__"))
         now = _time.monotonic()
         ts = self._win.setdefault(k, [])
@@ -1544,11 +1524,6 @@ class throttled(Filter):
             ts.append(now)
         return ok
 
-
-
-class _AnyData(Filter):
-    def __init__(self):
-        super().__init__(fn=lambda e: True, _name="*")
 
 
 def _safe_cmp(a: Any, b: Any, op: str) -> bool:
@@ -1567,7 +1542,7 @@ def _safe_cmp(a: Any, b: Any, op: str) -> bool:
 class _MagicAttr:
     __slots__ = ("_path",)
 
-    def __init__(self, path: tuple = ()) -> None:
+    def __init__(self, path: tuple[str | tuple[object], ...] = ()) -> None:
         self._path = path
 
     def __getattr__(self, name: str) -> "_MagicAttr":
@@ -1578,7 +1553,7 @@ class _MagicAttr:
     def __getitem__(self, key: Any) -> "_MagicAttr":
         return _MagicAttr(self._path + ((key,),))
 
-    def _resolve(self, e: object) -> Any:
+    def _resolve(self, e: Obj) -> Any:
         cur: Any = e
         for step in self._path:
             if isinstance(step, tuple):
@@ -1589,12 +1564,14 @@ class _MagicAttr:
                     return None
         return cur
 
-    def _wrap(self, fn: Callable[[object], bool], name: str) -> Filter:
+    def _wrap(self, fn: Callable[[Obj], bool], name: str) -> Filter:
         return Filter(fn=fn, _name=name)
 
+    @no_type_check
     def __eq__(self, other: Any) -> Filter:
         return self._wrap(lambda e: self._resolve(e) == other, f"F{'.'.join(str(s) for s in self._path)} == {other!r}")
 
+    @no_type_check
     def __ne__(self, other: Any) -> Filter:
         return self._wrap(lambda e: self._resolve(e) != other, f"F{'.'.join(str(s) for s in self._path)} != {other!r}")
 
@@ -1639,7 +1616,7 @@ class filter_data(Filter):
         self._spec = kwargs
         super().__init__(fn=self._chk, _name=f"filter_data({kwargs})")
 
-    def _chk(self, e: object) -> bool:
+    def _chk(self, e: Obj) -> bool:
         for k, v in self._spec.items():
             ev = getattr(e, k, None)
             if isinstance(v, Filter):
@@ -1733,7 +1710,7 @@ class args_n(Filter):
 
 class arg_is(Filter):
     def __init__(self, idx: int, value: str, ignore_case: bool = False):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             args = [a for a in str(getattr(e, "args", "") or "").split() if a]
             if idx >= len(args):
                 return False
@@ -1744,7 +1721,7 @@ class arg_is(Filter):
 
 class arg_int(Filter):
     def __init__(self, idx: int = 0):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             args = [a for a in str(getattr(e, "args", "") or "").split() if a]
             if idx >= len(args):
                 return False
@@ -1758,7 +1735,7 @@ class arg_int(Filter):
 
 class arg_float(Filter):
     def __init__(self, idx: int = 0):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             args = [a for a in str(getattr(e, "args", "") or "").split() if a]
             if idx >= len(args):
                 return False
@@ -1775,7 +1752,7 @@ class in_chat(Filter):
         ids = set()
         for c in chats:
             ids.add(int(c) if isinstance(c, int) or (isinstance(c, str) and c.lstrip("-").isdigit()) else c)
-        def chk(e):
+        def chk(e: Obj) -> bool:
             cid = getattr(e, "chat_id", None)
             return cid in ids
         super().__init__(fn=chk, _name=f"in_chat({chats})")
@@ -1783,8 +1760,10 @@ class in_chat(Filter):
 
 class chat_id_range(Filter):
     def __init__(self, lo: int, hi: int):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             cid = getattr(e, "chat_id", None)
+            if cid is None:
+                return False
             try:
                 return lo <= int(cid) <= hi
             except (TypeError, ValueError):
@@ -1794,7 +1773,7 @@ class chat_id_range(Filter):
 
 class reply_to_me(Filter):
     def __init__(self):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             raw = getattr(e, "raw", {})
             r = raw.get("reply_to_message") if isinstance(raw, dict) else None
             if not isinstance(r, dict):
@@ -1810,7 +1789,7 @@ class reply_to_me(Filter):
 
 class forwarded_from(Filter):
     def __init__(self, uid: int):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             raw = getattr(e, "raw", {})
             fwd = raw.get("forward_from") or raw.get("forward_from_id") if isinstance(raw, dict) else None
             u = fwd.get("id") if isinstance(fwd, dict) else fwd
@@ -1823,7 +1802,7 @@ class forwarded_from(Filter):
 
 class edited_recently(Filter):
     def __init__(self, within: float = 300.0):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             raw = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
@@ -1837,7 +1816,7 @@ class edited_recently(Filter):
 
 class time_window(Filter):
     def __init__(self, start_hour: int, end_hour: int, tz: int = 0):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             import time as _t
             h = (_t.gmtime().tm_hour + tz) % 24
             if start_hour <= end_hour:
@@ -1849,7 +1828,7 @@ class time_window(Filter):
 class weekday(Filter):
     def __init__(self, *days: int):
         ds = set(days)
-        def chk(e):
+        def chk(e: Obj) -> bool:
             import time as _t
             return _t.gmtime().tm_wday in ds
         super().__init__(fn=chk, _name=f"weekday({days})")
@@ -1857,7 +1836,7 @@ class weekday(Filter):
 
 class random_chance(Filter):
     def __init__(self, p: float):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             import random as _r
             return _r.random() < p
         super().__init__(fn=chk, _name=f"random_chance({p})")
@@ -1870,7 +1849,7 @@ class silent_msg(Filter):
 
 class outgoing(Filter):
     def __init__(self):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             raw = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
@@ -1885,7 +1864,7 @@ class outgoing(Filter):
 
 class incoming(Filter):
     def __init__(self):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             raw = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
@@ -1926,7 +1905,7 @@ class mime_prefix(Filter):
 class file_ext(Filter):
     def __init__(self, *exts: str):
         es = {e.lower() if e.startswith(".") else "." + e.lower() for e in exts}
-        def chk(e):
+        def chk(e: Obj) -> bool:
             raw = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
@@ -1943,16 +1922,15 @@ class file_ext(Filter):
 
 class poll_answered_by(Filter):
     def __init__(self, uid: int):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             raw = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
-            d = raw.get("data") if isinstance(raw.get("data"), dict) else {}
-            u = (raw.get("user") or {}).get("id") or d.get("user_id")
-            try:
-                return u is not None and int(u) == int(uid)
-            except (TypeError, ValueError):
-                return False
+            data = raw.get("data")
+            d = data if isinstance(data, dict) else {}
+            user = raw.get("user")
+            u = user.get("id") if isinstance(user, dict) else None
+            return _same_int(u or d.get("user_id"), uid)
         super().__init__(fn=chk, _name=f"poll_answered_by({uid})")
 
 
@@ -1968,7 +1946,7 @@ class has_digits(Filter):
 
 class only_digits(Filter):
     def __init__(self):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             t = str(getattr(e, "text", "") or "").strip()
             return bool(t) and t.isdigit()
         super().__init__(fn=chk, _name="only_digits")
@@ -1976,7 +1954,7 @@ class only_digits(Filter):
 
 class is_command(Filter):
     def __init__(self):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             t = str(getattr(e, "text", "") or "").strip()
             return bool(t) and t[0] in "/!.#$+"
         super().__init__(fn=chk, _name="is_command")
@@ -1984,7 +1962,7 @@ class is_command(Filter):
 
 class url_contains(Filter):
     def __init__(self, s: str):
-        def chk(e):
+        def chk(e: Obj) -> bool:
             urls = getattr(e, "urls", None)
             if urls:
                 return any(s in u for u in urls)
@@ -2003,7 +1981,7 @@ class url_contains(Filter):
 class hashtag(Filter):
     def __init__(self, *tags: str):
         ts = {t.lstrip("#").lower() for t in tags}
-        def chk(e):
+        def chk(e: Obj) -> bool:
             raw = getattr(e, "raw", {})
             ents = raw.get("entities") if isinstance(raw, dict) else None
             txt = str(getattr(e, "text", "") or "")
@@ -2022,7 +2000,7 @@ class hashtag(Filter):
 class cmd_group(Filter):
     def __init__(self, *names: str):
         ns = {n.lower() for n in names}
-        def chk(e):
+        def chk(e: Obj) -> bool:
             c = getattr(e, "cmd", None)
             return c is not None and c.lower() in ns
         super().__init__(fn=chk, _name=f"cmd_group({names})")

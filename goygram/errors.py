@@ -1,4 +1,5 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
+from __future__ import annotations
 
 import re
 
@@ -423,6 +424,6 @@ _CODE_FALLBACK: dict[int, type[RPCError]] = {
 
 
 def rpc_error_from_dict(err: dict[str, object]) -> RPCError:
-    code = int(err.get("error_code", 500))
+    code = int(str(err.get("error_code", 500)))
     msg = str(err.get("error_message", f"RPC code {code}"))
     return rpc_error(code, msg)

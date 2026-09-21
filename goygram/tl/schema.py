@@ -138,24 +138,12 @@ class InvokeWithLayer(TlObj):
         raw += enc_val('bytes', self.query)
         return raw
 
-class Ping(TlObj):
-    __slots__ = ('ping_id')
-    cid = 0x7abe77ec
-    res = 'Pong'
-    def __init__(self, ping_id: Any) -> None:
-        self.ping_id = ping_id
-    def to_bytes(self) -> bytes:
-        raw = struct.pack("<I", self.cid)
-        raw += enc_val('long', self.ping_id)
-        return raw
-
 REG = {
     0x05162463: ResPQ,
     0x83c95aec: PQInnerData,
     0x7abe77ec: Ping,
     0x62d6b459: MsgsAck,
     0xda9b0d0d: InvokeWithLayer,
-    0x7abe77ec: Ping,
 }
 
 __all__ = ['InvokeWithLayer', 'MsgsAck', 'PQInnerData', 'Ping', 'REG', 'ResPQ', 'TlObj', 'enc_val']

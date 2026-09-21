@@ -10,8 +10,9 @@ import re
 import sys
 import time
 import sqlite3
+from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping, Protocol, TypeVar, cast
 
 import hashlib
 import secrets as _secrets
@@ -20,14 +21,34 @@ from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
 from goygram.errors import GoyGramError
 from goygram.logging import get_logger
 
+class _Extension(Protocol):
+    def aes_gcm_encrypt(self, key: bytes, nonce: bytes, plaintext: bytes, aad: bytes) -> bytes: ...
+    def aes_gcm_decrypt(self, key: bytes, nonce: bytes, ciphertext: bytes, aad: bytes) -> bytes: ...
+    def serialize_constructor(self, name: str, args: Mapping[str, Any]) -> bytes: ...
+
+
 try:
-    from goygram import ext as _rx
+    from goygram import ext as _native_extension
 except Exception:
-    _rx = None
+    _rx: _Extension | None = None
+else:
+    _rx = cast(_Extension, _native_extension)
 
 log = get_logger("goygram.security")
 
 VAULT_MAGIC = b"GGV2"
+T = TypeVar("T")
+
+
+async def _to_thread(function: Callable[..., T], *args: Any) -> T:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, partial(function, *args))
+
+
+def _extension() -> _Extension:
+    if _rx is None:
+        raise RuntimeError("goygram Rust extension is unavailable")
+    return _rx
 
 
 def _session_auth_error(exc: BaseException) -> bool:
@@ -83,7 +104,7 @@ def _derive_vault_key_v2(salt: bytes | None = None) -> tuple[bytes, bytes]:
 def _encrypt_vault_data(data: bytes, session_name: str) -> bytes:
     key, salt = _derive_vault_key_v2()
     nonce = _secrets.token_bytes(12)
-    ciphertext = _rx.aes_gcm_encrypt(key, nonce, data, b"")
+    ciphertext = _extension().aes_gcm_encrypt(key, nonce, data, b"")
     return VAULT_MAGIC + salt + nonce + ciphertext
 
 
@@ -94,12 +115,12 @@ def _decrypt_vault_data(raw: bytes, session_name: str) -> bytes:
         nonce = body[16:28]
         ciphertext = body[28:]
         key, _ = _derive_vault_key_v2(salt)
-        return _rx.aes_gcm_decrypt(key, nonce, ciphertext, b"")
+        return _extension().aes_gcm_decrypt(key, nonce, ciphertext, b"")
     salt = raw[:16]
     nonce = raw[16:28]
     ciphertext = raw[28:]
     key, _ = _derive_vault_key(session_name, salt)
-    return _rx.aes_gcm_decrypt(key, nonce, ciphertext, b"")
+    return _extension().aes_gcm_decrypt(key, nonce, ciphertext, b"")
 
 
 def _write_vault(path: Path, payload: dict[str, Any], session_name: str) -> None:
@@ -227,15 +248,15 @@ async def _ask_non_empty(prompt: str, is_password: bool = False) -> str:
         try:
             if _is_interactive():
                 if is_password:
-                    val = await asyncio.to_thread(_rich_password_input_sync, prompt)
+                    val = await _to_thread(_rich_password_input_sync, prompt)
                 else:
                     from rich.console import Console
-                    val = await asyncio.to_thread(Console().input, f"[bold cyan]? [/bold cyan]{prompt}")
+                    val = await _to_thread(Console().input, f"[bold cyan]? [/bold cyan]{prompt}")
             else:
                 if is_password:
-                    val = await asyncio.to_thread(getpass.getpass, prompt)
+                    val = await _to_thread(getpass.getpass, prompt)
                 else:
-                    val = await asyncio.to_thread(input, prompt)
+                    val = await _to_thread(input, prompt)
         except EOFError:
             raise RuntimeError("Interactive input is not available (stdin closed/EOF). Cannot proceed with login.")
         val = val.strip()
@@ -576,6 +597,7 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                     await app.mt.boot()
                     await app.mt.ensure_auth_key()
                     
+                    mig_res: dict[str, Any] = {}
                     try:
                         mig_res = await _mt_req_with_migrate(app, "auth_import_login_token", token=token_m, api_id=api_id)
                     except GoyGramError as e:
@@ -617,6 +639,8 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
 
                     final = mig_res
                     user = _extract_user(final)
+                    if user is None:
+                        continue
                     auth_blob = _extract_auth_blob(final)
                     if auth_blob is None and getattr(app, "mt", None) is not None:
                         auth_blob = getattr(app.mt, "auth_key", None)
@@ -673,10 +697,10 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
     
     use_qr = False
     if _is_interactive():
-        selected = await asyncio.to_thread(_rich_menu_sync, "Choose login method:", ["QR Code Login", "Phone Number Login"])
+        selected = await _to_thread(_rich_menu_sync, "Choose login method:", ["QR Code Login", "Phone Number Login"])
         use_qr = (selected == 0)
     else:
-        ans = (await asyncio.to_thread(input, "Use QR code login? [Y/n]: ")).strip().lower()
+        ans = (await _to_thread(input, "Use QR code login? [Y/n]: ")).strip().lower()
         use_qr = ans in ("", "y", "yes")
 
     if use_qr:
@@ -704,7 +728,7 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
             print(f"Requesting Telegram code for {phone}...")
             
         try:
-            settings = _rx.serialize_constructor("codeSettings", {"flags": 0})
+            settings = _extension().serialize_constructor("codeSettings", {"flags": 0})
             sent = await _mt_req_with_migrate(app, "auth_send_code", phone_number=phone, api_id=api_id, api_hash=api_hash, settings=settings)
         except Exception as e:
             if _is_interactive():
@@ -749,6 +773,7 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
 
         while True:
             code = await _ask_non_empty("Code: ")
+            final: dict[str, Any] = {}
             try:
                 sign = await _mt_req_with_migrate(
                     app,
@@ -1009,8 +1034,11 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                 if user is not None:
                     data["user"] = user
                     data["self_id"] = user.get("id", 0)
+                auth_key = app.mt.auth_key
+                if auth_key is None:
+                    raise RuntimeError("bot authorization has no auth key")
                 data.update({
-                    "auth_key": app.mt.auth_key.hex(),
+                    "auth_key": auth_key.hex(),
                     "server_salt": app.mt.server_salt.hex(),
                     "dc": _current_dc_id(app),
                     "api_id": int(str(bot_api_id).strip()),

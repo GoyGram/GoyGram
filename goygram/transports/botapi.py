@@ -167,10 +167,12 @@ class BotNet:
         await self.boot()
         app = web_mod.Application(client_max_size=self.webhook_max_body)
         app.router.add_post(self.webhook_path, self._webhook_request)
-        self.web_runner = web_mod.AppRunner(app, access_log=None)
-        await self.web_runner.setup()
-        self.web_site = web_mod.TCPSite(self.web_runner, self.webhook_host, self.webhook_port)
-        await self.web_site.start()
+        runner = web_mod.AppRunner(app, access_log=None)
+        self.web_runner = runner
+        await runner.setup()
+        site = web_mod.TCPSite(runner, self.webhook_host, self.webhook_port)
+        self.web_site = site
+        await site.start()
         try:
             await self.set_webhook()
         except Exception:
@@ -211,11 +213,13 @@ class BotNet:
                 self.log.error("Webhook conflict detected. Webhook deleted and polling will retry.")
                 return []
             if r.status == 429 and _attempt < 5:
-                retry_after = raw.get("parameters", {}).get("retry_after", 1) if isinstance(raw, dict) else 1
+                parameters = raw.get("parameters") if isinstance(raw, dict) else None
+                retry_after = parameters.get("retry_after", 1) if isinstance(parameters, dict) else 1
                 await asyncio.sleep(max(1, min(int(retry_after), 300)))
                 return await self.req(m, data, _attempt + 1)
             if r.status == 429:
-                retry_after = raw.get("parameters", {}).get("retry_after", 1) if isinstance(raw, dict) else 1
+                parameters = raw.get("parameters") if isinstance(raw, dict) else None
+                retry_after = parameters.get("retry_after", 1) if isinstance(parameters, dict) else 1
                 raise FloodWaitError(429, "BOT_API_RATE_LIMIT", max(1, int(retry_after)))
             raise RuntimeError(f"botapi {m} http {r.status}: {raw}")
         if not raw.get("ok"):

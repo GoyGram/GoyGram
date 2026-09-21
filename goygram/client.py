@@ -5,11 +5,10 @@ import asyncio
 import hashlib
 import secrets
 import signal
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-from typing import Any, Literal, TYPE_CHECKING
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal, overload, cast, TYPE_CHECKING
 
 from goygram.api.methods import BotAPI
 from goygram.api.types import dump, camel, mtname
@@ -209,7 +208,10 @@ class _HistoryIter:
         tr = app.via(self.chat_id, self.via)
         if tr != "mt":
             raise RuntimeError("iter_history requires the mtproto transport")
-        peer = await app.mt.resolve_peer(app.raw_chat(self.chat_id))
+        mt = app.mt
+        if mt is None:
+            raise RuntimeError("iter_history requires the mtproto transport")
+        peer = await mt.resolve_peer(app.raw_chat(self.chat_id))
         raw = await app.mt_req(
             "messages.getHistory",
             peer=peer,
@@ -267,10 +269,13 @@ class _SearchIter:
 
     async def _fetch(self) -> list[Any]:
         app = self.app
-        peer = await app.mt.resolve_peer(app.raw_chat(self.chat_id))
+        mt = app.mt
+        if mt is None:
+            raise RuntimeError("iter_search requires the mtproto transport")
+        peer = await mt.resolve_peer(app.raw_chat(self.chat_id))
         data: dict[str, Any] = {"q": self.query}
         if self.from_user is not None:
-            data["from_id"] = await app.mt.resolve_peer(app.raw_chat(self.from_user))
+            data["from_id"] = await mt.resolve_peer(app.raw_chat(self.from_user))
         raw = await app.mt_req(
             "messages.search",
             peer=peer,
@@ -370,7 +375,7 @@ class _DialogIter:
         return item
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class BotCfg:
     token: str
     timeout: int = 25
@@ -385,7 +390,7 @@ class BotCfg:
     offset_path: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class MtCfg:
     host: str
     port: int
@@ -393,7 +398,7 @@ class MtCfg:
     iv: bytes | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class AppCfg:
     bot: BotCfg | None = None
     mt: MtCfg | None = None
@@ -478,7 +483,7 @@ class AppCore:
             self.mt._entity_flush_hook = self._entity_cache_schedule
         self.fsm = FSMEngine(backend=fsm_backend, on_change=fsm_on_change)
         self.disp = Disp(self, self.bus)
-        self._conv: dict[tuple, asyncio.Future] = {}
+        self._conv: dict[tuple[int | str, int | str | None], asyncio.Future[Obj]] = {}
         self.hook: list[Fn] = []
         self.edit_hook: list[Fn] = []
         self.update_hook: list[Fn] = []
@@ -509,12 +514,13 @@ class AppCore:
     def _init_tl_schema(self) -> None:
         from goygram.schema_manager import init_schema, CURRENT_LAYER_FLOOR
         from goygram import ext as _ext
-        if _ext is None:
+        mt = self.mt
+        if _ext is None or mt is None:
             return
-        self.mt.layer = init_schema(
+        mt.layer = init_schema(
             _ext,
             None,
-            lambda layer: self.mt.update_layer(layer),
+            lambda layer: mt.update_layer(layer),
             self._can_reload_schema,
         ) or CURRENT_LAYER_FLOOR
 
@@ -557,7 +563,7 @@ class AppCore:
             uid = user_data.get("id", 0) if isinstance(user_data, dict) else 0
             if uid and uid != 0 and self.mt is not None:
                 self.self_id = uid
-                self.mt.self_id = uid
+                setattr(self.mt, "self_id", uid)
             if self.mt is not None:
                 self.mt._entity_cache_restore(data.get("entities") or {})
                 dc_keys = data.get("dc_auth_keys")
@@ -614,16 +620,23 @@ class AppCore:
         self._entity_cache_flushing_soon = False
         self._entity_cache_flush(final=False)
 
-    def _reg(self, host: list[Fn], fn: Fn | None, filt: Filter | None, once: bool = False):
+    @overload
+    def _reg(self, host: list[Fn], fn: None, filt: Filter | None, once: bool = False) -> Callable[[Fn], Fn]: ...
+
+    @overload
+    def _reg(self, host: list[Fn], fn: Fn, filt: Filter | None, once: bool = False) -> Fn: ...
+
+    def _reg(self, host: list[Fn], fn: Fn | None, filt: Filter | None, once: bool = False) -> Fn | Callable[[Fn], Fn]:
         if _is_filter(fn):
-            filt = fn
+            filt = cast("Filter", fn)
             fn = None
+        active_filter = filt
         if once:
             host_ref = host
             def wrap(inner: Fn) -> Fn:
                 async def guarded(msg: "Obj") -> Any:
                     try:
-                        if filt is None or filt(msg):
+                        if active_filter is None or active_filter(msg):
                             return await inner(msg)
                         return None
                     finally:
@@ -637,11 +650,12 @@ class AppCore:
                 return wrap(fn)
             return wrap
         def wrap(inner: Fn) -> Fn:
-            if filt is None:
+            if active_filter is None:
                 host.append(inner)
                 return inner
+            filter_fn = active_filter
             async def guarded(msg: "Obj") -> Any:
-                if filt(msg):
+                if filter_fn(msg):
                     return await inner(msg)
                 return None
             host.append(guarded)
@@ -673,7 +687,7 @@ class AppCore:
 
     def on_cmd(self, *name: str) -> Callable[[Fn], Fn]:
         from goygram.filters import command as _cmd_filt
-        return self.on_msg(filt=_cmd_filt(*name))
+        return self._reg(self.hook, None, _cmd_filt(*name))
 
     @property
     def transport(self) -> str:
@@ -725,7 +739,7 @@ class AppCore:
                     if info.get("id") is not None and self.self_id is None:
                         self.self_id = int(info["id"])
                         if self.mt is not None:
-                            self.mt.self_id = self.self_id
+                            setattr(self.mt, "self_id", self.self_id)
                     return info
             except Exception as e:
                 self.log.debug("getMe self-resolve failed: %r", e)
@@ -736,7 +750,7 @@ class AppCore:
                 if isinstance(user, dict) and user.get("id") is not None:
                     self._me_cache = user
                     self.self_id = int(user["id"])
-                    self.mt.self_id = self.self_id
+                    setattr(self.mt, "self_id", self.self_id)
                     return user
             except Exception as e:
                 self.log.debug("users.getUsers self-resolve failed: %r", e)
@@ -767,7 +781,10 @@ class AppCore:
         tr = self.via(chat_id, via)
         if tr != "mt":
             return None
-        peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
+        mt = self.mt
+        if mt is None:
+            return None
+        peer = await mt.resolve_peer(self.raw_chat(chat_id))
         raw = await self.mt_req("messages.getHistory", peer=peer, offset_id=0, offset_date=0, add_offset=0, limit=1, max_id=0, min_id=0, hash=0)
         res = raw.get("result", raw) if isinstance(raw, dict) else {}
         return res.get("count") if isinstance(res, dict) else None
@@ -779,7 +796,7 @@ class AppCore:
     def group(self, name: str) -> "_HandlerGroup":
         return _HandlerGroup(self, name)
 
-    def every(self, seconds: float, fn: Callable[..., Any], *args: Any, **kw: Any) -> "asyncio.Task":
+    def every(self, seconds: float, fn: Callable[..., Any], *args: Any, **kw: Any) -> "asyncio.Task[None]":
         async def _loop() -> None:
             try:
                 while not self.stop_ev.is_set():
@@ -796,7 +813,7 @@ class AppCore:
                 pass
         return asyncio.create_task(_loop(), name=f"goygram-every-{seconds}")
 
-    def later(self, seconds: float, fn: Callable[..., Any], *args: Any, **kw: Any) -> "asyncio.Task":
+    def later(self, seconds: float, fn: Callable[..., Any], *args: Any, **kw: Any) -> "asyncio.Task[None]":
         async def _once() -> None:
             try:
                 await asyncio.sleep(seconds)
@@ -807,7 +824,7 @@ class AppCore:
 
     async def conv_wait(self, chat_id: int | str, user_id: int | str | None = None, filt: Filter | None = None, timeout: float = 60.0) -> "Obj | None":
         key = (chat_id, user_id)
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        fut: asyncio.Future[Obj] = asyncio.get_running_loop().create_future()
         if key in self._conv:
             old = self._conv.pop(key)
             if not old.done():
@@ -827,19 +844,22 @@ class AppCore:
     async def _conv_dispatch(self, msg: "Obj") -> None:
         if not self._conv:
             return
-        key = (msg.chat_id, None)
+        chat_id = msg.chat_id
+        if chat_id is None:
+            return
+        key = (chat_id, None)
         target = self._conv.pop(key, None)
         if target is None and msg.from_id is not None:
-            target = self._conv.pop((msg.chat_id, msg.from_id), None)
+            target = self._conv.pop((chat_id, msg.from_id), None)
         if target is None and msg.from_id is None:
             for k in list(self._conv):
-                if k[0] == msg.chat_id:
+                if k[0] == chat_id:
                     target = self._conv.pop(k)
                     break
         if target is not None and not target.done():
             target.set_result(msg)
             return
-        key2 = (msg.chat_id, msg.from_id)
+        key2 = (chat_id, msg.from_id)
         target = self._conv.pop(key2, None)
         if target is not None and not target.done():
             target.set_result(msg)
@@ -1022,8 +1042,9 @@ class AppCore:
         else:
             src_kind = getattr(source, "src", None)
             media = getattr(source, "media", None)
-            if media is None and isinstance(getattr(source, "raw", None), dict):
-                media = source.raw.get("media")
+            raw = getattr(source, "raw", None)
+            if media is None and isinstance(raw, dict):
+                media = raw.get("media")
         if via is not None:
             src_kind = "bot" if self.via(0, via) == "bot" else "mtproto"
         if src_kind == "bot" and self.bot is not None and isinstance(media, dict):
@@ -1043,13 +1064,15 @@ class AppCore:
                 size = int(doc.get("size") or 0)
             wrap_total = size
 
-            def _prog(done: int, _t: int) -> None:
-                progress(done, wrap_total or done)
-
             if asyncio.iscoroutinefunction(progress):
-                async def _prog(done: int, _t: int) -> Any:
+                async def async_progress_cb(done: int, _t: int) -> Any:
                     return await progress(done, wrap_total or done)
-            return await self.mt.download_file(location, destination, progress=_prog, media_source=media)
+                progress_cb = async_progress_cb
+            else:
+                def sync_progress_cb(done: int, _t: int) -> None:
+                    progress(done, wrap_total or done)
+                progress_cb = sync_progress_cb
+            return await self.mt.download_file(location, destination, progress=progress_cb, media_source=media)
         return await self.mt.download_file(location, destination, media_source=media)
 
     async def upload_file(self, source: Any, **kw: Any) -> Any:
@@ -1073,8 +1096,14 @@ class AppCore:
         transport = self.via(chat_id, via)
         target = self.raw_chat(chat_id)
         if transport == "bot":
-            return await self.bot.send_msg(target, text, reply_to=reply_to, kbd=kbd, **kw)
-        peer = await self.mt.resolve_peer(target)
+            bot = self.bot
+            if bot is None:
+                raise RuntimeError("bot net is not configured")
+            return await bot.send_msg(target, text, reply_to=reply_to, kbd=kbd, **kw)
+        mt = self.mt
+        if mt is None:
+            raise RuntimeError("mt net is not configured")
+        peer = await mt.resolve_peer(target)
         data = dict(kw)
         if reply_to is not None:
             data["reply_to"] = reply_to
@@ -1179,7 +1208,7 @@ class AppCore:
                 if kind in {"audio", "voice"}:
                     from goygram.sugar import media_duration
                     p = source if isinstance(source, (str, Path)) else None
-                    dur = media_duration(p) if p is not None and Path(p).exists() else None
+                    dur = media_duration(str(p)) if p is not None and Path(p).exists() else None
                     if kind == "voice":
                         attrs.append({"_": "documentAttributeAudio", "voice": True, "duration": dur or 0})
                     else:
@@ -1187,7 +1216,7 @@ class AppCore:
                 elif kind == "video":
                     from goygram.sugar import media_duration
                     p = source if isinstance(source, (str, Path)) else None
-                    dur = media_duration(p) if p is not None and Path(p).exists() else None
+                    dur = media_duration(str(p)) if p is not None and Path(p).exists() else None
                     if dur:
                         attrs.append({"_": "documentAttributeVideo", "duration": dur, "w": 0, "h": 0})
                 media = {"_": "inputMediaUploadedDocument", "file": file_obj, "mime_type": _guess_mime(source, kind), "attributes": attrs}
@@ -1337,17 +1366,17 @@ class AppCore:
         transport = self.via(chat_id, via)
         target = self.raw_chat(chat_id)
         if transport == "bot":
-            data: dict[str, Any] = {"chat_id": target}
+            bot_data: dict[str, Any] = {"chat_id": target}
             if max_id is not None:
-                data["message_id"] = max_id
-            return await self.bot_req("readMessage", **data)
+                bot_data["message_id"] = max_id
+            return await self.bot_req("readMessage", **bot_data)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        data: dict[str, Any] = {"peer": peer}
+        mt_data: dict[str, Any] = {"peer": peer}
         if max_id is not None:
-            data["max_id"] = int(max_id)
-        return await self.mt_req("messages.readHistory", **data)
+            mt_data["max_id"] = int(max_id)
+        return await self.mt_req("messages.readHistory", **mt_data)
 
     async def send_reaction(self, chat_id: int | str, msg_id: int, emoji: str = "👍", *, big: bool = False, via: str | None = None) -> Any:
         transport = self.via(chat_id, via)
@@ -1527,7 +1556,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        media = {
+        media: dict[str, Any] = {
             "_": "inputMediaPoll",
             "question": {"_": "textWithEntities", "text": question, "entities": []},
             "answers": [{"_": "pollAnswer", "text": {"_": "textWithEntities", "text": o, "entities": []}, "option": bytes([i])} for i, o in enumerate(options)],
@@ -1621,12 +1650,12 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        action = {"_": "sendMessageTextDraftAction", "can_stop": True, "random_id": int(draft_id or 0)}
+        action: dict[str, Any] = {"_": "sendMessageTextDraftAction", "can_stop": True, "random_id": int(draft_id or 0)}
         if text:
             action["text"] = {"_": "textWithEntities", "text": text, "entities": []}
         return await self.mt_req("messages.setTyping", peer=peer, action=action)
 
-    async def iter_participants(self, chat_id: int | str, *, limit: int = 0, batch: int = 200, search: str = "") -> Any:
+    async def iter_participants(self, chat_id: int | str, *, limit: int = 0, batch: int = 200, search: str = "") -> AsyncIterator[Any]:
         if self.mt is None:
             raise RuntimeError("iter_participants requires the mtproto transport")
         target = self.raw_chat(chat_id)
@@ -1810,7 +1839,7 @@ class AppCore:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
         uper = await self.mt.resolve_peer(self.raw_chat(user_id))
-        admin = {"_": "chatAdminRights"}
+        admin: dict[str, Any] = {"_": "chatAdminRights"}
         for k, v in r.items():
             admin[k] = bool(v)
         data = {"channel": peer, "user_id": uper, "admin_rights": admin}

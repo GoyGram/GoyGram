@@ -1,0 +1,18 @@
+{
+  "include": ["goygram"],
+  "exclude": ["target", "dist"],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.8",
+  "pythonPlatform": "All",
+  "reportUnknownMemberType": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownLambdaType": "none",
+  "reportUnnecessaryIsInstance": "none",
+  "reportUnnecessaryComparison": "none",
+  "reportPrivateUsage": "none",
+  "reportDeprecated": "none",
+  "reportUnusedImport": "none",
+  "reportUnusedVariable": "none",
+  "reportUnusedFunction": "none"
+}
