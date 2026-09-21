@@ -5,11 +5,11 @@ build-backend = "maturin"
 
 [project]
 name = "goygram"
-version = "0.8.4"
+version = "0.8.5"
 description = "Goygram: unified Telegram runtime on Python and Rust"
 readme = "README.md"
 requires-python = ">=3.8"
-dependencies = ["aiohttp>=3.9,<4.0", "rich>=13.0.0", "qrcode>=7.0"]
+dependencies = ["aiohttp>=3.9,<4.0", "rich>=13.0.0", "qrcode>=7.0", "typing_extensions>=4.5"]
 keywords = ["telegram", "mtproto", "bot-api", "asyncio", "rust", "userbot"]
 classifiers = [
     "Programming Language :: Python :: 3",

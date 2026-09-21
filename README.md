@@ -4,7 +4,7 @@
   <img src="https://raw.githubusercontent.com/GoyGram/GoyGram/main/GoyGram.png" alt="GoyGram Logo" width="650">
 </p>
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg?style=for-the-badge&logo=python)](https://www.python.org)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg?style=for-the-badge&logo=python)](https://www.python.org)
 [![Rust Core](https://img.shields.io/badge/Rust_Core-Blazing_Fast-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-red.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
 [![PyPI version](https://img.shields.io/pypi/v/goygram.svg?style=for-the-badge&logo=pypi&color=3775A9)](https://pypi.org/project/goygram/)
@@ -44,24 +44,24 @@ Cold import, memory footprint, and MTProto crypto (AES-256-IGE) measured against
 
 | | goygram | telethon | pyrogram | aiogram | python-telegram-bot |
 |---|---|---|---|---|---|
-| cold import (ms) | **74** | 272 | 436 | 2699 | 141 |
-| RSS delta (MB) | **13** | 48 | 35 | 152 | 19 |
-| AES-256-IGE (MB/s, 64 KiB) | **1094** | 14 | 228 | — | — |
-| loads `message` (ops/s) | **567,799** | — | — | — | — |
-| loads `updateNewMessage` (ops/s) | **235,798** | — | — | — | — |
+| cold import (ms) | **77.2** | 342.0 | 461.5 | 3016.3 | 142.8 |
+| RSS delta (MB) | **10.8** | 48.4 | 35.6 | 152.2 | 18.8 |
+| AES-256-IGE (MB/s, 64 KiB) | **1062.5** | 10.8 | 202.4 | — | — |
+| loads `message` (ops/s) | **577,821** | — | — | — | — |
+| loads `updateNewMessage` (ops/s) | **225,347** | — | — | — | — |
 
-The crypto runs in Rust with AES-NI intrinsics selected at runtime (built in, no separate C extension; tgcrypto 1.2.5 measures 234 MB/s on the same box), GoyGram starts ~36× faster than aiogram, and uses ~12× less memory. Realistic `updateNewMessage` loads latency: p50 3.7 µs, p99 9.1 µs.
+The crypto runs in Rust with AES-NI intrinsics selected at runtime (built in, no separate C extension; tgcrypto 1.2.5 measures 204.3 MB/s on the same box), GoyGram starts ~39× faster than aiogram, and uses ~14× less memory. Realistic `updateNewMessage` loads latency: p50 3.8 µs, p99 8.9 µs.
 
 ## Installation
 ```bash
 pip install goygram
 ```
 
-Requires Python 3.11+. Pre-built wheels ship for Linux, Windows, macOS, and FreeBSD where the corresponding runner build succeeds. Termux is natively validated in a Termux environment; install the Python package from source there because Android/Termux wheels are not interchangeable with manylinux wheels. Rust is not required for the standard Linux, Windows, and macOS wheels. Installs `aiohttp`, `rich`, and `qrcode` as dependencies.
+Requires Python 3.8+. PyPI wheels use `cp38-abi3`, so the same native wheel works on CPython 3.8 and newer. Pre-built wheels ship for Linux, Windows, and macOS. Termux users install from source because Android wheels are not interchangeable with manylinux wheels. Rust is not required when a compatible wheel is available. Installs `aiohttp`, `rich`, `qrcode`, and `typing_extensions` as dependencies.
 
-### FreeBSD and Termux
+### Termux
 
-FreeBSD packages are built by the release workflow inside a FreeBSD 15 VM and attached to the GitHub Release because PyPI rejects FreeBSD's nonstandard wheel platform tag. The Rust core is built in the official `termux/termux-docker` environment and attached as a native validation asset; Termux users should build locally from the source distribution. On a real Termux device, install the Termux toolchain and build from the source distribution:
+Termux users should build locally from the source distribution. On a real Termux device, install the toolchain first:
 
 ```bash
 pkg update
@@ -236,7 +236,13 @@ from goygram.utils import print_methods
 print_methods(app)
 ```
 
-With type hints on key event aliases (`MsgObj`, `CbObj`, `MemberObj`, `PollObj`) and filter primitives, modern IDE autocomplete works much better out of the box.
+For exact IDE autocomplete across the dynamic Bot API and MTProto dispatch surface, generate local stubs after installation:
+
+```bash
+python -m goygram.stubgen
+```
+
+The command writes `client.pyi` and `telegram.py` beside the installed package. Editors then complete every current method alias, show its keyword arguments, type `mt_req()` and `bot_req()` from the method-name literal, and reject unknown keywords. Runtime dispatch remains dynamic; regenerate after Telegram adds methods or after upgrading GoyGram. The generator and generated stubs are verified on Python 3.8.
 
 ## Filters
 `goygram.filters` supports composable boolean operators:

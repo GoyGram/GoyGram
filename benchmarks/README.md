@@ -18,14 +18,14 @@ Not measured: live Telegram, a mock DC, C10K sessions.
 | Component | Version |
 |---|---|
 | Python | 3.11 |
-| goygram | 0.7.89 (Rust core, AES-NI, native PyDict) |
+| goygram | 0.8.4 (Rust core, AES-NI, native PyDict) |
 | telethon | 1.44.0 |
 | pyrogram | 2.0.106 |
 | aiogram | 3.31.0 |
 | python-telegram-bot | 22.8 |
 | tgcrypto | 1.2.5 |
 
-A single VPS (AMD Ryzen 9 5950X, 6 vCPU). Codec and GCM re-run on 0.7.89. IGE/import/RSS are the same box.
+A single VPS (AMD Ryzen 9 5950X, 6 vCPU). Every table below was rerun on 0.8.4; values are medians of repeated runs pinned to one CPU.
 
 ## Results
 
@@ -33,16 +33,16 @@ A single VPS (AMD Ryzen 9 5950X, 6 vCPU). Codec and GCM re-run on 0.7.89. IGE/im
 
 | Library | 256 B | 4 KiB | 64 KiB |
 |---|---|---|---|
-| goygram (Rust, AES-NI, built-in) | 544 | 1001 | 1094 |
-| tgcrypto (C, separate install) | 168 | 224 | 234 |
-| pyrogram | 168 | 223 | 228 |
-| telethon (default) | 12 | 14 | 14 |
+| goygram (Rust, AES-NI, built-in) | 503.7 | 969.3 | 1062.5 |
+| tgcrypto (C, separate install) | 151.3 | 198.6 | 204.3 |
+| pyrogram | 144.9 | 196.2 | 202.4 |
+| telethon (default) | 9.0 | 10.5 | 10.8 |
 
 ![AES-256-IGE throughput](03-aes-ige-throughput.png)
 
 GoyGram dispatches to AES-NI at runtime. tgcrypto 1.2.5 is table-based software AES. Network RTT still dominates a real client.
 
-Per-message latency at 256 B (lower is better): goygram 0.4 µs, tgcrypto 1.3 µs, pyrogram 1.4 µs, telethon 23 µs.
+Per-message latency at 256 B (lower is better): goygram 0.6 µs, tgcrypto 1.6 µs, pyrogram 1.7 µs, telethon 29.4 µs.
 
 ![AES-256-IGE latency](04-aes-ige-latency.png)
 
@@ -50,8 +50,8 @@ Per-message latency at 256 B (lower is better): goygram 0.4 µs, tgcrypto 1.3 µ
 
 | Operation | ops/s |
 |---|---|
-| serialize `messages.sendMessage` | 355,320 |
-| loads `message` | 567,799 |
+| serialize `messages.sendMessage` | 351,270 |
+| loads `message` | 577,821 |
 
 ![TL codec](05-tl-codec.png)
 
@@ -61,12 +61,12 @@ Payload: ~200-char text, `messageFwdHeader`, inline keyboard. Packet 356 B.
 
 | Operation | ops/s |
 |---|---|
-| dumps `updateNewMessage` | 105,803 |
-| loads `updateNewMessage` | 235,798 |
-| echo loads+dumps | 107,615 |
-| AES-256-IGE enc+dec of that packet | 862,432 |
+| dumps `updateNewMessage` | 97,283 |
+| loads `updateNewMessage` | 225,347 |
+| echo loads+dumps | 107,395 |
+| AES-256-IGE enc+dec of that packet | 889,291 |
 
-loads latency (µs): p50 3.7, p95 6.5, p99 9.1, p99.9 26.5.
+loads latency (µs): p50 3.8, p95 6.4, p99 8.9, p99.9 20.7.
 
 ![loads latency](06-loads-latency.png)
 
@@ -74,8 +74,8 @@ loads latency (µs): p50 3.7, p95 6.5, p99 9.1, p99.9 26.5.
 
 | Operation | ops/s |
 |---|---|
-| encrypt | 288,219 |
-| decrypt | 283,700 |
+| encrypt | 293,032 |
+| decrypt | 290,105 |
 
 ![AES-256-GCM vault](07-aes-gcm-vault.png)
 
@@ -83,11 +83,11 @@ loads latency (µs): p50 3.7, p95 6.5, p99 9.1, p99.9 26.5.
 
 | Library | ms |
 |---|---|
-| goygram | 74 |
-| python-telegram-bot | 141 |
-| telethon | 272 |
-| pyrogram | 436 |
-| aiogram | 2699 |
+| goygram | 77.2 |
+| python-telegram-bot | 142.8 |
+| telethon | 342.0 |
+| pyrogram | 461.5 |
+| aiogram | 3016.3 |
 
 ![Cold import](01-cold-import.png)
 
@@ -95,11 +95,11 @@ loads latency (µs): p50 3.7, p95 6.5, p99 9.1, p99.9 26.5.
 
 | Library | MB |
 |---|---|
-| goygram | 13 |
-| python-telegram-bot | 19 |
-| pyrogram | 35 |
-| telethon | 48 |
-| aiogram | 152 |
+| goygram | 10.8 |
+| python-telegram-bot | 18.8 |
+| pyrogram | 35.6 |
+| telethon | 48.4 |
+| aiogram | 152.2 |
 
 ![RSS after import](02-rss-memory.png)
 
@@ -114,8 +114,8 @@ loads latency (µs): p50 3.7, p95 6.5, p99 9.1, p99.9 26.5.
 ## Reproduce
 
 ```bash
-uv venv .bench && source .bench/bin/activate
-uv pip install goygram telethon tgcrypto pyrogram aiogram python-telegram-bot
+python -m venv .bench && source .bench/bin/activate
+python -m pip install goygram telethon tgcrypto pyrogram aiogram python-telegram-bot
 python bench_crypto.py
 python bench_codec.py
 python bench_import.py
