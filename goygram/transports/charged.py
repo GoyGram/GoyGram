@@ -219,7 +219,7 @@ async def charged_download(mtnet: MTNet, location: Any, destination: Any, *, siz
     refreshed = False
     while True:
         try:
-            await mtnet.call("upload.getFile", location=location, offset=0, limit=1024)
+            await mtnet.call("upload.getFile", location=location, offset=0, limit=4096)
             break
         except FileReferenceExpiredError:
             if refreshed or media_source is None:
