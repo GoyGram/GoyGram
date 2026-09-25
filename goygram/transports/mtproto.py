@@ -677,7 +677,7 @@ class MTNet:
                 self.server_salt=_xor(new_nonce[:8],server_nonce[:8])
                 self._init_done=False
                 return
-            retry_id=int.from_bytes(sha1(key).digest()[:8],'little')
+            retry_id=int.from_bytes(sha1(key).digest()[:8],'little',signed=True)
         raise RuntimeError('dh_gen retry limit reached')
 
     def _dispatch_update(self, update: Any) -> None:
