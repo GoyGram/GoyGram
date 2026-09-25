@@ -98,6 +98,51 @@ def _itob(i:int)->bytes:
     return i.to_bytes(256, "big")
 
 
+_DH_G_QUADRATIC: dict[int, tuple[int, tuple[int, ...]]] = {2: (8, (7,)), 3: (3, (2,)), 5: (5, (1, 4)), 6: (24, (19, 23)), 7: (7, (3, 5, 6))}
+_DH_SAFETY_MARGIN = 2 ** (2048 - 64)
+
+
+def _is_prime(n:int, rounds:int=15)->bool:
+    if n < 2: return False
+    for small in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
+        if n % small == 0: return n == small
+    d = n - 1; s = 0
+    while d % 2 == 0: d //= 2; s += 1
+    witnesses = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37]
+    witnesses += [secrets.randbelow(n - 3) + 2 for _ in range(rounds)]
+    for witness in witnesses:
+        x = pow(witness, d, n)
+        if x in (1, n - 1): continue
+        for _ in range(s - 1):
+            x = x * x % n
+            if x == n - 1: break
+        else:
+            return False
+    return True
+
+
+def _check_dh_prime(dh_prime:int)->None:
+    if not 2 ** 2047 < dh_prime < 2 ** 2048: raise RuntimeError('dh_prime is not a 2048-bit number')
+    if not _is_prime(dh_prime): raise RuntimeError('dh_prime is not prime')
+    if not _is_prime((dh_prime - 1) // 2): raise RuntimeError('dh_prime is not a safe prime')
+
+
+def _check_dh_g(dh_prime:int, g:int)->None:
+    if g not in (2, 3, 4, 5, 6, 7): raise RuntimeError(f'dh g out of range: {g}')
+    rule = _DH_G_QUADRATIC.get(g)
+    if rule is not None and dh_prime % rule[0] not in rule[1]: raise RuntimeError(f'dh g={g} is not a quadratic residue mod dh_prime')
+
+
+def _check_dh_g_a(dh_prime:int, g_a:int)->None:
+    if not 1 < g_a < dh_prime - 1: raise RuntimeError('g_a is not within (1, dh_prime - 1)')
+    if not _DH_SAFETY_MARGIN <= g_a <= dh_prime - _DH_SAFETY_MARGIN: raise RuntimeError('g_a is outside the recommended safety range')
+    if pow(g_a, (dh_prime - 1) // 2, dh_prime) not in (1, dh_prime - 1): raise RuntimeError('g_a fails the subgroup check')
+
+
+def _new_nonce_hash(new_nonce:bytes, auth_key:bytes, number:int)->bytes:
+    return sha1(new_nonce + bytes([number]) + sha1(auth_key).digest()[:8]).digest()[4:20]
+
+
 def _xor(a:bytes, b:bytes)->bytes:
     return bytes(i ^ j for i, j in zip(a, b))
 
@@ -588,34 +633,52 @@ class MTNet:
         dh=self._read_unencrypted_body(await self.invoke_unencrypted(dh_req))
         rd=Reader(dh); dcid=rd.u32()
         if dcid!=0xd0e8075c: raise RuntimeError(f'unexpected dh params cid={dcid:x}')
-        _=rd.take(16); _=rd.take(16); encrypted_answer=rd.tl_bytes()
+        rd_nonce=rd.take(16); rd_server_nonce=rd.take(16); encrypted_answer=rd.tl_bytes()
+        if rd_nonce!=nonce or rd_server_nonce!=server_nonce: raise RuntimeError('dh params nonce mismatch')
         tmp_key,tmp_iv=kdf(new_nonce,server_nonce)
         dec=bytes(_require_rx().aes_ige_dec_raw(encrypted_answer,tmp_key,tmp_iv))
         answer=dec[20:]
         ra=Reader(answer); aid=ra.u32()
         log.debug(f'[DH] server_DH_inner_data cid={aid:#010x} (expected 0xb5890dba), dec_first32={dec[:32].hex()}')
         if aid!=0xb5890dba: raise RuntimeError(f'unexpected server_DH_inner_data cid={aid:#010x}')
-        _=ra.take(16); _=ra.take(16); g=ra.i32(); dh_prime=int.from_bytes(ra.tl_bytes(),'big'); g_a=int.from_bytes(ra.tl_bytes(),'big'); _=ra.i32(); _=ra.i32()
-        b=int.from_bytes(secrets.token_bytes(256),'big'); g_b=pow(g,b,dh_prime).to_bytes(256,'big')
-        cli=codec.client_dh_inner(
-            nonce=nonce,
-            server_nonce=server_nonce,
-            retry_id=0,
-            g_b=g_b,
-        )
-        payload=sha1(cli).digest()+cli; payload+=b'\x00'*((16-len(payload)%16)%16)
-        enc2=bytes(_require_rx().aes_ige_enc_raw(payload,tmp_key,tmp_iv))
-        ans_req=codec.set_client_dh_params(
-            nonce=nonce,
-            server_nonce=server_nonce,
-            encrypted_data=enc2,
-        )
-        ans=self._read_unencrypted_body(await self.invoke_unencrypted(ans_req))
-        c=Reader(ans).u32()
-        if c!=0x3bcbf734: raise RuntimeError(f'dh_gen not ok: {c:x}')
-        self.auth_key=pow(g_a,b,dh_prime).to_bytes(256,'big')
-        self.server_salt=bytes(a^b for a,b in zip(new_nonce[:8],server_nonce[:8]))
-        self._init_done=False
+        inner_nonce=ra.take(16); inner_server_nonce=ra.take(16); g=ra.i32(); dh_prime=int.from_bytes(ra.tl_bytes(),'big'); g_a=int.from_bytes(ra.tl_bytes(),'big'); _server_time=ra.i32()
+        if inner_nonce!=nonce or inner_server_nonce!=server_nonce: raise RuntimeError('server_DH_inner_data nonce mismatch')
+        if sha1(answer[:ra.p]).digest()!=dec[:20]: raise RuntimeError('server_DH_inner_data hash mismatch')
+        _check_dh_prime(dh_prime)
+        _check_dh_g(dh_prime,g)
+        _check_dh_g_a(dh_prime,g_a)
+        retry_id=0
+        for _attempt in range(2):
+            b=int.from_bytes(secrets.token_bytes(256),'big'); g_b=pow(g,b,dh_prime)
+            _check_dh_g_a(dh_prime,g_b)
+            cli=codec.client_dh_inner(
+                nonce=nonce,
+                server_nonce=server_nonce,
+                retry_id=retry_id,
+                g_b=g_b.to_bytes(256,'big'),
+            )
+            payload=sha1(cli).digest()+cli; payload+=b'\x00'*((16-len(payload)%16)%16)
+            enc2=bytes(_require_rx().aes_ige_enc_raw(payload,tmp_key,tmp_iv))
+            ans_req=codec.set_client_dh_params(
+                nonce=nonce,
+                server_nonce=server_nonce,
+                encrypted_data=enc2,
+            )
+            ans=self._read_unencrypted_body(await self.invoke_unencrypted(ans_req))
+            ca=Reader(ans); c=ca.u32()
+            if c not in (0x3bcbf734, 0x46dc1fb9, 0xa69dae02): raise RuntimeError(f'dh_gen not ok: {c:x}')
+            if ca.take(16)!=nonce or ca.take(16)!=server_nonce: raise RuntimeError('dh_gen nonce mismatch')
+            key=pow(g_a,b,dh_prime).to_bytes(256,'big')
+            number={0x3bcbf734:1, 0x46dc1fb9:2, 0xa69dae02:3}[c]
+            if ca.take(20)!=_new_nonce_hash(new_nonce,key,number): raise RuntimeError(f'dh_gen new_nonce_hash{number} mismatch')
+            if c==0xa69dae02: raise RuntimeError('dh_gen_fail: server rejected the DH exchange')
+            if c==0x3bcbf734:
+                self.auth_key=key
+                self.server_salt=_xor(new_nonce[:8],server_nonce[:8])
+                self._init_done=False
+                return
+            retry_id=int.from_bytes(sha1(key).digest()[:8],'little')
+        raise RuntimeError('dh_gen retry limit reached')
 
     def _dispatch_update(self, update: Any) -> None:
         if not isinstance(update, dict):
@@ -1231,6 +1294,9 @@ class MTNet:
         try:
             aes_key, aes_iv = kdf_msg(self.auth_key, msg_key, False)
             dec = bytes(_require_rx().aes_ige_dec_raw(enc, aes_key, aes_iv))
+            if sha256(self.auth_key[96:128] + dec).digest()[8:24] != msg_key:
+                log.warning("MTProto packet rejected: msg_key mismatch")
+                return
             r = Reader(dec)
             salt = r.take(8); sid = r.take(8); msg_id = r.i64(); _seq = r.i32(); ln = r.i32()
             msg = r.take(ln)
