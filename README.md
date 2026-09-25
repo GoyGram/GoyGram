@@ -187,8 +187,10 @@ Choose QR code (scan with any Telegram client) or phone number (SMS code). 2FA p
 - **Override**: `GOYGRAM_VAULT_KEY` env var (base64-encoded 32 bytes) bypasses PBKDF2 entirely
 The vault does not fall back to silently accepting plaintext after a failed decryption.
 
+Without `GOYGRAM_VAULT_KEY` the key is derived from the host's machine-id and a salt stored in the vault file, so it is an at-rest binding to the host, not a secret: anyone who obtains both the vault file and the machine-id can decrypt it. Set `GOYGRAM_VAULT_KEY` to a random 32-byte value when the vault must stay unreadable on a compromised or copied host.
+
 ### Session Migration
-Telethon/Pyrogram `.session` files are auto-detected, read from SQLite, migrated to `.vault`, and securely zeroized (overwrite + fsync + unlink).
+Telethon and Pyrogram `.session` files are auto-detected, read from SQLite (columns are introspected, so both schemas work), migrated to `.vault`, and securely zeroized (overwrite + fsync + unlink).
 
 ## Session: memory, file, and portable string
 
