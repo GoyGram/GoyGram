@@ -42,6 +42,8 @@ class Disp:
         mid = data.get("msg_id")
         if chat is None or mid is None:
             return None
+        if kind == "edit":
+            return (kind, int(chat), int(mid), str(data.get("text", "")))
         return (kind, int(chat), int(mid))
 
     def _is_duplicate(self, data: dict[str, Any]) -> bool:
