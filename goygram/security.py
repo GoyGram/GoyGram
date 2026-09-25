@@ -69,15 +69,30 @@ def _get_machine_id() -> str:
         return "unknown"
 
 
-def _derive_vault_key(session_name: str, salt: bytes | None = None) -> tuple[bytes, bytes]:
+_vault_env_key_warned = False
+
+
+def _vault_env_key() -> bytes | None:
+    global _vault_env_key_warned
     env_key = os.getenv("GOYGRAM_VAULT_KEY", "").strip()
-    if env_key:
-        try:
-            key = base64.b64decode(env_key)
-            if len(key) == 32:
-                return key, salt or b"\x00" * 16
-        except Exception:
-            pass
+    if not env_key:
+        return None
+    try:
+        key = base64.b64decode(env_key, validate=True)
+    except Exception:
+        key = b""
+    if len(key) == 32:
+        return key
+    if not _vault_env_key_warned:
+        _vault_env_key_warned = True
+        log.warning("GOYGRAM_VAULT_KEY is not a base64-encoded 32-byte key; falling back to the machine-derived vault key.")
+    return None
+
+
+def _derive_vault_key(session_name: str, salt: bytes | None = None) -> tuple[bytes, bytes]:
+    env_key = _vault_env_key()
+    if env_key is not None:
+        return env_key, salt or b"\x00" * 16
     if salt is None:
         salt = _secrets.token_bytes(16)
     material = f"{_get_machine_id()}:{session_name}".encode()
@@ -86,14 +101,9 @@ def _derive_vault_key(session_name: str, salt: bytes | None = None) -> tuple[byt
 
 
 def _derive_vault_key_v2(salt: bytes | None = None) -> tuple[bytes, bytes]:
-    env_key = os.getenv("GOYGRAM_VAULT_KEY", "").strip()
-    if env_key:
-        try:
-            key = base64.b64decode(env_key)
-            if len(key) == 32:
-                return key, salt or b"\x00" * 16
-        except Exception:
-            pass
+    env_key = _vault_env_key()
+    if env_key is not None:
+        return env_key, salt or b"\x00" * 16
     if salt is None:
         salt = _secrets.token_bytes(16)
     material = _get_machine_id().encode()
@@ -127,6 +137,8 @@ def _write_vault(path: Path, payload: dict[str, Any], session_name: str) -> None
     raw_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     encrypted = _encrypt_vault_data(raw_json, session_name)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists() and _vault_env_key() is None:
+        log.warning("Vault %s is created with the machine-derived key (machine-id + salt stored in the file): anyone with this file and this host's machine-id can decrypt it. Set GOYGRAM_VAULT_KEY for a key that does not live on the host.", path.name)
     tmp_path = path.with_name(f".{path.name}.tmp")
     try:
         with tmp_path.open("wb") as handle:
@@ -372,6 +384,34 @@ def _extract_auth_blob(obj: dict[str, Any]) -> bytes | None:
             except Exception:
                 return auth_key.encode()
     return None
+
+
+def _read_legacy_session_db(path: Path) -> dict[str, Any] | None:
+    conn = sqlite3.connect(str(path))
+    try:
+        cur = conn.cursor()
+        columns = {str(row[1]) for row in cur.execute("PRAGMA table_info(sessions)").fetchall()}
+        wanted = [name for name in ("dc_id", "auth_key", "user_id", "api_id", "test_mode") if name in columns]
+        if "auth_key" not in wanted:
+            return None
+        row = cur.execute(f"SELECT {', '.join(wanted)} FROM sessions LIMIT 1").fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    values = dict(zip(wanted, row))
+    auth_blob = _extract_auth_blob({"auth_key": values.get("auth_key")})
+    if auth_blob is None:
+        return None
+    dc_id = values.get("dc_id")
+    return {
+        "auth_key": auth_blob.hex(),
+        "dc": int(dc_id) if dc_id is not None else None,
+        "user_id": values.get("user_id"),
+        "api_id": values.get("api_id"),
+        "test_mode": values.get("test_mode"),
+        "source_session": path.name,
+    }
 
 
 
@@ -1058,36 +1098,10 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
     if sess.exists():
         log.info("Third-party session detected: %s", sess.name)
         try:
-            conn = sqlite3.connect(str(sess))
-            try:
-                cur = conn.cursor()
-                row = cur.execute(
-                    "SELECT dc_id, auth_key, user_id, api_id, test_mode FROM sessions LIMIT 1"
-                ).fetchone()
-                if row is None:
-                    row = cur.execute("SELECT dc_id, auth_key FROM sessions LIMIT 1").fetchone()
-                if row is None:
-                    raise ValueError("sessions table is empty")
-            finally:
-                conn.close()
+            payload = _read_legacy_session_db(sess)
+            if payload is None:
+                raise ValueError("no usable auth_key in the sessions table")
 
-            dc_id = row[0] if len(row) > 0 else None
-            auth_val = row[1] if len(row) > 1 else None
-            user_id = row[2] if len(row) > 2 else None
-            src_api_id = row[3] if len(row) > 3 else None
-            test_mode = row[4] if len(row) > 4 else None
-            auth_blob = _extract_auth_blob({"auth_key": auth_val})
-            if auth_blob is None:
-                raise ValueError("auth_key not found or invalid in sessions table")
-
-            payload: dict[str, Any] = {
-                "auth_key": auth_blob.hex(),
-                "dc": int(dc_id) if dc_id is not None else None,
-                "user_id": user_id,
-                "api_id": src_api_id,
-                "test_mode": test_mode,
-                "source_session": sess.name,
-            }
             _write_vault(vault, payload, name)
             _zeroize_and_remove(sess)
             for suffix in ("-wal", "-shm", "-journal"):
