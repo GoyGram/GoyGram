@@ -1068,7 +1068,12 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                     token_id = str(bot_token).split(":", 1)[0]
                     expected_id = int(token_id) if token_id.isdigit() else 0
                     current_id = int(user.get("id", 0)) if user is not None else 0
-                    reauthorize = not current_id or bool(expected_id and current_id != expected_id)
+                    probe_error = _extract_error(current) or ""
+                    if probe_error and not _session_auth_error(Exception(probe_error)):
+                        log.warning("Bot session probe answered %s; keeping the stored session", probe_error)
+                        reauthorize = False
+                    else:
+                        reauthorize = not current_id or bool(expected_id and current_id != expected_id)
                     if reauthorize:
                         app.mt.auth_key = None
                         await app.mt.ensure_auth_key()
