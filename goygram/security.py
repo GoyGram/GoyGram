@@ -37,6 +37,7 @@ else:
 log = get_logger("goygram.security")
 
 VAULT_MAGIC = b"GGV2"
+VAULT_MAGIC_V3 = b"GGV3"
 T = TypeVar("T")
 
 
@@ -89,48 +90,56 @@ def _vault_env_key() -> bytes | None:
     return None
 
 
-def _derive_vault_key(session_name: str, salt: bytes | None = None) -> tuple[bytes, bytes]:
+def vault_master() -> bytes:
     env_key = _vault_env_key()
     if env_key is not None:
-        return env_key, salt or b"\x00" * 16
+        return env_key
+    return hashlib.sha256(_get_machine_id().encode()).digest()
+
+
+def _derive_vault_key_v3(salt: bytes | None = None) -> tuple[bytes, bytes]:
     if salt is None:
         salt = _secrets.token_bytes(16)
-    material = f"{_get_machine_id()}:{session_name}".encode()
-    key = hashlib.pbkdf2_hmac("sha256", material, salt, 600000, dklen=32)
+    key = hashlib.pbkdf2_hmac("sha256", vault_master(), salt, 600000, dklen=32)
     return key, salt
 
 
-def _derive_vault_key_v2(salt: bytes | None = None) -> tuple[bytes, bytes]:
+def _legacy_vault_keys(session_name: str, salt: bytes, version: int) -> list[bytes]:
+    keys: list[bytes] = []
     env_key = _vault_env_key()
     if env_key is not None:
-        return env_key, salt or b"\x00" * 16
-    if salt is None:
-        salt = _secrets.token_bytes(16)
-    material = _get_machine_id().encode()
-    key = hashlib.pbkdf2_hmac("sha256", material, salt, 600000, dklen=32)
-    return key, salt
+        keys.append(env_key)
+    if version == 2:
+        material = _get_machine_id().encode()
+    else:
+        material = f"{_get_machine_id()}:{session_name}".encode()
+    keys.append(hashlib.pbkdf2_hmac("sha256", material, salt, 600000, dklen=32))
+    return keys
 
 
 def _encrypt_vault_data(data: bytes, session_name: str) -> bytes:
-    key, salt = _derive_vault_key_v2()
+    key, salt = _derive_vault_key_v3()
     nonce = _secrets.token_bytes(12)
     ciphertext = _extension().aes_gcm_encrypt(key, nonce, data, b"")
-    return VAULT_MAGIC + salt + nonce + ciphertext
+    return VAULT_MAGIC_V3 + salt + nonce + ciphertext
 
 
 def _decrypt_vault_data(raw: bytes, session_name: str) -> bytes:
-    if raw.startswith(VAULT_MAGIC):
-        body = raw[len(VAULT_MAGIC):]
-        salt = body[:16]
-        nonce = body[16:28]
-        ciphertext = body[28:]
-        key, _ = _derive_vault_key_v2(salt)
-        return _extension().aes_gcm_decrypt(key, nonce, ciphertext, b"")
-    salt = raw[:16]
-    nonce = raw[16:28]
-    ciphertext = raw[28:]
-    key, _ = _derive_vault_key(session_name, salt)
-    return _extension().aes_gcm_decrypt(key, nonce, ciphertext, b"")
+    if raw.startswith(VAULT_MAGIC_V3):
+        salt, nonce, ciphertext = raw[4:20], raw[20:32], raw[32:]
+        keys = [_derive_vault_key_v3(salt)[0]]
+    elif raw.startswith(VAULT_MAGIC):
+        salt, nonce, ciphertext = raw[4:20], raw[20:32], raw[32:]
+        keys = _legacy_vault_keys(session_name, salt, 2)
+    else:
+        salt, nonce, ciphertext = raw[:16], raw[16:28], raw[28:]
+        keys = _legacy_vault_keys(session_name, salt, 1)
+    for key in keys:
+        try:
+            return _extension().aes_gcm_decrypt(key, nonce, ciphertext, b"")
+        except Exception:
+            continue
+    raise ValueError("vault does not open with any known key derivation")
 
 
 def _write_vault(path: Path, payload: dict[str, Any], session_name: str) -> None:
