@@ -590,8 +590,28 @@ class MTNet:
         async with self._auth_lock:
             if self.auth_key is not None and self.auth_ready.is_set():
                 return
-            await self._ensure_auth_key_inner()
+            paused = await self._pause_reader()
+            try:
+                await self._ensure_auth_key_inner()
+            finally:
+                if paused:
+                    await self._ensure_reader()
             self.auth_ready.set()
+
+    async def _pause_reader(self)->bool:
+        task = self._reader_task
+        if task is None or task.done() or task is asyncio.current_task():
+            return False
+        async with self._reader_lock:
+            self._reader_task = None
+        keepalive = self._keepalive_task
+        if keepalive is not None:
+            keepalive.cancel()
+            await asyncio.gather(keepalive, return_exceptions=True)
+            self._keepalive_task = None
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return True
 
     async def _ensure_auth_key_inner(self)->None:
         await self.boot()
@@ -2183,7 +2203,8 @@ class MTNet:
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        self._reader_task = None
+        if task is not asyncio.current_task():
+            self._reader_task = None
         if self.wr:
             self.wr.close(); await self.wr.wait_closed()
             self.wr=None; self.rd=None
