@@ -10,7 +10,7 @@ import re
 import sys
 import time
 import sqlite3
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, TypeVar, cast
 
@@ -97,11 +97,15 @@ def vault_master() -> bytes:
     return hashlib.sha256(_get_machine_id().encode()).digest()
 
 
+@lru_cache(maxsize=64)
+def _pbkdf2_key(master: bytes, salt: bytes) -> bytes:
+    return hashlib.pbkdf2_hmac("sha256", master, salt, 600000, dklen=32)
+
+
 def _derive_vault_key_v3(salt: bytes | None = None) -> tuple[bytes, bytes]:
     if salt is None:
         salt = _secrets.token_bytes(16)
-    key = hashlib.pbkdf2_hmac("sha256", vault_master(), salt, 600000, dklen=32)
-    return key, salt
+    return _pbkdf2_key(vault_master(), salt), salt
 
 
 def _legacy_vault_keys(session_name: str, salt: bytes, version: int) -> list[bytes]:
@@ -113,12 +117,12 @@ def _legacy_vault_keys(session_name: str, salt: bytes, version: int) -> list[byt
         material = _get_machine_id().encode()
     else:
         material = f"{_get_machine_id()}:{session_name}".encode()
-    keys.append(hashlib.pbkdf2_hmac("sha256", material, salt, 600000, dklen=32))
+    keys.append(_pbkdf2_key(material, salt))
     return keys
 
 
-def _encrypt_vault_data(data: bytes, session_name: str) -> bytes:
-    key, salt = _derive_vault_key_v3()
+def _encrypt_vault_data(data: bytes, session_name: str, salt: bytes | None = None) -> bytes:
+    key, salt = _derive_vault_key_v3(salt)
     nonce = _secrets.token_bytes(12)
     ciphertext = _extension().aes_gcm_encrypt(key, nonce, data, b"")
     return VAULT_MAGIC_V3 + salt + nonce + ciphertext
@@ -142,9 +146,19 @@ def _decrypt_vault_data(raw: bytes, session_name: str) -> bytes:
     raise ValueError("vault does not open with any known key derivation")
 
 
+def _reuse_salt(path: Path) -> bytes | None:
+    try:
+        head = path.read_bytes()[:20]
+    except OSError:
+        return None
+    if len(head) == 20 and head.startswith(VAULT_MAGIC_V3):
+        return head[4:20]
+    return None
+
+
 def _write_vault(path: Path, payload: dict[str, Any], session_name: str) -> None:
     raw_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-    encrypted = _encrypt_vault_data(raw_json, session_name)
+    encrypted = _encrypt_vault_data(raw_json, session_name, _reuse_salt(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() and _vault_env_key() is None:
         log.warning("Vault %s is created with the machine-derived key (machine-id + salt stored in the file): anyone with this file and this host's machine-id can decrypt it. Set GOYGRAM_VAULT_KEY for a key that does not live on the host.", path.name)
