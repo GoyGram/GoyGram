@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import secrets
 import signal
 from dataclasses import dataclass
@@ -500,15 +501,18 @@ class AppCore:
         self.default_transport = default_transport
         from goygram.session import STRING_PREFIX, Session
         if session is None:
-            self.session = Session(name=session_name)
+            self.session = Session(name=str(session_name))
         elif isinstance(session, Session):
             self.session = session
-        elif isinstance(session, str) and session.startswith(STRING_PREFIX):
-            self.session = Session.from_string(session, name=session_name)
-        elif isinstance(session, str):
-            self.session = Session(name=session)
         else:
-            raise TypeError("session must be a Session instance or an encrypted session string")
+            try:
+                name = os.fsdecode(session)
+            except TypeError:
+                raise TypeError("session must be a Session instance or an encrypted session string") from None
+            if name.startswith(STRING_PREFIX):
+                self.session = Session.from_string(name, name=str(session_name))
+            else:
+                self.session = Session(name=name)
         self.intake = str(intake)
 
     def _init_tl_schema(self) -> None:
