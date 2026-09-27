@@ -12,7 +12,7 @@ import time
 import sqlite3
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol, TypeVar, cast
+from typing import Any, Callable, Dict, Mapping, Protocol, Sequence, TypeVar, cast
 
 import hashlib
 import secrets as _secrets
@@ -35,6 +35,8 @@ else:
     _rx = cast(_Extension, _native_extension)
 
 log = get_logger("goygram.security")
+
+__all__ = ["vault_master", "bootstrap_session", "_decrypt_vault_data", "_encrypt_vault_data", "_extract_auth_blob", "_read_vault", "_write_vault"]
 
 VAULT_MAGIC = b"GGV2"
 VAULT_MAGIC_V3 = b"GGV3"
@@ -201,8 +203,9 @@ def _zeroize_and_remove(path: Path) -> None:
 
 def _is_interactive() -> bool:
     try:
-        import termios, tty
-        import rich
+        __import__("termios")
+        __import__("tty")
+        __import__("rich")
         return sys.stdout.isatty() and sys.stdin.isatty()
     except ImportError:
         return False
@@ -247,7 +250,7 @@ def _rich_password_input_sync(prompt_text: str) -> str:
     sys.stdout.write(f"\r\033[1m\033[36m? \033[0m{prompt_text}")
     sys.stdout.flush()
     
-    pwd = []
+    pwd: list[str] = []
     import termios, tty
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
@@ -369,20 +372,21 @@ def _extract_phone_code_hash(obj: dict[str, Any]) -> str | None:
 
 def _extract_user(obj: Any) -> dict[str, Any] | None:
     if isinstance(obj, (list, tuple)):
-        for item in obj:
+        for item in cast(Sequence[object], obj):
             user = _extract_user(item)
             if user is not None:
                 return user
         return None
     if not isinstance(obj, dict):
         return None
+    obj = cast(Dict[str, Any], obj)
     for key in ("result", "users"):
         nested = obj.get(key)
         if isinstance(nested, (dict, list, tuple)):
             user = _extract_user(nested)
             if user is not None:
                 return user
-    user = _field(obj, "user", "me")
+    user: dict[str, Any] | None = _field(obj, "user", "me")
     if isinstance(user, dict):
         uid = user.get("id") or user.get("user_id", 0)
         if uid and uid != 0:
@@ -449,7 +453,7 @@ def _extract_migrate_dc(err_text: str) -> int | None:
 async def _mt_req_with_migrate(app: Any, act: str, **kw: Any) -> dict[str, Any]:
     while True:
         try:
-            res = await app.mt_req(act, **kw)
+            res: dict[str, Any] | None = await app.mt_req(act, **kw)
         except GoyGramError as exc:
             dc_id = _extract_migrate_dc(str(exc))
             if dc_id is None:
@@ -476,7 +480,7 @@ async def _mt_req_with_migrate(app: Any, act: str, **kw: Any) -> dict[str, Any]:
         app.mt.session_id = _sec.token_bytes(8)
         await app.mt.boot()
         await app.mt.ensure_auth_key()
-        ensure_reader = getattr(app.mt, "_ensure_reader", None)
+        ensure_reader = getattr(app.mt, "ensure_reader", None)
         if ensure_reader is not None:
             await ensure_reader()
         log.warning("Migrated MT auth request to dc%s %s:%s", dc_id, endpoint.host, endpoint.port)
@@ -580,13 +584,6 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                                 else:
                                     print(f"auth.checkPassword failed: {e2}")
                                 continue
-                            if not isinstance(check, dict):
-                                if _is_interactive():
-                                    from rich.console import Console
-                                    Console().print("[bold red]Unexpected MT response for auth.checkPassword[/bold red]")
-                                else:
-                                    print("Unexpected MT response for auth.checkPassword")
-                                continue
                             check_err = _extract_error(check) or ""
                             if check_err:
                                 if _is_interactive():
@@ -680,13 +677,6 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                                     Console().print(f"[bold red]auth.checkPassword failed: {e}[/bold red]")
                                 else:
                                     print(f"auth.checkPassword failed: {e}")
-                                continue
-                            if not isinstance(check, dict):
-                                if _is_interactive():
-                                    from rich.console import Console
-                                    Console().print("[bold red]Unexpected MT response for auth.checkPassword[/bold red]")
-                                else:
-                                    print("Unexpected MT response for auth.checkPassword")
                                 continue
                             check_err = _extract_error(check) or ""
                             if check_err:
@@ -801,13 +791,6 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
                 print(f"Failed to send code: {e}")
             continue
             
-        if not isinstance(sent, dict):
-            if _is_interactive():
-                from rich.console import Console
-                Console().print("[bold red]Unexpected MT response for auth.sendCode[/bold red]")
-            else:
-                print("Unexpected MT response for auth.sendCode")
-            continue
             
         err = _extract_error(sent)
         if err and "SESSION_PASSWORD_NEEDED" not in err:
@@ -852,13 +835,6 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
             except Exception as e:
                 sign_err = str(e)
             else:
-                if not isinstance(sign, dict):
-                    if _is_interactive():
-                        from rich.console import Console
-                        Console().print("[bold red]Unexpected MT response for auth.signIn[/bold red]")
-                    else:
-                        print("Unexpected MT response for auth.signIn")
-                    continue
                 sign_err = _extract_error(sign) or ""
                 if not sign_err:
                     final = sign
@@ -887,13 +863,6 @@ async def _mt_auth_flow(app: Any, vault: Path, session_name: str, api_id: int | 
                             Console().print(f"[bold red]auth.checkPassword failed: {e}[/bold red]")
                         else:
                             print(f"auth.checkPassword failed: {e}")
-                        continue
-                    if not isinstance(check, dict):
-                        if _is_interactive():
-                            from rich.console import Console
-                            Console().print("[bold red]Unexpected MT response for auth.checkPassword[/bold red]")
-                        else:
-                            print("Unexpected MT response for auth.checkPassword")
                         continue
                     check_err = _extract_error(check) or ""
                     if check_err:
@@ -962,13 +931,6 @@ async def _mt_bot_auth_flow(app: Any, vault: Path, session_name: str, api_id: in
             Console().print(f"[bold red]auth.importBotAuthorization failed: {exc}[/bold red]")
         else:
             print(f"auth.importBotAuthorization failed: {exc}")
-        return None
-    if not isinstance(res, dict):
-        if _is_interactive():
-            from rich.console import Console
-            Console().print("[bold red]Unexpected MT response for auth.importBotAuthorization[/bold red]")
-        else:
-            print("Unexpected MT response for auth.importBotAuthorization")
         return None
     err = _extract_error(res) or ""
     if err:
@@ -1047,14 +1009,14 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                     app.mt.host = endpoint.host
                     app.mt.port = endpoint.port
             await app.mt.ensure_auth_key()
-            user_data = data.get("user", {})
+            user_data: dict[str, int] | None = data.get("user")
             uid = user_data.get("id", 0) if isinstance(user_data, dict) else 0
             if uid and uid != 0:
                 app.self_id = uid
                 app.mt.self_id = uid
                 log.info("Self ID resolved: %s", uid)
-            app.mt._entity_cache_restore(data.get("entities") or {})
-            dc_keys = data.get("dc_auth_keys")
+            app.mt.restore_entity_cache(data.get("entities") or {})
+            dc_keys: dict[str, dict[str, str] | None] | None = data.get("dc_auth_keys")
             if isinstance(dc_keys, dict):
                 for dc_id, entry in dc_keys.items():
                     try:

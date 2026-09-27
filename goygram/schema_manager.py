@@ -67,15 +67,15 @@ def _http_get(url: str, etag: str | None = None) -> tuple[str | None, str | None
 def _latest_layer() -> int:
     body, _ = _http_get(TDLIB_VERSION_URL)
     if body is None:
-        return _cached_layer() or CURRENT_LAYER_FLOOR
+        return cached_schema_layer() or CURRENT_LAYER_FLOOR
     match = re.search(r"MTPROTO_LAYER\s*=\s*(\d+)", body)
     if match is None:
-        return _cached_layer() or CURRENT_LAYER_FLOOR
+        return cached_schema_layer() or CURRENT_LAYER_FLOOR
     layer = int(match.group(1))
     return max(layer, CURRENT_LAYER_FLOOR)
 
 
-def _cached_layer() -> int | None:
+def cached_schema_layer() -> int | None:
     try:
         layer = int(CACHE_LAYER_PATH.read_text().strip())
         return layer if layer > 0 else None
@@ -145,7 +145,7 @@ def init_schema(
     except Exception:
         log.warning("No bootstrap schema available, schema_manager may fail")
 
-    cached_layer = _cached_layer()
+    cached_layer = cached_schema_layer()
     api_text = CACHE_SCHEMA_PATH.read_text() if CACHE_SCHEMA_PATH.exists() else None
     mtproto_text = CACHE_MTPROTO_PATH.read_text() if CACHE_MTPROTO_PATH.exists() else None
     if api_text is None or mtproto_text is None:
@@ -178,7 +178,7 @@ def _background_update(
             try:
                 current = ext_module.schema_info()
             except Exception:
-                current = {}
+                current: Mapping[str, int] = {}
             if int(current.get("layer", 0) or 0) == layer:
                 log.debug("Official schema layer %s is already active", layer)
                 continue

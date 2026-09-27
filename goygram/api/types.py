@@ -1,7 +1,7 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 from functools import lru_cache
-from typing import Any
+from typing import Any, Sequence, cast
 
 _ATOM = {type(None), bool, int, float, str, bytes, bytearray, memoryview}
 
@@ -26,14 +26,14 @@ def mtname(name: str) -> str:
     return p[0] + "." + p[1] + "".join(x[:1].upper() + x[1:] for x in p[2:])
 
 
-def dump(v: Any) -> Any:
+def dump(v: object) -> Any:
     t = type(v)
     if t in _ATOM:
         return v
     if t is dict:
-        return {k: dump(x) for k, x in v.items() if x is not None}
+        return {k: dump(x) for k, x in cast("dict[object, object]", v).items() if x is not None}
     if t is list or t is tuple:
-        return [dump(x) for x in v]
+        return [dump(x) for x in cast("Sequence[object]", v)]
     fn = getattr(t, "to_dict", None)
     if fn is not None:
         return dump(fn(v))

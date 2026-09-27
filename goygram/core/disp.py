@@ -63,7 +63,7 @@ class Disp:
     async def close(self) -> None:
         self.stop_ev.set()
 
-    async def _report_error(self, e: Exception, data: Any) -> None:
+    async def _report_error(self, e: Exception, data: Obj | dict[str, Any] | None) -> None:
         self.log.error("Handler failure: %r", e)
         await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
         handlers = getattr(self.app, "_error_handlers", None) or ()
@@ -81,7 +81,7 @@ class Disp:
                     self.log.error("Error handler failure: %r", nested)
 
     async def one(self, pkt: dict[str, Any]) -> None:
-        data = pkt.get("data")
+        data: dict[str, Any] | None = pkt.get("data")
         if not isinstance(data, dict):
             return
         kind = data.get("kind")
@@ -100,7 +100,7 @@ class Disp:
                 except StopPropagation:
                     return
                 except Exception as e:
-                    await self._report_error(e, evt if evt is not None else data)
+                    await self._report_error(e, evt)
         if kind == "msg":
             msg = Obj(pkt.get("src", "sys"), data, self.app)
             evt = msg
@@ -111,7 +111,7 @@ class Disp:
                 except StopPropagation:
                     return
                 except Exception as e:
-                    await self._report_error(e, evt if evt is not None else data)
+                    await self._report_error(e, evt)
             return
         if kind == "edit":
             msg = Obj(pkt.get("src", "sys"), data, self.app)
@@ -122,7 +122,7 @@ class Disp:
                 except StopPropagation:
                     return
                 except Exception as e:
-                    await self._report_error(e, evt if evt is not None else data)
+                    await self._report_error(e, evt)
             return
         if kind == "poll":
             poll = Obj(pkt.get("src", "sys"), data, self.app)
@@ -133,7 +133,7 @@ class Disp:
                 except StopPropagation:
                     return
                 except Exception as e:
-                    await self._report_error(e, evt if evt is not None else data)
+                    await self._report_error(e, evt)
             return
         if kind == "cb":
             cb = Obj(pkt.get("src", "sys"), data, self.app)
@@ -144,7 +144,7 @@ class Disp:
                 except StopPropagation:
                     return
                 except Exception as e:
-                    await self._report_error(e, evt if evt is not None else data)
+                    await self._report_error(e, evt)
             return
         if kind == "inline":
             inline = Obj(pkt.get("src", "sys"), data, self.app)
@@ -155,7 +155,7 @@ class Disp:
                 except StopPropagation:
                     return
                 except Exception as e:
-                    await self._report_error(e, evt if evt is not None else data)
+                    await self._report_error(e, evt)
             return
         if kind == "update":
             update = Obj(pkt.get("src", "sys"), data, self.app)
@@ -166,7 +166,7 @@ class Disp:
                 except StopPropagation:
                     return
                 except Exception as e:
-                    await self._report_error(e, evt if evt is not None else data)
+                    await self._report_error(e, evt)
             return
         if kind != "member":
             return

@@ -9,7 +9,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Sequence, Tuple, Type, cast
 
 from goygram.logging import get_logger
 from goygram.errors import FloodWaitError
@@ -138,7 +138,7 @@ class BotNet:
         if len(raw) > self.webhook_max_body:
             return web.json_response({"ok": False, "error": "body too large"}, status=413)
         try:
-            update = json.loads(raw)
+            update: dict[str, Any] | list[object] | str | int | None = json.loads(raw)
         except (TypeError, ValueError):
             return web.json_response({"ok": False, "error": "invalid json"}, status=400)
         if not isinstance(update, dict) or not isinstance(update.get("update_id"), int):
@@ -200,7 +200,7 @@ class BotNet:
         self.log.debug("Outgoing request method=%s payload=%s", m, data)
         async with self.sess.post(f"{self.base}/{m}", **body) as r:
             try:
-                raw = await r.json(content_type=None)
+                raw: dict[str, Any] | None = await r.json(content_type=None)
             except Exception:
                 txt = await r.text()
                 try:
@@ -213,7 +213,7 @@ class BotNet:
                 self.log.error("Webhook conflict detected. Webhook deleted and polling will retry.")
                 return []
             if r.status == 429 and _attempt < 5:
-                parameters = raw.get("parameters") if isinstance(raw, dict) else None
+                parameters: dict[str, int] | None = raw.get("parameters") if isinstance(raw, dict) else None
                 retry_after = parameters.get("retry_after", 1) if isinstance(parameters, dict) else 1
                 await asyncio.sleep(max(1, min(int(retry_after), 300)))
                 return await self.req(m, data, _attempt + 1)
@@ -222,12 +222,13 @@ class BotNet:
                 retry_after = parameters.get("retry_after", 1) if isinstance(parameters, dict) else 1
                 raise FloodWaitError(429, "BOT_API_RATE_LIMIT", max(1, int(retry_after)))
             raise RuntimeError(f"botapi {m} http {r.status}: {raw}")
+        raw = cast(Dict[str, Any], raw)
         if not raw.get("ok"):
             raise RuntimeError(f"botapi {m} fail: {raw}")
         return raw["result"]
 
     async def download_file(self, file_id: str, destination: str | Path | None = None) -> bytes | Path:
-        info = await self.req("getFile", {"file_id": file_id})
+        info: dict[str, object] | None = await self.req("getFile", {"file_id": file_id})
         if not isinstance(info, dict) or not isinstance(info.get("file_path"), str):
             raise RuntimeError("botapi getFile returned no file_path")
         await self.boot()
@@ -259,29 +260,30 @@ class BotNet:
     def has_file(self, v: Any) -> bool:
         if isinstance(v, (bytes, bytearray, memoryview)):
             return True
-        if isinstance(v, tuple) and len(v) >= 2 and isinstance(v[1], (bytes, bytearray, memoryview)):
+        if isinstance(v, tuple) and len(cast(Tuple[object, ...], v)) >= 2 and isinstance(v[1], (bytes, bytearray, memoryview)):
             return True
         if isinstance(v, list):
-            return any(self.has_file(x) for x in v)
+            return any(self.has_file(x) for x in cast(Sequence[object], v))
         if isinstance(v, dict):
-            return any(self.has_file(x) for x in v.values())
+            return any(self.has_file(x) for x in cast(Dict[object, object], v).values())
         return False
 
     def add_form(self, form: Any, k: str, v: Any) -> None:
         if v is None:
             return
-        fn = getattr(type(v), "to_dict", None)
+        fn = getattr(cast(Type[object], type(v)), "to_dict", None)
         if fn is not None:
             self.add_form(form, k, fn(v))
             return
-        if isinstance(v, tuple) and len(v) >= 2 and isinstance(v[1], (bytes, bytearray, memoryview)):
-            name = str(v[0])
-            data = bytes(v[1])
-            ct = v[2] if len(v) > 2 else "application/octet-stream"
+        if isinstance(v, tuple) and len(cast(Tuple[object, ...], v)) >= 2 and isinstance(v[1], (bytes, bytearray, memoryview)):
+            parts = cast(Tuple[object, ...], v)
+            name = str(parts[0])
+            data = bytes(cast(Sequence[int], v[1]))
+            ct = parts[2] if len(parts) > 2 else "application/octet-stream"
             form.add_field(k, data, filename=name, content_type=ct)
             return
         if isinstance(v, (bytes, bytearray, memoryview)):
-            form.add_field(k, bytes(v), filename=f"{k}.bin", content_type="application/octet-stream")
+            form.add_field(k, bytes(cast(Sequence[int], v)), filename=f"{k}.bin", content_type="application/octet-stream")
             return
         if isinstance(v, (dict, list)):
             form.add_field(k, json.dumps(v, ensure_ascii=False))
@@ -289,10 +291,10 @@ class BotNet:
         if isinstance(v, bool):
             form.add_field(k, "true" if v else "false")
             return
-        form.add_field(k, str(v))
+        form.add_field(k, str(cast(object, v)))
 
     def norm(self, upd: dict[str, Any]) -> dict[str, Any] | None:
-        poll = upd.get("poll")
+        poll: dict[str, object] | None = upd.get("poll")
         if isinstance(poll, dict):
             return {
                 "kind": "poll",
@@ -303,13 +305,13 @@ class BotNet:
                 "is_closed": bool(poll.get("is_closed", False)),
                 "raw": upd,
             }
-        mem = upd.get("chat_member") or upd.get("my_chat_member")
+        mem: dict[str, Any] | None = upd.get("chat_member") or upd.get("my_chat_member")
         if isinstance(mem, dict):
-            chat = mem.get("chat") or {}
-            usr = mem.get("from") or {}
-            old = mem.get("old_chat_member") or {}
-            new = mem.get("new_chat_member") or {}
-            target = new.get("user") or old.get("user") or {}
+            chat: dict[str, object] = mem.get("chat") or {}
+            usr: dict[str, object] = mem.get("from") or {}
+            old: dict[str, Any] = mem.get("old_chat_member") or {}
+            new: dict[str, Any] = mem.get("new_chat_member") or {}
+            target: dict[str, object] = new.get("user") or old.get("user") or {}
             return {
                 "kind": "member",
                 "src": "bot",
@@ -322,9 +324,9 @@ class BotNet:
                 "new_status": new.get("status"),
                 "raw": upd,
             }
-        cb = upd.get("callback_query")
+        cb: dict[str, Any] | None = upd.get("callback_query")
         if isinstance(cb, dict):
-            msg = cb.get("message") or {}
+            msg: dict[str, Any] = cb.get("message") or {}
             chat = msg.get("chat") or {}
             usr = cb.get("from") or {}
             return {
@@ -341,7 +343,7 @@ class BotNet:
                 "text": (msg.get("text") or msg.get("caption") or ""),
                 "raw": upd,
             }
-        inline = upd.get("inline_query")
+        inline: dict[str, Any] | None = upd.get("inline_query")
         if isinstance(inline, dict):
             usr = inline.get("from") or {}
             return {
@@ -357,7 +359,7 @@ class BotNet:
                 "location": inline.get("location"),
                 "raw": upd,
             }
-        chosen = upd.get("chosen_inline_result")
+        chosen: dict[str, Any] | None = upd.get("chosen_inline_result")
         if isinstance(chosen, dict):
             usr = chosen.get("from") or {}
             return {

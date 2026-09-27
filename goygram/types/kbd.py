@@ -1,7 +1,7 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict, cast
 
 
 class KbdBuilder:
@@ -55,7 +55,7 @@ class KbdBuilder:
         return self
 
     def join(self, other: "KbdBuilder") -> KbdBuilder:
-        rows = other.build().get("inline_keyboard", []) if other._kind == "inline" else []
+        rows: list[list[dict[str, Any]]] = other.build().get("inline_keyboard", []) if other._kind == "inline" else []
         for r in rows:
             self._rows.append(list(r))
         return self
@@ -112,11 +112,11 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
             return {"_": "inlineButtonTypeCopy", "copy_text": str(b["copy_text"])}
         return {"_": "inlineButtonTypeCallback", "data": as_bytes(b.get("callback_data") or "noop")}
 
-    def btn(b: Any) -> dict[str, Any]:
-        if isinstance(b, dict) and b.get("_") == "keyboardInlineButton":
-            return b
+    def btn(b: object) -> dict[str, Any]:
         if isinstance(b, dict):
-            d = b
+            d = cast(Dict[str, Any], b)
+            if d.get("_") == "keyboardInlineButton":
+                return d
         else:
             fn = getattr(type(b), "to_dict", None)
             d = fn(b) if fn is not None else {"text": str(b)}
@@ -140,9 +140,10 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
         kbd = kbd.build()
     if not isinstance(kbd, dict):
         return None
+    kbd = cast(Dict[str, Any], kbd)
     if kbd.get("_") in {"replyInlineMarkup", "replyKeyboardMarkup", "replyKeyboardHide", "replyForceReply"}:
         return kbd
-    rows_raw = kbd.get("inline_keyboard")
+    rows_raw: list[list[object] | tuple[object, ...] | None] | None = kbd.get("inline_keyboard")
     if rows_raw is None:
         rows_raw = kbd.get("keyboard")
         if rows_raw is None:
@@ -153,7 +154,7 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
                 {
                     "_": "keyboardButtonRow",
                     "buttons": [
-                        b if isinstance(b, dict) and b.get("_") else reply_btn(dict(b) if isinstance(b, dict) else {"text": str(b)})
+                        b if isinstance(b, dict) and cast(Dict[str, object], b).get("_") else reply_btn(dict(cast(Dict[str, Any], b)) if isinstance(b, dict) else {"text": str(b)})
                         for b in row
                     ],
                 }

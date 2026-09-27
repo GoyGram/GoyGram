@@ -81,7 +81,7 @@ class MTCodec:
 
 def factorize(pq:int)->tuple[int,int]:
     if pq%2==0: return 2,pq//2
-    from math import gcd, isqrt
+    from math import gcd
     for c in range(1, 100):
         x = secrets.randbelow(pq - 2) + 2
         y = x

@@ -4,7 +4,7 @@ from __future__ import annotations
 import re as _re
 import importlib
 from html import unescape as _unescape
-from typing import Any
+from typing import Any, Dict, cast
 
 
 def human_size(n: Any) -> str:
@@ -178,7 +178,7 @@ def _apply_ent(frag: str, et: str, ent: dict[str, Any]) -> str:
     if et == "phone":
         return f'<a href="tel:{frag}">{frag}</a>'
     if et == "text_mention":
-        u = ent.get("user") or {}
+        u: dict[str, object] = ent.get("user") or {}
         return f'<a href="tg://user?id={u.get("id", "")}">{frag}</a>'
     if et == "spoiler":
         return f"<tg-spoiler>{frag}</tg-spoiler>"
@@ -240,13 +240,18 @@ def extract_sent_message(result: Any) -> dict[str, Any] | None:
         if obj_id is not None:
             return {"id": obj_id, "message_id": obj_id}
         return None
+    result = cast(Dict[str, Any], result)
     inner = result.get("result") if isinstance(result.get("result"), dict) else result
     if not isinstance(inner, dict):
         return None
-    for upd in inner.get("updates") or []:
-        msg = upd.get("message") if isinstance(upd, dict) else None
-        if isinstance(msg, dict) and msg.get("id") is not None:
-            return msg
+    inner = cast(Dict[str, Any], inner)
+    updates: list[object] = inner.get("updates") or []
+    for upd in updates:
+        msg = cast(Dict[str, object], upd).get("message") if isinstance(upd, dict) else None
+        if isinstance(msg, dict):
+            msg = cast(Dict[str, Any], msg)
+            if msg.get("id") is not None:
+                return msg
     if inner.get("_") == "updateShortSentMessage":
         return dict(inner)
     if inner.get("id") is not None:

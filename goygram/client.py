@@ -5,11 +5,9 @@ import asyncio
 import hashlib
 import os
 import secrets
-import signal
 from dataclasses import dataclass
-import logging
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Literal, overload, cast, TYPE_CHECKING
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Sequence, Tuple, overload, cast, TYPE_CHECKING
 
 from goygram.api.methods import BotAPI
 from goygram.api.types import dump, camel, mtname
@@ -69,7 +67,7 @@ def _guess_mime(source: Any, kind: str) -> str:
     if isinstance(source, (str, Path)):
         name = str(source)
     elif isinstance(source, dict):
-        name = str(source.get("name", ""))
+        name = str(cast(Dict[str, object], source).get("name", ""))
     elif hasattr(source, "name"):
         name = str(source.name)
     dot = name.rfind(".")
@@ -84,6 +82,7 @@ def _guess_mime(source: Any, kind: str) -> str:
 
 def _find_ctor(payload: Any, ctor: str) -> dict[str, Any] | None:
     if isinstance(payload, dict):
+        payload = cast(Dict[str, Any], payload)
         if payload.get("_") == ctor:
             return payload
         for v in payload.values():
@@ -91,7 +90,7 @@ def _find_ctor(payload: Any, ctor: str) -> dict[str, Any] | None:
             if found is not None:
                 return found
     elif isinstance(payload, (list, tuple)):
-        for item in payload:
+        for item in cast(Sequence[object], payload):
             found = _find_ctor(item, ctor)
             if found is not None:
                 return found
@@ -198,13 +197,13 @@ class _HistoryIter:
         self.via = via
         self._offset_id = 0
         self._left = self.limit
-        self._buf: list[Any] = []
+        self._buf: list[dict[str, Any] | None] = []
         self._started = False
 
     def __aiter__(self) -> "_HistoryIter":
         return self
 
-    async def _fetch(self) -> list[Any]:
+    async def _fetch(self) -> list[dict[str, Any] | None]:
         app = self.app
         tr = app.via(self.chat_id, self.via)
         if tr != "mt":
@@ -224,8 +223,8 @@ class _HistoryIter:
             min_id=0,
             hash=0,
         )
-        res = raw.get("result", raw) if isinstance(raw, dict) else {}
-        msgs = res.get("messages") if isinstance(res, dict) else None
+        res: dict[str, Any] | None = raw.get("result", raw)
+        msgs: list[dict[str, Any] | None] | None = res.get("messages") if isinstance(res, dict) else None
         return list(msgs) if isinstance(msgs, list) else []
 
     async def __anext__(self) -> Any:
@@ -263,12 +262,12 @@ class _SearchIter:
         self.from_user = from_user
         self._offset_id = 0
         self._left = self.limit
-        self._buf: list[Any] = []
+        self._buf: list[dict[str, Any] | None] = []
 
     def __aiter__(self) -> "_SearchIter":
         return self
 
-    async def _fetch(self) -> list[Any]:
+    async def _fetch(self) -> list[dict[str, Any] | None]:
         app = self.app
         mt = app.mt
         if mt is None:
@@ -291,8 +290,8 @@ class _SearchIter:
             hash=0,
             **data,
         )
-        res = raw.get("result", raw) if isinstance(raw, dict) else {}
-        msgs = res.get("messages") if isinstance(res, dict) else None
+        res: dict[str, Any] | None = raw.get("result", raw)
+        msgs: list[dict[str, Any] | None] | None = res.get("messages") if isinstance(res, dict) else None
         return list(msgs) if isinstance(msgs, list) else []
 
     async def __anext__(self) -> Any:
@@ -328,13 +327,13 @@ class _DialogIter:
         self._offset_date = 0
         self._offset_id = 0
         self._left = self.limit
-        self._buf: list[Any] = []
+        self._buf: list[dict[str, Any] | None] = []
         self._started = False
 
     def __aiter__(self) -> "_DialogIter":
         return self
 
-    async def _fetch(self) -> list[Any]:
+    async def _fetch(self) -> list[dict[str, Any] | None]:
         app = self.app
         if app.mt is None:
             raise RuntimeError("iter_dialogs requires the mtproto transport")
@@ -346,8 +345,8 @@ class _DialogIter:
             limit=min(self.batch, self._left) if self._left else self.batch,
             hash=0,
         )
-        res = raw.get("result", raw) if isinstance(raw, dict) else {}
-        dialogs = res.get("dialogs") if isinstance(res, dict) else None
+        res: dict[str, Any] | None = raw.get("result", raw)
+        dialogs: list[dict[str, Any] | None] | None = res.get("dialogs") if isinstance(res, dict) else None
         if dialogs is None and isinstance(res, dict):
             dialogs = [x for x in res.get("chats", []) + res.get("users", []) if isinstance(x, dict)]
         return list(dialogs) if isinstance(dialogs, list) else []
@@ -478,10 +477,10 @@ class AppCore:
             )
             self._mt_rpc = self.mt.call
             if api_id is not None:
-                self.mt._api_id = int(api_id)
+                self.mt.api_id = int(api_id)
             self._init_tl_schema()
             self._load_vault_from_disk(session_name, api_id, api_hash, session)
-            self.mt._entity_flush_hook = self._entity_cache_schedule
+            self.mt.entity_flush_hook = self._entity_cache_schedule
         self.fsm = FSMEngine(backend=fsm_backend, on_change=fsm_on_change)
         self.disp = Disp(self, self.bus)
         self._conv: dict[tuple[int | str, int | str | None], asyncio.Future[Obj]] = {}
@@ -532,11 +531,9 @@ class AppCore:
         return self.mt is not None and self.mt.auth_ready.is_set() and not self.mt.pending
 
     def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any, session: Any | None = None) -> None:
-        import logging
         from pathlib import Path
         from goygram.security import _read_vault, _extract_auth_blob
         from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
-        log = logging.getLogger("goygram.dc")
         session_path = getattr(session, "path", None)
         vault = Path(session_path) if session_path is not None else Path(f"{session_name}.vault")
         if not vault.exists() or vault.stat().st_size == 0:
@@ -563,14 +560,14 @@ class AppCore:
                 endpoint = pick_dc_endpoint(dc_map, preferred_dc=int(dc))
                 self.mt.host = endpoint.host
                 self.mt.port = endpoint.port
-            user_data = data.get("user", {})
+            user_data: dict[str, int] | None = data.get("user", {})
             uid = user_data.get("id", 0) if isinstance(user_data, dict) else 0
             if uid and uid != 0 and self.mt is not None:
                 self.self_id = uid
                 setattr(self.mt, "self_id", uid)
             if self.mt is not None:
-                self.mt._entity_cache_restore(data.get("entities") or {})
-                dc_keys = data.get("dc_auth_keys")
+                self.mt.restore_entity_cache(data.get("entities") or {})
+                dc_keys: dict[str, dict[str, str] | None] | None = data.get("dc_auth_keys")
                 if isinstance(dc_keys, dict):
                     for dc_id, entry in dc_keys.items():
                         try:
@@ -584,9 +581,9 @@ class AppCore:
             pass
 
     def _entity_cache_flush(self, final: bool = False) -> None:
-        if self.mt is None or self.session is None:
+        if self.mt is None:
             return
-        if not final and not getattr(self.mt, "_entity_cache_dirty", False):
+        if not final and not getattr(self.mt, "entity_cache_dirty", False):
             return
         try:
             from goygram.security import _read_vault, _write_vault
@@ -597,15 +594,13 @@ class AppCore:
                 data = _read_vault(vault, Path(self.session_name).name) or {}
             except Exception:
                 data = {}
-            if not isinstance(data, dict):
-                data = {}
-            snapshot = self.mt._entity_cache_snapshot()
-            snapshot = self.mt._entity_cache_merge(data.get("entities"), snapshot)
+            snapshot = self.mt.snapshot_entity_cache()
+            snapshot = self.mt.merge_entity_cache(data.get("entities"), snapshot)
             if snapshot.get("users") or snapshot.get("chats") or self.mt.dc_auth_keys:
                 data["entities"] = snapshot
                 data["dc_auth_keys"] = {str(dc_id): {"key": entry["key"].hex(), "salt": (entry.get("salt") or b"").hex()} for dc_id, entry in self.mt.dc_auth_keys.items()}
                 _write_vault(vault, data, Path(self.session_name).name)
-                self.mt._entity_cache_dirty = False
+                self.mt.entity_cache_dirty = False
         except Exception:
             pass
 
@@ -737,7 +732,7 @@ class AppCore:
             return self._me_cache
         if self.bot is not None:
             try:
-                info = await self.bot_req("getMe")
+                info: dict[str, Any] | None = await self.bot_req("getMe")
                 if isinstance(info, dict):
                     self._me_cache = info
                     if info.get("id") is not None and self.self_id is None:
@@ -790,7 +785,7 @@ class AppCore:
             return None
         peer = await mt.resolve_peer(self.raw_chat(chat_id))
         raw = await self.mt_req("messages.getHistory", peer=peer, offset_id=0, offset_date=0, add_offset=0, limit=1, max_id=0, min_id=0, hash=0)
-        res = raw.get("result", raw) if isinstance(raw, dict) else {}
+        res: dict[str, Any] | None = raw.get("result", raw)
         return res.get("count") if isinstance(res, dict) else None
 
     def on_error(self, fn: Callable[[Obj, Exception], Awaitable[None] | None]):
@@ -1001,7 +996,7 @@ class AppCore:
         data = {k: v for k, v in kw.items() if v is not None}
         return await self.bot.req(meth, data)
 
-    async def download_file(self, file_id: str, destination: str | None = None) -> Any:
+    async def download_file(self, file_id: str | dict[str, Any], destination: str | None = None) -> Any:
         if self.bot is not None and isinstance(file_id, str) and not str(file_id).startswith("{"):
             return await self.bot.download_file(file_id, destination)
         if self.mt is None:
@@ -1011,8 +1006,9 @@ class AppCore:
     def _media_location(self, media: Any) -> dict[str, Any] | None:
         if not isinstance(media, dict):
             return None
-        doc = media.get("document") if isinstance(media.get("document"), dict) else None
-        photo = media.get("photo") if isinstance(media.get("photo"), dict) else None
+        media = cast(Dict[str, Any], media)
+        doc: dict[str, Any] | None = media.get("document") if isinstance(media.get("document"), dict) else None
+        photo: dict[str, Any] | None = media.get("photo") if isinstance(media.get("photo"), dict) else None
         if doc is None and media.get("_") == "document":
             doc = media
         if photo is None and media.get("_") == "photo":
@@ -1036,29 +1032,30 @@ class AppCore:
         return None
 
     async def download_media(self, source: Any, destination: str, *, via: str | None = None, progress: Any = None) -> Any:
-        media = None
+        media: dict[str, Any] | None = None
         src_kind = None
-        if isinstance(source, tuple) and len(source) == 2 and isinstance(source[0], (int, str)) and isinstance(source[1], int):
+        if isinstance(source, tuple) and len(cast(Tuple[object, ...], source)) == 2 and isinstance(source[0], (int, str)) and isinstance(source[1], int):
             source = await self.get_msg(source[0], source[1], via=via)
         if isinstance(source, dict):
+            source = cast(Dict[str, Any], source)
             src_kind = source.get("src")
             media = source.get("media") if isinstance(source.get("media"), dict) else source
         else:
-            src_kind = getattr(source, "src", None)
-            media = getattr(source, "media", None)
-            raw = getattr(source, "raw", None)
+            src_kind = getattr(cast(object, source), "src", None)
+            media = getattr(cast(object, source), "media", None)
+            raw: dict[str, Any] | None = getattr(cast(object, source), "raw", None)
             if media is None and isinstance(raw, dict):
                 media = raw.get("media")
         if via is not None:
             src_kind = "bot" if self.via(0, via) == "bot" else "mtproto"
         if src_kind == "bot" and self.bot is not None and isinstance(media, dict):
-            doc = media.get("document") if isinstance(media.get("document"), dict) else media
+            doc: dict[str, Any] | None = media.get("document") if isinstance(media.get("document"), dict) else media
             file_id = doc.get("file_id") if isinstance(doc, dict) else None
             if file_id:
                 return await self.bot.download_file(file_id, destination)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        location = self._media_location(media) or self._media_location(source if isinstance(source, dict) else getattr(source, "raw", None))
+        location = self._media_location(media) or self._media_location(source if isinstance(source, dict) else getattr(cast(object, source), "raw", None))
         if location is None:
             raise ValueError("no downloadable media found in source")
         if progress is not None:
@@ -1131,7 +1128,7 @@ class AppCore:
         data["_dispatch_message_text"] = text
         return await self.mt_req("messages.sendMessage", peer=peer, message=text, random_id=secrets.randbits(63), **data)
 
-    async def mt_req(self, act: str, **kw: Any) -> Any:
+    async def mt_req(self, act: str, **kw: Any) -> dict[str, Any]:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         data = dict(kw)
@@ -1226,7 +1223,7 @@ class AppCore:
                 media = {"_": "inputMediaUploadedDocument", "file": file_obj, "mime_type": _guess_mime(source, kind), "attributes": attrs}
             media_raw = media
         else:
-            media_raw = source
+            media_raw = cast(Dict[str, Any], source)
         data = dict(kw)
         if caption is not None:
             data["message"] = caption
@@ -1308,7 +1305,7 @@ class AppCore:
             return True
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        peer = await self.mt.resolve_peer(target)
+        await self.mt.resolve_peer(target)
         return await self.mt_req("messages.deleteMessages", id=ids, revoke=revoke)
 
     async def get_chat(self, chat_id: int | str, *, via: str | None = None, refresh: bool = False) -> Any:
@@ -1341,7 +1338,6 @@ class AppCore:
             if self.mt is None:
                 raise RuntimeError("mt net is not configured")
             info = await self.mt_req("users.getUsers", id=[{"_": "inputUser", "user_id": target}])
-            from goygram.client import _find_ctor
             info = _find_ctor(info, "user") or info
         self._users[target] = info
         return info
@@ -1437,19 +1433,20 @@ class AppCore:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
         res = await self.mt_req("messages.getMessages", id=[{"_": "inputMessageID", "id": int(msg_id)}], peer=peer)
-        msgs = res.get("messages", []) if isinstance(res, dict) else []
-        if not msgs and isinstance(res, dict):
-            inner = res.get("result") if isinstance(res.get("result"), dict) else {}
-            msgs = inner.get("messages", []) if isinstance(inner, dict) else []
+        msgs: list[object] = res.get("messages", [])
+        if not msgs:
+            inner = cast(Dict[str, Any], res.get("result")) if isinstance(res.get("result"), dict) else {}
+            msgs = inner.get("messages", [])
         return msgs[0] if msgs else None
 
     async def send_media_group(self, chat_id: int | str, media: list[Any], *, via: str | None = None, reply_to: int | None = None, **kw: Any) -> Any:
         transport = self.via(chat_id, via)
         target = self.raw_chat(chat_id)
         if transport == "bot":
-            group = []
+            group: list[dict[str, object]] = []
             for m in media:
                 if isinstance(m, tuple):
+                    m = cast(Tuple[str, object, str], m)
                     kind, src = m[0], m[1]
                     cap = m[2] if len(m) > 2 else None
                 else:
@@ -1466,11 +1463,10 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        from goygram import ext as rx
-        import json as _json
-        singles = []
+        singles: list[dict[str, object]] = []
         for m in media:
             if isinstance(m, tuple):
+                m = cast(Tuple[str, object, str], m)
                 kind, src = m[0], m[1]
                 cap = m[2] if len(m) > 2 else None
             else:
@@ -1675,10 +1671,9 @@ class AppCore:
                 limit=batch,
                 hash=0,
             )
-            users = None
-            if isinstance(res, dict):
-                inner = res.get("result") if isinstance(res.get("result"), dict) else res
-                users = inner.get("participants") if isinstance(inner, dict) else None
+            users: list[object] | None = None
+            inner: dict[str, Any] | None = res.get("result") if isinstance(res.get("result"), dict) else res
+            users = inner.get("participants") if isinstance(inner, dict) else None
             if not users:
                 return
             for u in users:
@@ -1715,10 +1710,9 @@ class AppCore:
             hash=0,
             **data,
         )
-        messages = None
-        if isinstance(res, dict):
-            inner = res.get("result") if isinstance(res.get("result"), dict) else res
-            messages = inner.get("messages") if isinstance(inner, dict) else None
+        messages: list[object] | None = None
+        inner: dict[str, Any] | None = res.get("result") if isinstance(res.get("result"), dict) else res
+        messages = inner.get("messages") if isinstance(inner, dict) else None
         return messages or []
 
     def iter_search(self, chat_id: int | str, query: str, *, limit: int = 0, batch: int = 100, from_user: int | None = None) -> "_SearchIter":
@@ -1761,15 +1755,15 @@ class AppCore:
         peer = await self.mt.resolve_peer(target)
         if full:
             res = await self.mt_req("messages.getPeerDialogs", peers=[peer])
-            inner = res.get("result", res) if isinstance(res, dict) else {}
-            dialogs = inner.get("dialogs") if isinstance(inner, dict) else None
+            inner: dict[str, Any] | None = res.get("result", res)
+            dialogs: list[object] | None = inner.get("dialogs") if isinstance(inner, dict) else None
             if dialogs:
                 return dialogs[0]
             return res
         res = await self.mt_req("messages.getPeerDialogs", peers=[peer])
-        inner = res.get("result", res) if isinstance(res, dict) else {}
-        chats = inner.get("chats") if isinstance(inner, dict) else None
-        users = inner.get("users") if isinstance(inner, dict) else None
+        inner = res.get("result", res)
+        chats: list[object] | None = inner.get("chats") if isinstance(inner, dict) else None
+        users: list[object] | None = inner.get("users") if isinstance(inner, dict) else None
         if chats:
             return chats[0]
         if users:
@@ -2070,10 +2064,10 @@ class AppCore:
             invoice["message"] = {"_": "textWithEntities", "text": message}
         if hide_name:
             invoice["hide_name"] = True
-        form = await self.mt_req("payments.getPaymentForm", invoice=invoice)
-        form_id = form.get("form_id") if isinstance(form, dict) else None
+        form: dict[str, Any] | None = await self.mt_req("payments.getPaymentForm", invoice=invoice)
+        form_id = form.get("form_id")
         while form_id is None and isinstance(form, dict):
-            form = form.get("result")
+            form = cast("dict[str, Any] | None", form.get("result"))
             form_id = form.get("form_id") if isinstance(form, dict) else None
         return await self.mt_req("payments.sendStarsForm", form_id=form_id, invoice=invoice)
 
@@ -2096,7 +2090,7 @@ class AppCore:
         file = await self.upload_file(media)
         doc = _find_ctor(file, "inputMediaUploadedDocument")
         if doc is None and isinstance(file, dict):
-            doc = file
+            doc = cast(Dict[str, Any], file)
         data: dict[str, Any] = {"peer": peer, "media": doc, "privacy_rules": privacy or [{"_": "inputPrivacyValueAllowAll"}]}
         if caption:
             data["caption"] = caption
@@ -2202,9 +2196,8 @@ class AppCore:
             await self.mt.close()
 
     async def run(self) -> None:
-        loop = asyncio.get_running_loop()
         self.log.info("Starting GoyGram core.")
-        tasks = []
+        tasks: list[asyncio.Task[None]] = []
         stop_wait = None
         try:
             tasks.append(asyncio.create_task(self.disp.consume(), name="disp"))
@@ -2220,7 +2213,8 @@ class AppCore:
                     else:
                         self.intake = "dual"
                 await self.mt.start()
-                tasks.append(self.mt._reader_task)
+                if self.mt.reader_task is not None:
+                    tasks.append(self.mt.reader_task)
                 try:
                     await self.mt.call("updates.getState", api_id=self.api_id)
                 except Exception as exc:

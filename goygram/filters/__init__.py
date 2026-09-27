@@ -6,7 +6,7 @@ import re as _re
 import time as _time
 from dataclasses import dataclass, field
 from importlib import import_module
-from typing import Any, Callable, Protocol, cast, no_type_check
+from typing import Any, Callable, Dict, Hashable, Iterable, Protocol, Type, cast
 
 from goygram.types.obj import Obj
 
@@ -19,7 +19,7 @@ class _LanguageProbability(Protocol):
 @dataclass
 class Filter:
     fn: Callable[[Obj], bool]
-    _name: str | None = None
+    name: str | None = None
     _left: Filter | None = field(default=None, repr=False)
     _right: Filter | None = field(default=None, repr=False)
     _op: str | None = field(default=None, repr=False)
@@ -28,27 +28,27 @@ class Filter:
         return bool(self.fn(event))
 
     def __and__(self, other: Filter) -> Filter:
-        f = Filter(lambda e: self(e) and other(e), _name="and")
+        f = Filter(lambda e: self(e) and other(e), name="and")
         f._left = self
         f._right = other
         f._op = "&"
         return f
 
     def __or__(self, other: Filter) -> Filter:
-        f = Filter(lambda e: self(e) or other(e), _name="or")
+        f = Filter(lambda e: self(e) or other(e), name="or")
         f._left = self
         f._right = other
         f._op = "|"
         return f
 
     def __invert__(self) -> Filter:
-        f = Filter(lambda e: not self(e), _name=f"not({self._name or '?'})")
+        f = Filter(lambda e: not self(e), name=f"not({self.name or '?'})")
         f._left = self
         f._op = "~"
         return f
 
     def __xor__(self, other: Filter) -> Filter:
-        f = Filter(lambda e: self(e) ^ other(e), _name="xor")
+        f = Filter(lambda e: self(e) ^ other(e), name="xor")
         f._left = self
         f._right = other
         f._op = "^"
@@ -58,8 +58,8 @@ class Filter:
         return self & ~other
 
     def __repr__(self) -> str:
-        if self._name:
-            return f"Filter({self._name})"
+        if self.name:
+            return f"Filter({self.name})"
         return "Filter(<lambda>)"
 
     def explain(self, event: Obj) -> str:
@@ -97,7 +97,7 @@ class Filter:
             lines.append(f"{prefix}= {'✓' if ok else '✗'}")
             return ok
         ok = self(event)
-        name = self._name or "custom"
+        name = self.name or "custom"
         lines.append(f"{prefix}{name}: {'✓' if ok else '✗'}")
         return ok
 
@@ -129,19 +129,7 @@ class Filter:
             if self._right:
                 out += self._right.tree(depth + 1)
             return out
-        return f"{prefix}{self._name or 'custom'}\n"
-
-
-def _rext(e: Obj, path: str, default: Any = None) -> Any:
-    val = e
-    for seg in path.split("."):
-        if val is None:
-            return default
-        if isinstance(val, dict):
-            val = val.get(seg)
-        else:
-            val = getattr(val, seg, default)
-    return val if val is not None else default
+        return f"{prefix}{self.name or 'custom'}\n"
 
 
 def _rget(e: Obj, *keys: str) -> Any:
@@ -149,7 +137,7 @@ def _rget(e: Obj, *keys: str) -> Any:
         return None
     value: Any = e
     for key in keys:
-        t = type(value)
+        t = cast(Type[object], type(value))
         if t is dict:
             value = value.get(key)
         else:
@@ -164,10 +152,10 @@ def _rget(e: Obj, *keys: str) -> Any:
 
 
 def _ct(e: Obj) -> str | None:
-    raw = getattr(e, "raw", None)
+    raw: dict[str, Any] | None = getattr(e, "raw", None)
     if isinstance(raw, dict):
         for src in (raw, raw.get("message") or {}, raw.get("edited_message") or {}, raw.get("callback_query", {}).get("message") or {}):
-            c = src.get("chat") if isinstance(src, dict) else None
+            c: dict[str, str] | None = cast(Dict[str, Any], src).get("chat") if isinstance(src, dict) else None
             if isinstance(c, dict) and c.get("type"):
                 return c["type"]
     cid = getattr(e, "chat_id", None)
@@ -184,7 +172,7 @@ def _ct(e: Obj) -> str | None:
     return None
 
 
-def _mkey(e: Obj) -> str | None:
+def media_kind(e: Obj) -> str | None:
     for k in ("photo", "video", "audio", "document", "sticker", "animation",
               "voice", "video_note", "location", "contact", "venue", "dice",
               "game", "invoice", "story", "giveaway"):
@@ -195,15 +183,15 @@ def _mkey(e: Obj) -> str | None:
 
 def _mdur(e: Obj) -> float:
     for k in ("video", "audio", "animation", "voice", "video_note"):
-        obj = _rget(e, k)
+        obj: dict[str, Any] | list[dict[str, Any] | None] | None = _rget(e, k)
         if isinstance(obj, dict):
             return float(obj.get("duration", 0))
     return 0
 
 
-def _msize(e: Obj) -> int:
+def media_bytes(e: Obj) -> int:
     for k in ("photo", "video", "audio", "document", "animation", "voice", "video_note", "sticker"):
-        obj = _rget(e, k)
+        obj: dict[str, Any] | list[dict[str, Any] | None] | None = _rget(e, k)
         sz = 0
         if isinstance(obj, dict):
             sz = int(obj.get("file_size", 0))
@@ -216,7 +204,7 @@ def _msize(e: Obj) -> int:
 
 def _mime(e: Obj) -> str:
     for k in ("document", "video", "audio", "animation", "voice", "video_note", "sticker"):
-        obj = _rget(e, k)
+        obj: dict[str, Any] | list[dict[str, Any] | None] | None = _rget(e, k)
         if isinstance(obj, dict):
             return str(obj.get("mime_type", ""))
     return ""
@@ -224,7 +212,7 @@ def _mime(e: Obj) -> str:
 
 def _has_entity(e: Obj, etype: str) -> bool:
     for src in ("entities", "caption_entities"):
-        lst = _rget(e, src)
+        lst: list[dict[str, Any] | None] | None = _rget(e, src)
         if isinstance(lst, list):
             for ent in lst:
                 if isinstance(ent, dict):
@@ -243,7 +231,7 @@ def _same_int(a: Any, b: Any) -> bool:
         return False
 
 
-text = Filter(lambda e: bool(getattr(e, "text", None)), _name="text")
+text = Filter(lambda e: bool(getattr(e, "text", None)), name="text")
 
 
 class command(Filter):
@@ -252,7 +240,7 @@ class command(Filter):
         self._pfx = prefixes
         self._ic = ignore_case
         self._sep = sep
-        super().__init__(fn=self._chk, _name=f"command({','.join(cmds)})")
+        super().__init__(fn=self._chk, name=f"command({','.join(cmds)})")
 
     def _chk(self, e: Obj) -> bool:
         txt = (getattr(e, "text", "") or "").strip()
@@ -274,7 +262,7 @@ class command(Filter):
             base = base.lower()
         if base not in self._cmds:
             return False
-        raw = getattr(e, "raw", None)
+        raw: dict[str, Any] | None = getattr(e, "raw", None)
         if isinstance(raw, dict):
             raw["cmd"] = base
             raw["args"] = parts[1].strip() if len(parts) > 1 else ""
@@ -284,7 +272,7 @@ class command(Filter):
 class regex(Filter):
     def __init__(self, pattern: str, flags: int = 0):
         self._rx = _re.compile(pattern, flags)
-        super().__init__(fn=self._chk, _name=f"regex({pattern!r})")
+        super().__init__(fn=self._chk, name=f"regex({pattern!r})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -301,7 +289,7 @@ class regex(Filter):
 class fullmatch(Filter):
     def __init__(self, pattern: str, flags: int = 0):
         self._rx = _re.compile(pattern, flags)
-        super().__init__(fn=self._chk, _name=f"fullmatch({pattern!r})")
+        super().__init__(fn=self._chk, name=f"fullmatch({pattern!r})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -318,7 +306,7 @@ class fullmatch(Filter):
 class findall(Filter):
     def __init__(self, pattern: str, flags: int = 0):
         self._rx = _re.compile(pattern, flags)
-        super().__init__(fn=self._chk, _name=f"findall({pattern!r})")
+        super().__init__(fn=self._chk, name=f"findall({pattern!r})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -335,7 +323,7 @@ class findall(Filter):
 class finditer(Filter):
     def __init__(self, pattern: str, flags: int = 0):
         self._rx = _re.compile(pattern, flags)
-        super().__init__(fn=self._chk, _name=f"finditer({pattern!r})")
+        super().__init__(fn=self._chk, name=f"finditer({pattern!r})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -355,7 +343,7 @@ class split(Filter):
     def __init__(self, pattern: str, maxsplit: int = 0, flags: int = 0):
         self._rx = _re.compile(pattern, flags)
         self._ms = maxsplit
-        super().__init__(fn=self._chk, _name=f"split({pattern!r})")
+        super().__init__(fn=self._chk, name=f"split({pattern!r})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -371,7 +359,7 @@ class contains(Filter):
     def __init__(self, substring: str, ignore_case: bool = True):
         self._s = substring.lower() if ignore_case else substring
         self._ic = ignore_case
-        super().__init__(fn=self._chk, _name=f"contains({substring!r})")
+        super().__init__(fn=self._chk, name=f"contains({substring!r})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -382,7 +370,7 @@ class contains_any(Filter):
     def __init__(self, *substrings: str, ignore_case: bool = True):
         self._ss = tuple(s.lower() if ignore_case else s for s in substrings)
         self._ic = ignore_case
-        super().__init__(fn=self._chk, _name=f"contains_any({substrings})")
+        super().__init__(fn=self._chk, name=f"contains_any({substrings})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -394,7 +382,7 @@ class contains_all(Filter):
     def __init__(self, *substrings: str, ignore_case: bool = True):
         self._ss = tuple(s.lower() if ignore_case else s for s in substrings)
         self._ic = ignore_case
-        super().__init__(fn=self._chk, _name=f"contains_all({substrings})")
+        super().__init__(fn=self._chk, name=f"contains_all({substrings})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -406,7 +394,7 @@ class startswith(Filter):
     def __init__(self, prefix: str, ignore_case: bool = False):
         self._p = prefix.lower() if ignore_case else prefix
         self._ic = ignore_case
-        super().__init__(fn=self._chk, _name=f"startswith({prefix!r})")
+        super().__init__(fn=self._chk, name=f"startswith({prefix!r})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -417,7 +405,7 @@ class endswith(Filter):
     def __init__(self, suffix: str, ignore_case: bool = False):
         self._s = suffix.lower() if ignore_case else suffix
         self._ic = ignore_case
-        super().__init__(fn=self._chk, _name=f"endswith({suffix!r})")
+        super().__init__(fn=self._chk, name=f"endswith({suffix!r})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -428,7 +416,7 @@ class text_len(Filter):
     def __init__(self, min_len: int | None = None, max_len: int | None = None):
         self._mn = min_len
         self._mx = max_len
-        super().__init__(fn=self._chk, _name=f"text_len({min_len},{max_len})")
+        super().__init__(fn=self._chk, name=f"text_len({min_len},{max_len})")
 
     def _chk(self, e: Obj) -> bool:
         n = len(getattr(e, "text", None) or "")
@@ -443,7 +431,7 @@ class word_count(Filter):
     def __init__(self, min_w: int | None = None, max_w: int | None = None):
         self._mn = min_w
         self._mx = max_w
-        super().__init__(fn=self._chk, _name=f"word_count({min_w},{max_w})")
+        super().__init__(fn=self._chk, name=f"word_count({min_w},{max_w})")
 
     def _chk(self, e: Obj) -> bool:
         n = len((getattr(e, "text", None) or "").split())
@@ -458,7 +446,7 @@ class line_count(Filter):
     def __init__(self, min_l: int | None = None, max_l: int | None = None):
         self._mn = min_l
         self._mx = max_l
-        super().__init__(fn=self._chk, _name=f"line_count({min_l},{max_l})")
+        super().__init__(fn=self._chk, name=f"line_count({min_l},{max_l})")
 
     def _chk(self, e: Obj) -> bool:
         n = (getattr(e, "text", None) or "").count("\n") + 1
@@ -469,15 +457,15 @@ class line_count(Filter):
         return True
 
 
-numeric = Filter(lambda e: (getattr(e, "text", None) or "").strip().lstrip("-").replace(".", "", 1).isdigit(), _name="numeric")
-json_text = Filter(lambda e: bool(_json.loads(getattr(e, "text", None) or "{}")), _name="json_text")
+numeric = Filter(lambda e: (getattr(e, "text", None) or "").strip().lstrip("-").replace(".", "", 1).isdigit(), name="numeric")
+json_text = Filter(lambda e: bool(_json.loads(getattr(e, "text", None) or "{}")), name="json_text")
 
 
 class is_language(Filter):
     def __init__(self, lang: str, min_confidence: float = 0.7):
         self._lang = lang.lower()
         self._conf = min_confidence
-        super().__init__(fn=self._chk, _name=f"is_language({lang})")
+        super().__init__(fn=self._chk, name=f"is_language({lang})")
 
     def _chk(self, e: Obj) -> bool:
         txt = getattr(e, "text", None) or ""
@@ -497,40 +485,40 @@ class is_language(Filter):
 class has_entity(Filter):
     def __init__(self, entity_type: str):
         self._et = entity_type
-        super().__init__(fn=lambda e: _has_entity(e, entity_type), _name=f"has_entity({entity_type})")
+        super().__init__(fn=lambda e: _has_entity(e, entity_type), name=f"has_entity({entity_type})")
 
 
-has_url = Filter(lambda e: _has_entity(e, "url"), _name="has_url")
-has_mention = Filter(lambda e: _has_entity(e, "mention"), _name="has_mention")
-has_hashtag = Filter(lambda e: _has_entity(e, "hashtag"), _name="has_hashtag")
-has_cashtag = Filter(lambda e: _has_entity(e, "cashtag"), _name="has_cashtag")
-has_email = Filter(lambda e: _has_entity(e, "email"), _name="has_email")
-has_phone = Filter(lambda e: _has_entity(e, "phone"), _name="has_phone")
-has_bold = Filter(lambda e: _has_entity(e, "bold"), _name="has_bold")
-has_italic = Filter(lambda e: _has_entity(e, "italic"), _name="has_italic")
-has_code = Filter(lambda e: _has_entity(e, "code"), _name="has_code")
-has_pre = Filter(lambda e: _has_entity(e, "pre"), _name="has_pre")
-has_spoiler = Filter(lambda e: _has_entity(e, "spoiler"), _name="has_spoiler")
-has_custom_emoji = Filter(lambda e: _has_entity(e, "custom_emoji"), _name="has_custom_emoji")
-has_blockquote = Filter(lambda e: _has_entity(e, "blockquote"), _name="has_blockquote")
-has_underline = Filter(lambda e: _has_entity(e, "underline"), _name="has_underline")
-has_strikethrough = Filter(lambda e: _has_entity(e, "strikethrough"), _name="has_strikethrough")
-has_text_link = Filter(lambda e: _has_entity(e, "text_link"), _name="has_text_link")
-has_text_mention = Filter(lambda e: _has_entity(e, "text_mention"), _name="has_text_mention")
-has_bank_card = Filter(lambda e: _has_entity(e, "bank_card"), _name="has_bank_card")
+has_url = Filter(lambda e: _has_entity(e, "url"), name="has_url")
+has_mention = Filter(lambda e: _has_entity(e, "mention"), name="has_mention")
+has_hashtag = Filter(lambda e: _has_entity(e, "hashtag"), name="has_hashtag")
+has_cashtag = Filter(lambda e: _has_entity(e, "cashtag"), name="has_cashtag")
+has_email = Filter(lambda e: _has_entity(e, "email"), name="has_email")
+has_phone = Filter(lambda e: _has_entity(e, "phone"), name="has_phone")
+has_bold = Filter(lambda e: _has_entity(e, "bold"), name="has_bold")
+has_italic = Filter(lambda e: _has_entity(e, "italic"), name="has_italic")
+has_code = Filter(lambda e: _has_entity(e, "code"), name="has_code")
+has_pre = Filter(lambda e: _has_entity(e, "pre"), name="has_pre")
+has_spoiler = Filter(lambda e: _has_entity(e, "spoiler"), name="has_spoiler")
+has_custom_emoji = Filter(lambda e: _has_entity(e, "custom_emoji"), name="has_custom_emoji")
+has_blockquote = Filter(lambda e: _has_entity(e, "blockquote"), name="has_blockquote")
+has_underline = Filter(lambda e: _has_entity(e, "underline"), name="has_underline")
+has_strikethrough = Filter(lambda e: _has_entity(e, "strikethrough"), name="has_strikethrough")
+has_text_link = Filter(lambda e: _has_entity(e, "text_link"), name="has_text_link")
+has_text_mention = Filter(lambda e: _has_entity(e, "text_mention"), name="has_text_mention")
+has_bank_card = Filter(lambda e: _has_entity(e, "bank_card"), name="has_bank_card")
 
 
 class _mentioned(Filter):
     def __init__(self, user_id: int | None = None):
         self._uid = user_id
-        super().__init__(fn=self._chk, _name=f"mentioned({user_id})" if user_id else "mentioned")
+        super().__init__(fn=self._chk, name=f"mentioned({user_id})" if user_id else "mentioned")
 
     def _chk(self, e: Obj) -> bool:
-        raw = getattr(e, "raw", None)
+        raw: dict[str, Any] | None = getattr(e, "raw", None)
         if not isinstance(raw, dict):
             return False
         for src in ("entities", "caption_entities"):
-            lst = raw.get(src)
+            lst: list[dict[str, Any] | None] | None = raw.get(src)
             if isinstance(lst, list):
                 for ent in lst:
                     if not isinstance(ent, dict):
@@ -538,7 +526,7 @@ class _mentioned(Filter):
                     if ent.get("type") == "text_mention" or "textMention" in str(ent.get("_", "")):
                         if self._uid is None:
                             return True
-                        uid = ent.get("user_id") or (ent.get("user", {}) or {}).get("id")
+                        uid = ent.get("user_id") or cast(Dict[str, int], ent.get("user") or {}).get("id")
                         if uid and int(uid) == int(self._uid):
                             return True
                     if ent.get("type") == "mention" or "Mention" in str(ent.get("_", "")):
@@ -558,34 +546,34 @@ class _mentioned(Filter):
 mentioned = _mentioned()
 
 
-photo = Filter(lambda e: _mkey(e) == "photo", _name="photo")
-video = Filter(lambda e: _mkey(e) == "video", _name="video")
-audio = Filter(lambda e: _mkey(e) == "audio", _name="audio")
-document = Filter(lambda e: _mkey(e) == "document", _name="document")
-sticker = Filter(lambda e: _mkey(e) == "sticker", _name="sticker")
-animation = Filter(lambda e: _mkey(e) == "animation", _name="animation")
-voice = Filter(lambda e: _mkey(e) == "voice", _name="voice")
-video_note = Filter(lambda e: _mkey(e) == "video_note", _name="video_note")
-location = Filter(lambda e: _mkey(e) == "location", _name="location")
-contact = Filter(lambda e: _mkey(e) == "contact", _name="contact")
-venue = Filter(lambda e: _mkey(e) == "venue", _name="venue")
-dice = Filter(lambda e: _mkey(e) == "dice", _name="dice")
-game = Filter(lambda e: _mkey(e) == "game", _name="game")
-invoice = Filter(lambda e: _mkey(e) == "invoice", _name="invoice")
-story = Filter(lambda e: _mkey(e) == "story", _name="story")
-giveaway = Filter(lambda e: _mkey(e) == "giveaway", _name="giveaway")
-media = Filter(lambda e: _mkey(e) is not None, _name="media")
-media_group = Filter(lambda e: bool(_rget(e, "media_group_id")), _name="media_group")
+photo = Filter(lambda e: media_kind(e) == "photo", name="photo")
+video = Filter(lambda e: media_kind(e) == "video", name="video")
+audio = Filter(lambda e: media_kind(e) == "audio", name="audio")
+document = Filter(lambda e: media_kind(e) == "document", name="document")
+sticker = Filter(lambda e: media_kind(e) == "sticker", name="sticker")
+animation = Filter(lambda e: media_kind(e) == "animation", name="animation")
+voice = Filter(lambda e: media_kind(e) == "voice", name="voice")
+video_note = Filter(lambda e: media_kind(e) == "video_note", name="video_note")
+location = Filter(lambda e: media_kind(e) == "location", name="location")
+contact = Filter(lambda e: media_kind(e) == "contact", name="contact")
+venue = Filter(lambda e: media_kind(e) == "venue", name="venue")
+dice = Filter(lambda e: media_kind(e) == "dice", name="dice")
+game = Filter(lambda e: media_kind(e) == "game", name="game")
+invoice = Filter(lambda e: media_kind(e) == "invoice", name="invoice")
+story = Filter(lambda e: media_kind(e) == "story", name="story")
+giveaway = Filter(lambda e: media_kind(e) == "giveaway", name="giveaway")
+media = Filter(lambda e: media_kind(e) is not None, name="media")
+media_group = Filter(lambda e: bool(_rget(e, "media_group_id")), name="media_group")
 
 
 class media_size(Filter):
     def __init__(self, min_bytes: int | None = None, max_bytes: int | None = None):
         self._mn = min_bytes
         self._mx = max_bytes
-        super().__init__(fn=self._chk, _name=f"media_size({min_bytes},{max_bytes})")
+        super().__init__(fn=self._chk, name=f"media_size({min_bytes},{max_bytes})")
 
     def _chk(self, e: Obj) -> bool:
-        sz = _msize(e)
+        sz = media_bytes(e)
         if sz <= 0:
             return False
         if self._mn is not None and sz < self._mn:
@@ -599,7 +587,7 @@ class media_duration(Filter):
     def __init__(self, min_secs: float | None = None, max_secs: float | None = None):
         self._mn = min_secs
         self._mx = max_secs
-        super().__init__(fn=self._chk, _name=f"media_duration({min_secs},{max_secs})")
+        super().__init__(fn=self._chk, name=f"media_duration({min_secs},{max_secs})")
 
     def _chk(self, e: Obj) -> bool:
         dur = _mdur(e)
@@ -615,7 +603,7 @@ class media_duration(Filter):
 class media_mime(Filter):
     def __init__(self, mime_prefix: str):
         self._mp = mime_prefix.lower()
-        super().__init__(fn=self._chk, _name=f"media_mime({mime_prefix})")
+        super().__init__(fn=self._chk, name=f"media_mime({mime_prefix})")
 
     def _chk(self, e: Obj) -> bool:
         return _mime(e).lower().startswith(self._mp)
@@ -625,11 +613,11 @@ class media_width(Filter):
     def __init__(self, min_w: int | None = None, max_w: int | None = None):
         self._mn = min_w
         self._mx = max_w
-        super().__init__(fn=self._chk, _name=f"media_width({min_w},{max_w})")
+        super().__init__(fn=self._chk, name=f"media_width({min_w},{max_w})")
 
     def _chk(self, e: Obj) -> bool:
         for k in ("photo", "video", "animation", "sticker", "video_note"):
-            obj = _rget(e, k)
+            obj: dict[str, Any] | list[dict[str, Any] | None] | None = _rget(e, k)
             w = 0
             if isinstance(obj, dict):
                 w = int(obj.get("width", 0))
@@ -648,11 +636,11 @@ class media_height(Filter):
     def __init__(self, min_h: int | None = None, max_h: int | None = None):
         self._mn = min_h
         self._mx = max_h
-        super().__init__(fn=self._chk, _name=f"media_height({min_h},{max_h})")
+        super().__init__(fn=self._chk, name=f"media_height({min_h},{max_h})")
 
     def _chk(self, e: Obj) -> bool:
         for k in ("photo", "video", "animation", "sticker", "video_note"):
-            obj = _rget(e, k)
+            obj: dict[str, Any] | list[dict[str, Any] | None] | None = _rget(e, k)
             h = 0
             if isinstance(obj, dict):
                 h = int(obj.get("height", 0))
@@ -670,11 +658,11 @@ class media_height(Filter):
 class file_name(Filter):
     def __init__(self, pattern: str, flags: int = 0):
         self._rx = _re.compile(pattern, flags)
-        super().__init__(fn=self._chk, _name=f"file_name({pattern!r})")
+        super().__init__(fn=self._chk, name=f"file_name({pattern!r})")
 
     def _chk(self, e: Obj) -> bool:
         for k in ("document", "audio", "video", "animation", "voice", "video_note", "sticker"):
-            obj = _rget(e, k)
+            obj: dict[str, Any] | list[dict[str, Any] | None] | None = _rget(e, k)
             if isinstance(obj, dict):
                 fn = obj.get("file_name", "")
                 if fn and self._rx.search(fn):
@@ -685,7 +673,7 @@ class file_name(Filter):
 class specific_media_group(Filter):
     def __init__(self, mgid: str | int):
         self._mg = str(mgid)
-        super().__init__(fn=self._chk, _name=f"specific_media_group({mgid})")
+        super().__init__(fn=self._chk, name=f"specific_media_group({mgid})")
 
     def _chk(self, e: Obj) -> bool:
         mg = _rget(e, "media_group_id")
@@ -696,10 +684,10 @@ class album_len(Filter):
     def __init__(self, min_n: int | None = None, max_n: int | None = None):
         self._mn = min_n
         self._mx = max_n
-        super().__init__(fn=self._chk, _name=f"album_len({min_n},{max_n})")
+        super().__init__(fn=self._chk, name=f"album_len({min_n},{max_n})")
 
     def _chk(self, e: Obj) -> bool:
-        arr = _rget(e, "photo") or _rget(e, "media") or []
+        arr: list[object] | dict[str, object] = _rget(e, "photo") or _rget(e, "media") or []
         if not isinstance(arr, list):
             return False
         n = len(arr)
@@ -714,7 +702,7 @@ class album_len(Filter):
 class caption_regex(Filter):
     def __init__(self, pattern: str, flags: int = 0):
         self._rx = _re.compile(pattern, flags)
-        super().__init__(fn=self._chk, _name=f"caption_regex({pattern!r})")
+        super().__init__(fn=self._chk, name=f"caption_regex({pattern!r})")
 
     def _chk(self, e: Obj) -> bool:
         cap = _rget(e, "caption") or ""
@@ -732,7 +720,7 @@ class caption_contains(Filter):
     def __init__(self, substring: str, ignore_case: bool = True):
         self._s = substring.lower() if ignore_case else substring
         self._ic = ignore_case
-        super().__init__(fn=self._chk, _name=f"caption_contains({substring!r})")
+        super().__init__(fn=self._chk, name=f"caption_contains({substring!r})")
 
     def _chk(self, e: Obj) -> bool:
         cap = str(_rget(e, "caption") or "")
@@ -743,7 +731,7 @@ class caption_len(Filter):
     def __init__(self, min_len: int | None = None, max_len: int | None = None):
         self._mn = min_len
         self._mx = max_len
-        super().__init__(fn=self._chk, _name=f"caption_len({min_len},{max_len})")
+        super().__init__(fn=self._chk, name=f"caption_len({min_len},{max_len})")
 
     def _chk(self, e: Obj) -> bool:
         n = len(str(_rget(e, "caption") or ""))
@@ -755,23 +743,23 @@ class caption_len(Filter):
 
 
 
-private = Filter(lambda e: _ct(e) == "private", _name="private")
-group = Filter(lambda e: _ct(e) == "group", _name="group")
-supergroup = Filter(lambda e: _ct(e) == "supergroup", _name="supergroup")
-channel = Filter(lambda e: _ct(e) == "channel", _name="channel")
-forum = Filter(lambda e: bool(_rget(e, "is_forum") or _rget(e, "chat", "is_forum")), _name="forum")
+private = Filter(lambda e: _ct(e) == "private", name="private")
+group = Filter(lambda e: _ct(e) == "group", name="group")
+supergroup = Filter(lambda e: _ct(e) == "supergroup", name="supergroup")
+channel = Filter(lambda e: _ct(e) == "channel", name="channel")
+forum = Filter(lambda e: bool(_rget(e, "is_forum") or _rget(e, "chat", "is_forum")), name="forum")
 
 
 class chat_type(Filter):
     def __init__(self, ct: str):
         self._ct = ct
-        super().__init__(fn=lambda e: _ct(e) == ct, _name=f"chat_type({ct})")
+        super().__init__(fn=lambda e: _ct(e) == ct, name=f"chat_type({ct})")
 
 
 class chat(Filter):
     def __init__(self, chat_id: int | str):
         self._cid = chat_id
-        super().__init__(fn=self._chk, _name=f"chat({chat_id})")
+        super().__init__(fn=self._chk, name=f"chat({chat_id})")
 
     def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
@@ -786,7 +774,7 @@ class chat(Filter):
 class any_chat(Filter):
     def __init__(self, *chat_ids: int | str):
         self._ids = {str(c) for c in chat_ids}
-        super().__init__(fn=self._chk, _name=f"any_chat({chat_ids})")
+        super().__init__(fn=self._chk, name=f"any_chat({chat_ids})")
 
     def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
@@ -796,7 +784,7 @@ class any_chat(Filter):
 class not_chat(Filter):
     def __init__(self, *chat_ids: int | str):
         self._ids = {str(c) for c in chat_ids}
-        super().__init__(fn=self._chk, _name=f"not_chat({chat_ids})")
+        super().__init__(fn=self._chk, name=f"not_chat({chat_ids})")
 
     def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
@@ -806,7 +794,7 @@ class not_chat(Filter):
 class topic(Filter):
     def __init__(self, topic_id: int):
         self._tid = topic_id
-        super().__init__(fn=self._chk, _name=f"topic({topic_id})")
+        super().__init__(fn=self._chk, name=f"topic({topic_id})")
 
     def _chk(self, e: Obj) -> bool:
         tid = _rget(e, "message_thread_id")
@@ -821,14 +809,14 @@ class topic(Filter):
 
 me = Filter(
     lambda e: bool(getattr(e, "is_me", False) or getattr(e, "from_id", None) == getattr(getattr(e, "app", None), "self_id", object())),
-    _name="me"
+    name="me"
 )
 
 
 class from_user(Filter):
     def __init__(self, user_id: int):
         self._uid = user_id
-        super().__init__(fn=self._chk, _name=f"from_user({user_id})")
+        super().__init__(fn=self._chk, name=f"from_user({user_id})")
 
     def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
@@ -840,7 +828,7 @@ class from_user(Filter):
 class from_any(Filter):
     def __init__(self, *user_ids: int):
         self._ids = set(user_ids)
-        super().__init__(fn=self._chk, _name=f"from_any({user_ids})")
+        super().__init__(fn=self._chk, name=f"from_any({user_ids})")
 
     def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
@@ -855,7 +843,7 @@ class from_any(Filter):
 class not_from(Filter):
     def __init__(self, *user_ids: int):
         self._ids = set(user_ids)
-        super().__init__(fn=self._chk, _name=f"not_from({user_ids})")
+        super().__init__(fn=self._chk, name=f"not_from({user_ids})")
 
     def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
@@ -867,20 +855,20 @@ class not_from(Filter):
             return True
 
 
-is_bot = Filter(lambda e: bool(_rget(e, "from", "is_bot")), _name="is_bot")
-is_premium = Filter(lambda e: bool(_rget(e, "from", "is_premium")), _name="is_premium")
-is_verified = Filter(lambda e: bool(_rget(e, "from", "is_verified")), _name="is_verified")
-is_scam = Filter(lambda e: bool(_rget(e, "from", "is_scam")), _name="is_scam")
-is_fake = Filter(lambda e: bool(_rget(e, "from", "is_fake")), _name="is_fake")
-is_support = Filter(lambda e: bool(_rget(e, "from", "is_support")), _name="is_support")
-is_contact = Filter(lambda e: bool(_rget(e, "from", "is_contact")), _name="is_contact")
-is_mutual_contact = Filter(lambda e: bool(_rget(e, "from", "is_mutual_contact")), _name="is_mutual_contact")
+is_bot = Filter(lambda e: bool(_rget(e, "from", "is_bot")), name="is_bot")
+is_premium = Filter(lambda e: bool(_rget(e, "from", "is_premium")), name="is_premium")
+is_verified = Filter(lambda e: bool(_rget(e, "from", "is_verified")), name="is_verified")
+is_scam = Filter(lambda e: bool(_rget(e, "from", "is_scam")), name="is_scam")
+is_fake = Filter(lambda e: bool(_rget(e, "from", "is_fake")), name="is_fake")
+is_support = Filter(lambda e: bool(_rget(e, "from", "is_support")), name="is_support")
+is_contact = Filter(lambda e: bool(_rget(e, "from", "is_contact")), name="is_contact")
+is_mutual_contact = Filter(lambda e: bool(_rget(e, "from", "is_mutual_contact")), name="is_mutual_contact")
 
 
 class lang_code(Filter):
     def __init__(self, lang: str):
         self._lang = lang.lower()
-        super().__init__(fn=self._chk, _name=f"lang_code({lang})")
+        super().__init__(fn=self._chk, name=f"lang_code({lang})")
 
     def _chk(self, e: Obj) -> bool:
         lc = _rget(e, "from", "language_code")
@@ -888,38 +876,38 @@ class lang_code(Filter):
 
 
 
-edited = Filter(lambda e: bool(_rget(e, "edit_date")), _name="edited")
+edited = Filter(lambda e: bool(_rget(e, "edit_date")), name="edited")
 forwarded = Filter(
     lambda e: bool(_rget(e, "forward_date") or _rget(e, "forward_from") or _rget(e, "forward_from_chat") or _rget(e, "forward_from_message_id")),
-    _name="forwarded"
+    name="forwarded"
 )
-reply = Filter(lambda e: bool(_rget(e, "reply_to_message") or _rget(e, "reply_to")), _name="reply")
-pinned = Filter(lambda e: bool(_rget(e, "pinned_message")), _name="pinned")
-has_protected_content = Filter(lambda e: bool(_rget(e, "has_protected_content")), _name="has_protected_content")
-has_media_spoiler = Filter(lambda e: bool(_rget(e, "has_media_spoiler")), _name="has_media_spoiler")
-via_bot = Filter(lambda e: bool(_rget(e, "via_bot")), _name="via_bot")
-is_topic_message = Filter(lambda e: bool(_rget(e, "is_topic_message") or _rget(e, "message_thread_id")), _name="is_topic_message")
-has_markup = Filter(lambda e: bool(_rget(e, "reply_markup")), _name="has_markup")
+reply = Filter(lambda e: bool(_rget(e, "reply_to_message") or _rget(e, "reply_to")), name="reply")
+pinned = Filter(lambda e: bool(_rget(e, "pinned_message")), name="pinned")
+has_protected_content = Filter(lambda e: bool(_rget(e, "has_protected_content")), name="has_protected_content")
+has_media_spoiler = Filter(lambda e: bool(_rget(e, "has_media_spoiler")), name="has_media_spoiler")
+via_bot = Filter(lambda e: bool(_rget(e, "via_bot")), name="via_bot")
+is_topic_message = Filter(lambda e: bool(_rget(e, "is_topic_message") or _rget(e, "message_thread_id")), name="is_topic_message")
+has_markup = Filter(lambda e: bool(_rget(e, "reply_markup")), name="has_markup")
 has_inline_kbd = Filter(
-    lambda e: bool((_rget(e, "reply_markup") or {}).get("inline_keyboard")),
-    _name="has_inline_kbd"
+    lambda e: bool(cast(Dict[str, object], _rget(e, "reply_markup") or {}).get("inline_keyboard")),
+    name="has_inline_kbd"
 )
 has_reply_kbd = Filter(
-    lambda e: bool((_rget(e, "reply_markup") or {}).get("keyboard")),
-    _name="has_reply_kbd"
+    lambda e: bool(cast(Dict[str, object], _rget(e, "reply_markup") or {}).get("keyboard")),
+    name="has_reply_kbd"
 )
-silent = Filter(lambda e: bool(_rget(e, "disable_notification")), _name="silent")
-from_offline = Filter(lambda e: bool(_rget(e, "from_offline")), _name="from_offline")
-effect = Filter(lambda e: bool(_rget(e, "effect_id")), _name="effect")
-has_web_preview = Filter(lambda e: bool(_rget(e, "web_page")), _name="has_web_preview")
-noforwards = Filter(lambda e: bool(_rget(e, "noforwards")), _name="noforwards")
+silent = Filter(lambda e: bool(_rget(e, "disable_notification")), name="silent")
+from_offline = Filter(lambda e: bool(_rget(e, "from_offline")), name="from_offline")
+effect = Filter(lambda e: bool(_rget(e, "effect_id")), name="effect")
+has_web_preview = Filter(lambda e: bool(_rget(e, "web_page")), name="has_web_preview")
+noforwards = Filter(lambda e: bool(_rget(e, "noforwards")), name="noforwards")
 
 
 
 class views(Filter):
     def __init__(self, min_views: int):
         self._min = min_views
-        super().__init__(fn=self._chk, _name=f"views({min_views})")
+        super().__init__(fn=self._chk, name=f"views({min_views})")
 
     def _chk(self, e: Obj) -> bool:
         v = _rget(e, "views")
@@ -929,22 +917,22 @@ class views(Filter):
 class forwards(Filter):
     def __init__(self, min_forwards: int):
         self._min = min_forwards
-        super().__init__(fn=self._chk, _name=f"forwards({min_forwards})")
+        super().__init__(fn=self._chk, name=f"forwards({min_forwards})")
 
     def _chk(self, e: Obj) -> bool:
         f = _rget(e, "forwards")
         return int(f or 0) >= self._min
 
 
-reaction = Filter(lambda e: bool(_rget(e, "reactions")), _name="reaction")
-has_sender_name = Filter(lambda e: bool(_rget(e, "sender_name")), _name="has_sender_name")
-signature = Filter(lambda e: bool(_rget(e, "author_signature")), _name="signature")
+reaction = Filter(lambda e: bool(_rget(e, "reactions")), name="reaction")
+has_sender_name = Filter(lambda e: bool(_rget(e, "sender_name")), name="has_sender_name")
+signature = Filter(lambda e: bool(_rget(e, "author_signature")), name="signature")
 
 
 class message_id(Filter):
     def __init__(self, msg_id: int):
         self._mid = msg_id
-        super().__init__(fn=self._chk, _name=f"message_id({msg_id})")
+        super().__init__(fn=self._chk, name=f"message_id({msg_id})")
 
     def _chk(self, e: Obj) -> bool:
         mid = getattr(e, "id", None) or getattr(e, "msg_id", None)
@@ -952,38 +940,38 @@ class message_id(Filter):
 
 
 
-new_chat_members = Filter(lambda e: bool(_rget(e, "new_chat_members")), _name="new_chat_members")
-left_chat_member = Filter(lambda e: bool(_rget(e, "left_chat_member")), _name="left_chat_member")
-new_chat_title = Filter(lambda e: bool(_rget(e, "new_chat_title")), _name="new_chat_title")
-new_chat_photo = Filter(lambda e: bool(_rget(e, "new_chat_photo")), _name="new_chat_photo")
-delete_chat_photo = Filter(lambda e: bool(_rget(e, "delete_chat_photo")), _name="delete_chat_photo")
-group_created = Filter(lambda e: bool(_rget(e, "group_chat_created")), _name="group_created")
-supergroup_created = Filter(lambda e: bool(_rget(e, "supergroup_chat_created")), _name="supergroup_created")
-channel_created = Filter(lambda e: bool(_rget(e, "channel_chat_created")), _name="channel_created")
-migrate_to = Filter(lambda e: bool(_rget(e, "migrate_to_chat_id")), _name="migrate_to")
-migrate_from = Filter(lambda e: bool(_rget(e, "migrate_from_chat_id")), _name="migrate_from")
-pinned_msg = Filter(lambda e: bool(_rget(e, "pinned_message")), _name="pinned_msg")
-connected_website = Filter(lambda e: bool(_rget(e, "connected_website")), _name="connected_website")
-proximity_alert = Filter(lambda e: bool(_rget(e, "proximity_alert_triggered")), _name="proximity_alert")
-video_chat_started = Filter(lambda e: bool(_rget(e, "video_chat_started")), _name="video_chat_started")
-video_chat_ended = Filter(lambda e: bool(_rget(e, "video_chat_ended")), _name="video_chat_ended")
-video_chat_scheduled = Filter(lambda e: bool(_rget(e, "video_chat_scheduled")), _name="video_chat_scheduled")
-message_auto_delete_timer = Filter(lambda e: bool(_rget(e, "message_auto_delete_timer_changed")), _name="message_auto_delete_timer")
-successful_payment = Filter(lambda e: bool(_rget(e, "successful_payment")), _name="successful_payment")
-refunded_payment = Filter(lambda e: bool(_rget(e, "refunded_payment")), _name="refunded_payment")
-users_shared = Filter(lambda e: bool(_rget(e, "users_shared")), _name="users_shared")
-chat_shared = Filter(lambda e: bool(_rget(e, "chat_shared")), _name="chat_shared")
-write_access_allowed = Filter(lambda e: bool(_rget(e, "write_access_allowed")), _name="write_access_allowed")
-boost_added = Filter(lambda e: bool(_rget(e, "boost_added")), _name="boost_added")
-forum_topic_created = Filter(lambda e: bool(_rget(e, "forum_topic_created")), _name="forum_topic_created")
-forum_topic_edited = Filter(lambda e: bool(_rget(e, "forum_topic_edited")), _name="forum_topic_edited")
-forum_topic_closed = Filter(lambda e: bool(_rget(e, "forum_topic_closed")), _name="forum_topic_closed")
-forum_topic_reopened = Filter(lambda e: bool(_rget(e, "forum_topic_reopened")), _name="forum_topic_reopened")
-general_forum_topic_hidden = Filter(lambda e: bool(_rget(e, "general_forum_topic_hidden")), _name="general_forum_topic_hidden")
-general_forum_topic_unhidden = Filter(lambda e: bool(_rget(e, "general_forum_topic_unhidden")), _name="general_forum_topic_unhidden")
-giveaway_created = Filter(lambda e: bool(_rget(e, "giveaway_created")), _name="giveaway_created")
-giveaway_completed = Filter(lambda e: bool(_rget(e, "giveaway_completed")), _name="giveaway_completed")
-giveaway_winners = Filter(lambda e: bool(_rget(e, "giveaway_winners")), _name="giveaway_winners")
+new_chat_members = Filter(lambda e: bool(_rget(e, "new_chat_members")), name="new_chat_members")
+left_chat_member = Filter(lambda e: bool(_rget(e, "left_chat_member")), name="left_chat_member")
+new_chat_title = Filter(lambda e: bool(_rget(e, "new_chat_title")), name="new_chat_title")
+new_chat_photo = Filter(lambda e: bool(_rget(e, "new_chat_photo")), name="new_chat_photo")
+delete_chat_photo = Filter(lambda e: bool(_rget(e, "delete_chat_photo")), name="delete_chat_photo")
+group_created = Filter(lambda e: bool(_rget(e, "group_chat_created")), name="group_created")
+supergroup_created = Filter(lambda e: bool(_rget(e, "supergroup_chat_created")), name="supergroup_created")
+channel_created = Filter(lambda e: bool(_rget(e, "channel_chat_created")), name="channel_created")
+migrate_to = Filter(lambda e: bool(_rget(e, "migrate_to_chat_id")), name="migrate_to")
+migrate_from = Filter(lambda e: bool(_rget(e, "migrate_from_chat_id")), name="migrate_from")
+pinned_msg = Filter(lambda e: bool(_rget(e, "pinned_message")), name="pinned_msg")
+connected_website = Filter(lambda e: bool(_rget(e, "connected_website")), name="connected_website")
+proximity_alert = Filter(lambda e: bool(_rget(e, "proximity_alert_triggered")), name="proximity_alert")
+video_chat_started = Filter(lambda e: bool(_rget(e, "video_chat_started")), name="video_chat_started")
+video_chat_ended = Filter(lambda e: bool(_rget(e, "video_chat_ended")), name="video_chat_ended")
+video_chat_scheduled = Filter(lambda e: bool(_rget(e, "video_chat_scheduled")), name="video_chat_scheduled")
+message_auto_delete_timer = Filter(lambda e: bool(_rget(e, "message_auto_delete_timer_changed")), name="message_auto_delete_timer")
+successful_payment = Filter(lambda e: bool(_rget(e, "successful_payment")), name="successful_payment")
+refunded_payment = Filter(lambda e: bool(_rget(e, "refunded_payment")), name="refunded_payment")
+users_shared = Filter(lambda e: bool(_rget(e, "users_shared")), name="users_shared")
+chat_shared = Filter(lambda e: bool(_rget(e, "chat_shared")), name="chat_shared")
+write_access_allowed = Filter(lambda e: bool(_rget(e, "write_access_allowed")), name="write_access_allowed")
+boost_added = Filter(lambda e: bool(_rget(e, "boost_added")), name="boost_added")
+forum_topic_created = Filter(lambda e: bool(_rget(e, "forum_topic_created")), name="forum_topic_created")
+forum_topic_edited = Filter(lambda e: bool(_rget(e, "forum_topic_edited")), name="forum_topic_edited")
+forum_topic_closed = Filter(lambda e: bool(_rget(e, "forum_topic_closed")), name="forum_topic_closed")
+forum_topic_reopened = Filter(lambda e: bool(_rget(e, "forum_topic_reopened")), name="forum_topic_reopened")
+general_forum_topic_hidden = Filter(lambda e: bool(_rget(e, "general_forum_topic_hidden")), name="general_forum_topic_hidden")
+general_forum_topic_unhidden = Filter(lambda e: bool(_rget(e, "general_forum_topic_unhidden")), name="general_forum_topic_unhidden")
+giveaway_created = Filter(lambda e: bool(_rget(e, "giveaway_created")), name="giveaway_created")
+giveaway_completed = Filter(lambda e: bool(_rget(e, "giveaway_completed")), name="giveaway_completed")
+giveaway_winners = Filter(lambda e: bool(_rget(e, "giveaway_winners")), name="giveaway_winners")
 
 service = Filter(
     lambda e: any(_rget(e, k) for k in (
@@ -998,7 +986,7 @@ service = Filter(
         "boost_added", "giveaway_created", "giveaway_completed", "giveaway_winners",
         "write_access_allowed", "users_shared", "chat_shared",
     )),
-    _name="service"
+    name="service"
 )
 
 
@@ -1006,7 +994,7 @@ service = Filter(
 class cb_data(Filter):
     def __init__(self, data: str):
         self._d = data
-        super().__init__(fn=self._chk, _name=f"cb_data({data!r})")
+        super().__init__(fn=self._chk, name=f"cb_data({data!r})")
 
     def _chk(self, e: Obj) -> bool:
         return getattr(e, "data", None) == self._d
@@ -1015,7 +1003,7 @@ class cb_data(Filter):
 class cb_startswith(Filter):
     def __init__(self, prefix: str):
         self._p = prefix
-        super().__init__(fn=self._chk, _name=f"cb_startswith({prefix!r})")
+        super().__init__(fn=self._chk, name=f"cb_startswith({prefix!r})")
 
     def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
@@ -1025,7 +1013,7 @@ class cb_startswith(Filter):
 class cb_endswith(Filter):
     def __init__(self, suffix: str):
         self._s = suffix
-        super().__init__(fn=self._chk, _name=f"cb_endswith({suffix!r})")
+        super().__init__(fn=self._chk, name=f"cb_endswith({suffix!r})")
 
     def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
@@ -1035,7 +1023,7 @@ class cb_endswith(Filter):
 class cb_contains(Filter):
     def __init__(self, substring: str):
         self._s = substring
-        super().__init__(fn=self._chk, _name=f"cb_contains({substring!r})")
+        super().__init__(fn=self._chk, name=f"cb_contains({substring!r})")
 
     def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
@@ -1045,7 +1033,7 @@ class cb_contains(Filter):
 class cb_regex(Filter):
     def __init__(self, pattern: str, flags: int = 0):
         self._rx = _re.compile(pattern, flags)
-        super().__init__(fn=self._chk, _name=f"cb_regex({pattern!r})")
+        super().__init__(fn=self._chk, name=f"cb_regex({pattern!r})")
 
     def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
@@ -1062,7 +1050,7 @@ class cb_regex(Filter):
 class cb_payload(Filter):
     def __init__(self, prefix: str, sep: str = ":"):
         self._p = prefix + sep
-        super().__init__(fn=self._chk, _name=f"cb_payload({prefix!r})")
+        super().__init__(fn=self._chk, name=f"cb_payload({prefix!r})")
 
     def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
@@ -1079,7 +1067,7 @@ class cb_json(Filter):
     def __init__(self, key: str, value: Any = None):
         self._key = key
         self._val = value
-        super().__init__(fn=self._chk, _name=f"cb_json({key!r})")
+        super().__init__(fn=self._chk, name=f"cb_json({key!r})")
 
     def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
@@ -1088,7 +1076,7 @@ class cb_json(Filter):
             if not isinstance(obj, dict):
                 return False
             if self._val is not None:
-                ok = obj.get(self._key) == self._val
+                ok = cast(Dict[str, object], obj).get(self._key) == self._val
             else:
                 ok = self._key in obj
             if ok:
@@ -1106,7 +1094,7 @@ class cb_kvp(Filter):
         self._key = key
         self._sep = sep
         self._ps = pair_sep
-        super().__init__(fn=self._chk, _name=f"cb_kvp({key!r})")
+        super().__init__(fn=self._chk, name=f"cb_kvp({key!r})")
 
     def _chk(self, e: Obj) -> bool:
         d = getattr(e, "data", None) or ""
@@ -1125,7 +1113,7 @@ class cb_kvp(Filter):
 class cb_from(Filter):
     def __init__(self, user_id: int):
         self._uid = user_id
-        super().__init__(fn=self._chk, _name=f"cb_from({user_id})")
+        super().__init__(fn=self._chk, name=f"cb_from({user_id})")
 
     def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
@@ -1135,7 +1123,7 @@ class cb_from(Filter):
 class cb_chat(Filter):
     def __init__(self, chat_id: int):
         self._cid = chat_id
-        super().__init__(fn=self._chk, _name=f"cb_chat({chat_id})")
+        super().__init__(fn=self._chk, name=f"cb_chat({chat_id})")
 
     def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
@@ -1145,27 +1133,27 @@ class cb_chat(Filter):
 class cb_msg(Filter):
     def __init__(self, msg_id: int):
         self._mid = msg_id
-        super().__init__(fn=self._chk, _name=f"cb_msg({msg_id})")
+        super().__init__(fn=self._chk, name=f"cb_msg({msg_id})")
 
     def _chk(self, e: Obj) -> bool:
         mid = getattr(e, "msg_id", None)
         return _same_int(mid, self._mid)
 
 
-cb_game = Filter(lambda e: bool(_rget(e, "game_short_name")), _name="cb_game")
-cb_any = Filter(lambda e: True, _name="cb_any")
+cb_game = Filter(lambda e: bool(_rget(e, "game_short_name")), name="cb_game")
+cb_any = Filter(lambda e: True, name="cb_any")
 
 
 
-poll_filter = Filter(lambda e: True, _name="poll_filter")
-poll_closed = Filter(lambda e: bool(getattr(e, "closed", False)), _name="poll_closed")
-poll_open = Filter(lambda e: not bool(getattr(e, "closed", True)), _name="poll_open")
+poll_filter = Filter(lambda e: True, name="poll_filter")
+poll_closed = Filter(lambda e: bool(getattr(e, "closed", False)), name="poll_closed")
+poll_open = Filter(lambda e: not bool(getattr(e, "closed", True)), name="poll_open")
 
 
 class poll_question(Filter):
     def __init__(self, question: str):
         self._q = question
-        super().__init__(fn=self._chk, _name=f"poll_question({question!r})")
+        super().__init__(fn=self._chk, name=f"poll_question({question!r})")
 
     def _chk(self, e: Obj) -> bool:
         return (getattr(e, "question", None) or "") == self._q
@@ -1174,7 +1162,7 @@ class poll_question(Filter):
 class poll_contains(Filter):
     def __init__(self, text: str):
         self._t = text.lower()
-        super().__init__(fn=self._chk, _name=f"poll_contains({text!r})")
+        super().__init__(fn=self._chk, name=f"poll_contains({text!r})")
 
     def _chk(self, e: Obj) -> bool:
         q = (getattr(e, "question", None) or "").lower()
@@ -1184,7 +1172,7 @@ class poll_contains(Filter):
 class poll_regex(Filter):
     def __init__(self, pattern: str, flags: int = 0):
         self._rx = _re.compile(pattern, flags)
-        super().__init__(fn=self._chk, _name=f"poll_regex({pattern!r})")
+        super().__init__(fn=self._chk, name=f"poll_regex({pattern!r})")
 
     def _chk(self, e: Obj) -> bool:
         q = getattr(e, "question", None) or ""
@@ -1194,7 +1182,7 @@ class poll_regex(Filter):
 class poll_type(Filter):
     def __init__(self, pt: str):
         self._pt = pt
-        super().__init__(fn=self._chk, _name=f"poll_type({pt})")
+        super().__init__(fn=self._chk, name=f"poll_type({pt})")
 
     def _chk(self, e: Obj) -> bool:
         return getattr(e, "kind", None) == self._pt
@@ -1203,7 +1191,7 @@ class poll_type(Filter):
 class poll_chat(Filter):
     def __init__(self, chat_id: int):
         self._cid = chat_id
-        super().__init__(fn=self._chk, _name=f"poll_chat({chat_id})")
+        super().__init__(fn=self._chk, name=f"poll_chat({chat_id})")
 
     def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
@@ -1213,14 +1201,14 @@ class poll_chat(Filter):
 class poll_option(Filter):
     def __init__(self, idx: int):
         self._idx = idx
-        super().__init__(fn=self._chk, _name=f"poll_option({idx})")
+        super().__init__(fn=self._chk, name=f"poll_option({idx})")
 
     def _chk(self, e: Obj) -> bool:
-        raw = getattr(e, "raw", None)
+        raw: dict[str, Any] | None = getattr(e, "raw", None)
         if not isinstance(raw, dict):
             return False
         for src in ("options", "chosen_options", "option_ids"):
-            opts = raw.get(src)
+            opts: list[int | str | dict[str, object]] | None = raw.get(src)
             if isinstance(opts, list):
                 for o in opts:
                     v = o if not isinstance(o, dict) else (o.get("option_id") or o.get("option") or o.get("id"))
@@ -1230,7 +1218,7 @@ class poll_option(Filter):
 
 
 poll_any = poll_filter
-poll_answer = Filter(lambda e: getattr(e, "kind", None) == "poll_answer", _name="poll_answer")
+poll_answer = Filter(lambda e: getattr(e, "kind", None) == "poll_answer", name="poll_answer")
 
 
 
@@ -1240,26 +1228,26 @@ def _mtrans(e: Obj, old_s: str | None, new_s: str | None) -> bool:
     return old_ok and new_ok
 
 
-member_joined = Filter(lambda e: _mtrans(e, None, "member"), _name="member_joined")
+member_joined = Filter(lambda e: _mtrans(e, None, "member"), name="member_joined")
 member_left = Filter(
     lambda e: _mtrans(e, "member", "left") or _mtrans(e, "member", "kicked"),
-    _name="member_left"
+    name="member_left"
 )
-member_banned = Filter(lambda e: _mtrans(e, None, "kicked"), _name="member_banned")
+member_banned = Filter(lambda e: _mtrans(e, None, "kicked"), name="member_banned")
 member_unbanned = Filter(
     lambda e: _mtrans(e, "kicked", "member") or _mtrans(e, "restricted", "member"),
-    _name="member_unbanned"
+    name="member_unbanned"
 )
-member_promoted = Filter(lambda e: _mtrans(e, "member", "administrator"), _name="member_promoted")
-member_demoted = Filter(lambda e: _mtrans(e, "administrator", "member"), _name="member_demoted")
-member_restricted = Filter(lambda e: _mtrans(e, "member", "restricted"), _name="member_restricted")
-member_unrestricted = Filter(lambda e: _mtrans(e, "restricted", "member"), _name="member_unrestricted")
+member_promoted = Filter(lambda e: _mtrans(e, "member", "administrator"), name="member_promoted")
+member_demoted = Filter(lambda e: _mtrans(e, "administrator", "member"), name="member_demoted")
+member_restricted = Filter(lambda e: _mtrans(e, "member", "restricted"), name="member_restricted")
+member_unrestricted = Filter(lambda e: _mtrans(e, "restricted", "member"), name="member_unrestricted")
 
 
 class member_status(Filter):
     def __init__(self, status: str):
         self._st = status
-        super().__init__(fn=self._chk, _name=f"member_status({status})")
+        super().__init__(fn=self._chk, name=f"member_status({status})")
 
     def _chk(self, e: Obj) -> bool:
         return getattr(e, "new", None) == self._st
@@ -1268,7 +1256,7 @@ class member_status(Filter):
 class member_chat(Filter):
     def __init__(self, chat_id: int):
         self._cid = chat_id
-        super().__init__(fn=self._chk, _name=f"member_chat({chat_id})")
+        super().__init__(fn=self._chk, name=f"member_chat({chat_id})")
 
     def _chk(self, e: Obj) -> bool:
         cid = getattr(e, "chat_id", None)
@@ -1278,7 +1266,7 @@ class member_chat(Filter):
 class member_user(Filter):
     def __init__(self, user_id: int):
         self._uid = user_id
-        super().__init__(fn=self._chk, _name=f"member_user({user_id})")
+        super().__init__(fn=self._chk, name=f"member_user({user_id})")
 
     def _chk(self, e: Obj) -> bool:
         uid = getattr(e, "user_id", None)
@@ -1288,7 +1276,7 @@ class member_user(Filter):
 class member_by(Filter):
     def __init__(self, admin_id: int):
         self._aid = admin_id
-        super().__init__(fn=self._chk, _name=f"member_by({admin_id})")
+        super().__init__(fn=self._chk, name=f"member_by({admin_id})")
 
     def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None)
@@ -1297,9 +1285,9 @@ class member_by(Filter):
 
 member_self = Filter(
     lambda e: getattr(e, "user_id", None) == getattr(getattr(e, "app", None), "self_id", object()),
-    _name="member_self"
+    name="member_self"
 )
-member_any = Filter(lambda e: True, _name="member_any")
+member_any = Filter(lambda e: True, name="member_any")
 
 
 
@@ -1308,7 +1296,7 @@ class update_type(Filter):
 
     def __init__(self, *types: str):
         self._ts = {self._MAP.get(t, t) for t in types}
-        super().__init__(fn=self._chk, _name=f"update_type({types})")
+        super().__init__(fn=self._chk, name=f"update_type({types})")
 
     def _chk(self, e: Obj) -> bool:
         return getattr(e, "kind", None) in self._ts or getattr(e, "update_type", None) in self._ts
@@ -1317,7 +1305,7 @@ class update_type(Filter):
 class network(Filter):
     def __init__(self, net: str):
         self._net = net
-        super().__init__(fn=self._chk, _name=f"network({net})")
+        super().__init__(fn=self._chk, name=f"network({net})")
 
     def _chk(self, e: Obj) -> bool:
         return getattr(e, "src", None) == self._net
@@ -1326,7 +1314,7 @@ class network(Filter):
 class user(Filter):
     def __init__(self, user_id: int):
         self._uid = user_id
-        super().__init__(fn=self._chk, _name=f"user({user_id})")
+        super().__init__(fn=self._chk, name=f"user({user_id})")
 
     def _chk(self, e: Obj) -> bool:
         fid = getattr(e, "from_id", None) or getattr(e, "user_id", None)
@@ -1336,7 +1324,7 @@ class user(Filter):
 class state(Filter):
     def __init__(self, name: str):
         self._name_val = name
-        super().__init__(fn=self._chk, _name=f"state({name!r})")
+        super().__init__(fn=self._chk, name=f"state({name!r})")
 
     def _chk(self, e: Obj) -> bool:
         chat_id = getattr(e, 'chat_id', None)
@@ -1357,7 +1345,7 @@ class state(Filter):
 class state_any(Filter):
     def __init__(self, *names: str):
         self._names = set(names)
-        super().__init__(fn=self._chk, _name=f"state_any({names})")
+        super().__init__(fn=self._chk, name=f"state_any({names})")
 
     def _chk(self, e: Obj) -> bool:
         chat_id = getattr(e, 'chat_id', None)
@@ -1377,13 +1365,13 @@ class state_any(Filter):
 
 
 
-any_filter = Filter(lambda e: True, _name="any")
-none_filter = Filter(lambda e: False, _name="none")
+any_filter = Filter(lambda e: True, name="any")
+none_filter = Filter(lambda e: False, name="none")
 
 
 class func(Filter):
     def __init__(self, fn: Callable[[Obj], bool], name: str | None = None):
-        super().__init__(fn=fn, _name=name or f"func({getattr(fn, '__name__', 'λ')})")
+        super().__init__(fn=fn, name=name or f"func({getattr(fn, '__name__', 'λ')})")
 
 
 def all_of(*filters: Filter) -> Filter:
@@ -1392,7 +1380,7 @@ def all_of(*filters: Filter) -> Filter:
     r = filters[0]
     for f in filters[1:]:
         r = r & f
-    r._name = f"all_of({len(filters)})"
+    r.name = f"all_of({len(filters)})"
     return r
 
 
@@ -1402,7 +1390,7 @@ def any_of(*filters: Filter) -> Filter:
     r = filters[0]
     for f in filters[1:]:
         r = r | f
-    r._name = f"any_of({len(filters)})"
+    r.name = f"any_of({len(filters)})"
     return r
 
 
@@ -1411,15 +1399,15 @@ def none_of(*filters: Filter) -> Filter:
 
 
 def at_least(n: int, *filters: Filter) -> Filter:
-    return Filter(lambda e: sum(1 for f in filters if f(e)) >= n, _name=f"at_least({n},{len(filters)})")
+    return Filter(lambda e: sum(1 for f in filters if f(e)) >= n, name=f"at_least({n},{len(filters)})")
 
 
 def at_most(n: int, *filters: Filter) -> Filter:
-    return Filter(lambda e: sum(1 for f in filters if f(e)) <= n, _name=f"at_most({n},{len(filters)})")
+    return Filter(lambda e: sum(1 for f in filters if f(e)) <= n, name=f"at_most({n},{len(filters)})")
 
 
 def exactly(n: int, *filters: Filter) -> Filter:
-    return Filter(lambda e: sum(1 for f in filters if f(e)) == n, _name=f"exactly({n},{len(filters)})")
+    return Filter(lambda e: sum(1 for f in filters if f(e)) == n, name=f"exactly({n},{len(filters)})")
 
 
 def invert(f: Filter) -> Filter:
@@ -1429,7 +1417,7 @@ def invert(f: Filter) -> Filter:
 
 def if_(cond: Filter, then_f: Filter, else_f: Filter | None = None) -> Filter:
     ef = else_f or none_filter
-    return Filter(lambda e: then_f(e) if cond(e) else ef(e), _name="if_(...)")
+    return Filter(lambda e: then_f(e) if cond(e) else ef(e), name="if_(...)")
 
 def unless(filter_a: Filter, filter_b: Filter) -> Filter:
     return if_(~filter_b, filter_a)
@@ -1440,7 +1428,7 @@ class once(Filter):
     def __init__(self, inner: Filter | None = None):
         self._ok = False
         self._inner = inner
-        super().__init__(fn=self._chk, _name="once")
+        super().__init__(fn=self._chk, name="once")
 
     def _chk(self, e: Obj) -> bool:
         if self._ok:
@@ -1456,7 +1444,7 @@ class limit(Filter):
         self._max = n
         self._cnt = 0
         self._inner = inner
-        super().__init__(fn=self._chk, _name=f"limit({n})")
+        super().__init__(fn=self._chk, name=f"limit({n})")
 
     def _chk(self, e: Obj) -> bool:
         if self._cnt >= self._max:
@@ -1472,7 +1460,7 @@ class every_n(Filter):
         self._n = n
         self._cnt = 0
         self._inner = inner
-        super().__init__(fn=self._chk, _name=f"every_n({n})")
+        super().__init__(fn=self._chk, name=f"every_n({n})")
 
     def _chk(self, e: Obj) -> bool:
         ok = self._inner(e) if self._inner else True
@@ -1488,7 +1476,7 @@ class cooldown(Filter):
         self._last: dict[str, float] = {}
         self._inner = inner
         self._key = key
-        super().__init__(fn=self._chk, _name=f"cooldown({seconds}s)")
+        super().__init__(fn=self._chk, name=f"cooldown({seconds}s)")
 
     def _chk(self, e: Obj) -> bool:
         k = str(getattr(e, self._key, "__g__"))
@@ -1508,7 +1496,7 @@ class throttled(Filter):
         self._win: dict[str, list[float]] = {}
         self._inner = inner
         self._key = key
-        super().__init__(fn=self._chk, _name=f"throttled({rate}/{per}s)")
+        super().__init__(fn=self._chk, name=f"throttled({rate}/{per}s)")
 
     def _chk(self, e: Obj) -> bool:
         k = str(getattr(e, self._key, "__g__"))
@@ -1565,14 +1553,12 @@ class _MagicAttr:
         return cur
 
     def _wrap(self, fn: Callable[[Obj], bool], name: str) -> Filter:
-        return Filter(fn=fn, _name=name)
+        return Filter(fn=fn, name=name)
 
-    @no_type_check
-    def __eq__(self, other: Any) -> Filter:
+    def __eq__(self, other: object) -> Any:
         return self._wrap(lambda e: self._resolve(e) == other, f"F{'.'.join(str(s) for s in self._path)} == {other!r}")
 
-    @no_type_check
-    def __ne__(self, other: Any) -> Filter:
+    def __ne__(self, other: object) -> Any:
         return self._wrap(lambda e: self._resolve(e) != other, f"F{'.'.join(str(s) for s in self._path)} != {other!r}")
 
     def __gt__(self, other: Any) -> Filter:
@@ -1604,7 +1590,7 @@ class _MagicAttr:
         return self._wrap(lambda e: bool(rx.search(self._resolve(e) or "")), f"F.{'.'.join(str(s) for s in self._path)}.matches({pattern!r})")
 
     def in_(self, others: Any) -> Filter:
-        seq = tuple(others) if isinstance(others, (list, tuple, set)) else others
+        seq = tuple(cast(Iterable[object], others)) if isinstance(others, (list, tuple, set)) else others
         return self._wrap(lambda e: self._resolve(e) in seq, f"F.{'.'.join(str(s) for s in self._path)}.in_({others!r})")
 
 
@@ -1614,7 +1600,7 @@ F = _MagicAttr()
 class filter_data(Filter):
     def __init__(self, **kwargs: Any):
         self._spec = kwargs
-        super().__init__(fn=self._chk, _name=f"filter_data({kwargs})")
+        super().__init__(fn=self._chk, name=f"filter_data({kwargs})")
 
     def _chk(self, e: Obj) -> bool:
         for k, v in self._spec.items():
@@ -1632,80 +1618,80 @@ class filter_data(Filter):
 
 class has_photo(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "photo", _name="has_photo")
+        super().__init__(fn=lambda e: media_kind(e) == "photo", name="has_photo")
 
 
 class has_video(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "video", _name="has_video")
+        super().__init__(fn=lambda e: media_kind(e) == "video", name="has_video")
 
 
 class has_audio(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "audio", _name="has_audio")
+        super().__init__(fn=lambda e: media_kind(e) == "audio", name="has_audio")
 
 
 class has_voice(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "voice", _name="has_voice")
+        super().__init__(fn=lambda e: media_kind(e) == "voice", name="has_voice")
 
 
 class has_document(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "document", _name="has_document")
+        super().__init__(fn=lambda e: media_kind(e) == "document", name="has_document")
 
 
 class has_sticker(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "sticker", _name="has_sticker")
+        super().__init__(fn=lambda e: media_kind(e) == "sticker", name="has_sticker")
 
 
 class has_animation(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "animation", _name="has_animation")
+        super().__init__(fn=lambda e: media_kind(e) == "animation", name="has_animation")
 
 
 class has_video_note(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "video_note", _name="has_video_note")
+        super().__init__(fn=lambda e: media_kind(e) == "video_note", name="has_video_note")
 
 
 class has_contact(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "contact", _name="has_contact")
+        super().__init__(fn=lambda e: media_kind(e) == "contact", name="has_contact")
 
 
 class has_location(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "location", _name="has_location")
+        super().__init__(fn=lambda e: media_kind(e) == "location", name="has_location")
 
 
 class has_poll(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "poll", _name="has_poll")
+        super().__init__(fn=lambda e: media_kind(e) == "poll", name="has_poll")
 
 
 class has_dice(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: _mkey(e) == "dice", _name="has_dice")
+        super().__init__(fn=lambda e: media_kind(e) == "dice", name="has_dice")
 
 
 class caption(Filter):
     def __init__(self, contains: str | None = None):
         if contains is not None:
-            super().__init__(fn=lambda e: contains in (getattr(e, "caption", "") or ""), _name=f"caption({contains})")
+            super().__init__(fn=lambda e: contains in (getattr(e, "caption", "") or ""), name=f"caption({contains})")
         else:
-            super().__init__(fn=lambda e: bool(getattr(e, "caption", "") or ""), _name="caption")
+            super().__init__(fn=lambda e: bool(getattr(e, "caption", "") or ""), name="caption")
 
 
 class args_count(Filter):
     def __init__(self, n: int):
-        super().__init__(fn=lambda e: len([a for a in str(getattr(e, "args", "") or "").split() if a]) == n, _name=f"args_count({n})")
+        super().__init__(fn=lambda e: len([a for a in str(getattr(e, "args", "") or "").split() if a]) == n, name=f"args_count({n})")
 
 
 class args_n(Filter):
     def __init__(self, n: int):
-        super().__init__(fn=lambda e: len([a for a in str(getattr(e, "args", "") or "").split() if a]) >= n, _name=f"args_n({n})")
+        super().__init__(fn=lambda e: len([a for a in str(getattr(e, "args", "") or "").split() if a]) >= n, name=f"args_n({n})")
 
 
 class arg_is(Filter):
@@ -1716,7 +1702,7 @@ class arg_is(Filter):
                 return False
             a = args[idx]
             return a.lower() == value.lower() if ignore_case else a == value
-        super().__init__(fn=chk, _name=f"arg_is({idx},{value})")
+        super().__init__(fn=chk, name=f"arg_is({idx},{value})")
 
 
 class arg_int(Filter):
@@ -1730,7 +1716,7 @@ class arg_int(Filter):
                 return True
             except ValueError:
                 return False
-        super().__init__(fn=chk, _name=f"arg_int({idx})")
+        super().__init__(fn=chk, name=f"arg_int({idx})")
 
 
 class arg_float(Filter):
@@ -1744,18 +1730,18 @@ class arg_float(Filter):
                 return True
             except ValueError:
                 return False
-        super().__init__(fn=chk, _name=f"arg_float({idx})")
+        super().__init__(fn=chk, name=f"arg_float({idx})")
 
 
 class in_chat(Filter):
-    def __init__(self, *chats: int | str):
-        ids = set()
+    def __init__(self, *chats: Hashable):
+        ids: set[Hashable] = set()
         for c in chats:
             ids.add(int(c) if isinstance(c, int) or (isinstance(c, str) and c.lstrip("-").isdigit()) else c)
         def chk(e: Obj) -> bool:
             cid = getattr(e, "chat_id", None)
             return cid in ids
-        super().__init__(fn=chk, _name=f"in_chat({chats})")
+        super().__init__(fn=chk, name=f"in_chat({chats})")
 
 
 class chat_id_range(Filter):
@@ -1768,14 +1754,14 @@ class chat_id_range(Filter):
                 return lo <= int(cid) <= hi
             except (TypeError, ValueError):
                 return False
-        super().__init__(fn=chk, _name=f"chat_id_range({lo},{hi})")
+        super().__init__(fn=chk, name=f"chat_id_range({lo},{hi})")
 
 
 class reply_to_me(Filter):
     def __init__(self):
         def chk(e: Obj) -> bool:
-            raw = getattr(e, "raw", {})
-            r = raw.get("reply_to_message") if isinstance(raw, dict) else None
+            raw: dict[str, Any] | None = getattr(e, "raw", {})
+            r: dict[str, int] | None = raw.get("reply_to_message") if isinstance(raw, dict) else None
             if not isinstance(r, dict):
                 return False
             app = getattr(e, "app", None)
@@ -1784,26 +1770,26 @@ class reply_to_me(Filter):
                 return False
             rf = r.get("from_id")
             return rf is not None and int(rf) == int(self_id)
-        super().__init__(fn=chk, _name="reply_to_me")
+        super().__init__(fn=chk, name="reply_to_me")
 
 
 class forwarded_from(Filter):
     def __init__(self, uid: int):
         def chk(e: Obj) -> bool:
-            raw = getattr(e, "raw", {})
-            fwd = raw.get("forward_from") or raw.get("forward_from_id") if isinstance(raw, dict) else None
+            raw: dict[str, Any] | None = getattr(e, "raw", {})
+            fwd: dict[str, int] | int | None = raw.get("forward_from") or raw.get("forward_from_id") if isinstance(raw, dict) else None
             u = fwd.get("id") if isinstance(fwd, dict) else fwd
             try:
                 return u is not None and int(u) == int(uid)
             except (TypeError, ValueError):
                 return False
-        super().__init__(fn=chk, _name=f"forwarded_from({uid})")
+        super().__init__(fn=chk, name=f"forwarded_from({uid})")
 
 
 class edited_recently(Filter):
     def __init__(self, within: float = 300.0):
         def chk(e: Obj) -> bool:
-            raw = getattr(e, "raw", {})
+            raw: dict[str, Any] | None = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
             d = raw.get("edit_date")
@@ -1811,7 +1797,7 @@ class edited_recently(Filter):
             if d is None or o is None:
                 return False
             return 0 <= int(d) - int(o) <= within
-        super().__init__(fn=chk, _name=f"edited_recently({within})")
+        super().__init__(fn=chk, name=f"edited_recently({within})")
 
 
 class time_window(Filter):
@@ -1822,7 +1808,7 @@ class time_window(Filter):
             if start_hour <= end_hour:
                 return start_hour <= h < end_hour
             return h >= start_hour or h < end_hour
-        super().__init__(fn=chk, _name=f"time_window({start_hour}-{end_hour})")
+        super().__init__(fn=chk, name=f"time_window({start_hour}-{end_hour})")
 
 
 class weekday(Filter):
@@ -1831,7 +1817,7 @@ class weekday(Filter):
         def chk(e: Obj) -> bool:
             import time as _t
             return _t.gmtime().tm_wday in ds
-        super().__init__(fn=chk, _name=f"weekday({days})")
+        super().__init__(fn=chk, name=f"weekday({days})")
 
 
 class random_chance(Filter):
@@ -1839,18 +1825,18 @@ class random_chance(Filter):
         def chk(e: Obj) -> bool:
             import random as _r
             return _r.random() < p
-        super().__init__(fn=chk, _name=f"random_chance({p})")
+        super().__init__(fn=chk, name=f"random_chance({p})")
 
 
 class silent_msg(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: bool(getattr(e, "raw", {}).get("has_silent_silent", False) or getattr(e, "raw", {}).get("silent", False) or getattr(e, "raw", {}).get("disable_notification", False)), _name="silent_msg")
+        super().__init__(fn=lambda e: bool(getattr(e, "raw", {}).get("has_silent_silent", False) or getattr(e, "raw", {}).get("silent", False) or getattr(e, "raw", {}).get("disable_notification", False)), name="silent_msg")
 
 
 class outgoing(Filter):
     def __init__(self):
         def chk(e: Obj) -> bool:
-            raw = getattr(e, "raw", {})
+            raw: dict[str, Any] | None = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
             if raw.get("out") is not None:
@@ -1859,13 +1845,13 @@ class outgoing(Filter):
             sid = getattr(app, "self_id", None) if app is not None else None
             f = raw.get("from_id")
             return sid is not None and f is not None and int(f) == int(sid)
-        super().__init__(fn=chk, _name="outgoing")
+        super().__init__(fn=chk, name="outgoing")
 
 
 class incoming(Filter):
     def __init__(self):
         def chk(e: Obj) -> bool:
-            raw = getattr(e, "raw", {})
+            raw: dict[str, Any] | None = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
             if raw.get("out") is not None:
@@ -1874,74 +1860,74 @@ class incoming(Filter):
             sid = getattr(app, "self_id", None) if app is not None else None
             f = raw.get("from_id")
             return not (sid is not None and f is not None and int(f) == int(sid))
-        super().__init__(fn=chk, _name="incoming")
+        super().__init__(fn=chk, name="incoming")
 
 
 class from_chat_type(Filter):
     def __init__(self, *types: str):
         ts = set(types)
-        super().__init__(fn=lambda e: (getattr(e, "chat_type", None) or "") in ts, _name=f"from_chat_type({types})")
+        super().__init__(fn=lambda e: (getattr(e, "chat_type", None) or "") in ts, name=f"from_chat_type({types})")
 
 
 class has_caption_entities(Filter):
     def __init__(self, etype: str | None = None):
         if etype is not None:
-            super().__init__(fn=lambda e: any(isinstance(x, dict) and x.get("type") == etype for x in (getattr(e, "raw", {}).get("caption_entities") or [])), _name=f"has_caption_entities({etype})")
+            super().__init__(fn=lambda e: any(isinstance(x, dict) and x.get("type") == etype for x in (cast("list[dict[str, object] | None]", e.raw.get("caption_entities") or []))), name=f"has_caption_entities({etype})")
         else:
-            super().__init__(fn=lambda e: bool(getattr(e, "raw", {}).get("caption_entities")), _name="has_caption_entities")
+            super().__init__(fn=lambda e: bool(getattr(e, "raw", {}).get("caption_entities")), name="has_caption_entities")
 
 
 class mime_is(Filter):
     def __init__(self, *mimes: str):
         ms = set(mimes)
-        super().__init__(fn=lambda e: (_mime(e) or "") in ms, _name=f"mime_is({mimes})")
+        super().__init__(fn=lambda e: (_mime(e) or "") in ms, name=f"mime_is({mimes})")
 
 
 class mime_prefix(Filter):
     def __init__(self, prefix: str):
-        super().__init__(fn=lambda e: (_mime(e) or "").startswith(prefix), _name=f"mime_prefix({prefix})")
+        super().__init__(fn=lambda e: (_mime(e) or "").startswith(prefix), name=f"mime_prefix({prefix})")
 
 
 class file_ext(Filter):
     def __init__(self, *exts: str):
         es = {e.lower() if e.startswith(".") else "." + e.lower() for e in exts}
         def chk(e: Obj) -> bool:
-            raw = getattr(e, "raw", {})
+            raw: dict[str, Any] | None = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
             for key in ("document", "video", "audio", "animation"):
-                v = raw.get(key)
+                v: dict[str, str] | None = raw.get(key)
                 if isinstance(v, dict) and v.get("file_name"):
                     name = str(v["file_name"])
                     dot = name.rfind(".")
                     if dot > 0 and name[dot:].lower() in es:
                         return True
             return False
-        super().__init__(fn=chk, _name=f"file_ext({exts})")
+        super().__init__(fn=chk, name=f"file_ext({exts})")
 
 
 class poll_answered_by(Filter):
     def __init__(self, uid: int):
         def chk(e: Obj) -> bool:
-            raw = getattr(e, "raw", {})
+            raw: dict[str, Any] | None = getattr(e, "raw", {})
             if not isinstance(raw, dict):
                 return False
-            data = raw.get("data")
+            data: dict[str, int] | str | None = raw.get("data")
             d = data if isinstance(data, dict) else {}
-            user = raw.get("user")
+            user: dict[str, int] | None = raw.get("user")
             u = user.get("id") if isinstance(user, dict) else None
             return _same_int(u or d.get("user_id"), uid)
-        super().__init__(fn=chk, _name=f"poll_answered_by({uid})")
+        super().__init__(fn=chk, name=f"poll_answered_by({uid})")
 
 
 class text_lower(Filter):
     def __init__(self, s: str):
-        super().__init__(fn=lambda e: str(getattr(e, "text", "") or "").lower() == s.lower(), _name=f"text_lower({s})")
+        super().__init__(fn=lambda e: str(getattr(e, "text", "") or "").lower() == s.lower(), name=f"text_lower({s})")
 
 
 class has_digits(Filter):
     def __init__(self):
-        super().__init__(fn=lambda e: any(c.isdigit() for c in str(getattr(e, "text", "") or "")), _name="has_digits")
+        super().__init__(fn=lambda e: any(c.isdigit() for c in str(getattr(e, "text", "") or "")), name="has_digits")
 
 
 class only_digits(Filter):
@@ -1949,7 +1935,7 @@ class only_digits(Filter):
         def chk(e: Obj) -> bool:
             t = str(getattr(e, "text", "") or "").strip()
             return bool(t) and t.isdigit()
-        super().__init__(fn=chk, _name="only_digits")
+        super().__init__(fn=chk, name="only_digits")
 
 
 class is_command(Filter):
@@ -1957,7 +1943,7 @@ class is_command(Filter):
         def chk(e: Obj) -> bool:
             t = str(getattr(e, "text", "") or "").strip()
             return bool(t) and t[0] in "/!.#$+"
-        super().__init__(fn=chk, _name="is_command")
+        super().__init__(fn=chk, name="is_command")
 
 
 class url_contains(Filter):
@@ -1966,8 +1952,8 @@ class url_contains(Filter):
             urls = getattr(e, "urls", None)
             if urls:
                 return any(s in u for u in urls)
-            raw = getattr(e, "raw", {})
-            ents = raw.get("entities") if isinstance(raw, dict) else None
+            raw: dict[str, Any] | None = getattr(e, "raw", {})
+            ents: list[dict[str, Any] | None] | None = raw.get("entities") if isinstance(raw, dict) else None
             if isinstance(ents, list):
                 for ent in ents:
                     if isinstance(ent, dict) and ent.get("type") in ("url", "text_link"):
@@ -1975,15 +1961,15 @@ class url_contains(Filter):
                         if s in url:
                             return True
             return False
-        super().__init__(fn=chk, _name=f"url_contains({s})")
+        super().__init__(fn=chk, name=f"url_contains({s})")
 
 
 class hashtag(Filter):
     def __init__(self, *tags: str):
         ts = {t.lstrip("#").lower() for t in tags}
         def chk(e: Obj) -> bool:
-            raw = getattr(e, "raw", {})
-            ents = raw.get("entities") if isinstance(raw, dict) else None
+            raw: dict[str, Any] | None = getattr(e, "raw", {})
+            ents: list[dict[str, Any] | None] | None = raw.get("entities") if isinstance(raw, dict) else None
             txt = str(getattr(e, "text", "") or "")
             if isinstance(ents, list):
                 for ent in ents:
@@ -1994,7 +1980,7 @@ class hashtag(Filter):
                         if tag in ts:
                             return True
             return False
-        super().__init__(fn=chk, _name=f"hashtag({tags})")
+        super().__init__(fn=chk, name=f"hashtag({tags})")
 
 
 class cmd_group(Filter):
@@ -2003,7 +1989,7 @@ class cmd_group(Filter):
         def chk(e: Obj) -> bool:
             c = getattr(e, "cmd", None)
             return c is not None and c.lower() in ns
-        super().__init__(fn=chk, _name=f"cmd_group({names})")
+        super().__init__(fn=chk, name=f"cmd_group({names})")
 
 
 __all__ = [

@@ -9,7 +9,7 @@ import sys
 import tempfile
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, cast
 
 from goygram.protocol.tl_schema import parse_api_tl
 from goygram.schema_manager import CACHE_MTPROTO_PATH, CACHE_SCHEMA_PATH, MTPROTO_SCHEMA_URL, SCHEMA_URL
@@ -144,9 +144,11 @@ def _bot_ann(types: List[Any], known: set[str]) -> str:
 
 def _bot_fields(spec: JsonMap, known: set[str]) -> List[FieldSpec]:
     fields: List[FieldSpec] = []
-    for p in spec.get("fields") or []:
+    source: list[object] = spec.get("fields") or []
+    for p in source:
         if not isinstance(p, dict):
             continue
+        p = cast(JsonMap, p)
         pname = p.get("name")
         if not pname:
             continue
@@ -156,11 +158,11 @@ def _bot_fields(spec: JsonMap, known: set[str]) -> List[FieldSpec]:
 
 def _bot_spec() -> Tuple[List[NamedFields], List[NamedFields]]:
     raw = json.loads(_fetch(BOT_API_JSON))
-    types = raw.get("types") or {}
-    methods = raw.get("methods") or {}
+    types: dict[str, object] = raw.get("types") or {}
+    methods: dict[str, object] = raw.get("methods") or {}
     known = {_ident(n) for n in list(types) + list(methods)}
-    t_out = [(n, _bot_fields(spec, known)) for n, spec in types.items() if isinstance(spec, dict)]
-    m_out = [(n, _bot_fields(spec, known)) for n, spec in methods.items() if isinstance(spec, dict)]
+    t_out = [(n, _bot_fields(cast(JsonMap, spec), known)) for n, spec in types.items() if isinstance(spec, dict)]
+    m_out = [(n, _bot_fields(cast(JsonMap, spec), known)) for n, spec in methods.items() if isinstance(spec, dict)]
     return t_out, m_out
 
 

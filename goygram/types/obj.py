@@ -1,9 +1,8 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 
-import json
 import secrets
-from typing import Any
+from typing import Any, List, cast
 from goygram.api.types import dump
 
 
@@ -92,7 +91,7 @@ class Obj:
     def chat_type(self) -> Any:
         v = self.raw.get("chat_type")
         if v is None:
-            chat = self.raw.get("chat")
+            chat: dict[str, str] | None = self.raw.get("chat")
             if isinstance(chat, dict):
                 return chat.get("type")
         return v
@@ -111,8 +110,8 @@ class Obj:
 
     @property
     def urls(self) -> list[str]:
-        raw = self.raw.get("entities") or []
-        out = []
+        raw: list[dict[str, Any] | None] = self.raw.get("entities") or []
+        out: list[str] = []
         for ent in raw:
             if isinstance(ent, dict) and ent.get("type") == "url":
                 off = int(ent.get("offset", 0))
@@ -122,7 +121,7 @@ class Obj:
 
     @property
     def entities(self) -> list[dict[str, Any]]:
-        v = self.raw.get("entities")
+        v: list[dict[str, Any]] | None = self.raw.get("entities")
         return v if isinstance(v, list) else []
 
     @property
@@ -148,23 +147,23 @@ class Obj:
 
     @property
     def chat_title(self) -> str | None:
-        chat = self.raw.get("chat")
+        chat: dict[str, str] | None = self.raw.get("chat")
         if isinstance(chat, dict):
             return chat.get("title") or chat.get("first_name") or chat.get("username")
         return None
 
     @property
     def username(self) -> str | None:
-        chat = self.raw.get("chat")
+        chat: dict[str, str] | None = self.raw.get("chat")
         if isinstance(chat, dict):
             return chat.get("username")
         return None
 
     @property
     def file_size(self) -> int | None:
-        from goygram.filters import _msize
+        from goygram.filters import media_bytes
         try:
-            return int(_msize(self))
+            return int(media_bytes(self))
         except (TypeError, ValueError):
             return None
 
@@ -172,7 +171,7 @@ class Obj:
     def file_name(self) -> str | None:
         raw = self.raw
         for key in ("document", "video", "audio", "voice", "animation", "video_note"):
-            v = raw.get(key)
+            v: dict[str, str] | None = raw.get(key)
             if isinstance(v, dict) and v.get("file_name"):
                 return v["file_name"]
         return None
@@ -181,15 +180,15 @@ class Obj:
     def mime(self) -> str | None:
         raw = self.raw
         for key in ("document", "video", "audio", "voice", "animation", "video_note"):
-            v = raw.get(key)
+            v: dict[str, str] | None = raw.get(key)
             if isinstance(v, dict) and v.get("mime_type"):
                 return v["mime_type"]
         return None
 
     @property
     def media_type(self) -> str | None:
-        from goygram.filters import _mkey
-        return _mkey(self)
+        from goygram.filters import media_kind
+        return media_kind(self)
 
     @property
     def is_media(self) -> bool:
@@ -211,7 +210,7 @@ class Obj:
 
     @property
     def reply_msg(self) -> "Obj | None":
-        r = self.raw.get("reply_to_message")
+        r: dict[str, Any] | None = self.raw.get("reply_to_message")
         if isinstance(r, dict):
             return Obj(self.src, r, self.app)
         return None
@@ -222,7 +221,7 @@ class Obj:
         if isinstance(a, str):
             return a.split() if a else []
         if isinstance(a, list):
-            return [str(x) for x in a]
+            return [str(x) for x in cast(List[object], a)]
         return []
 
     @property
@@ -234,7 +233,7 @@ class Obj:
         first = self._value("first_name")
         last = self._value("last_name")
         if first is None or last is None:
-            chat = self.raw.get("chat")
+            chat: dict[str, str] | None = self.raw.get("chat")
             if isinstance(chat, dict):
                 if first is None:
                     first = chat.get("first_name") or chat.get("title")
@@ -298,17 +297,17 @@ class Obj:
     def _value(self, key: str, default: Any = None) -> Any:
         if key in self.raw:
             return self.raw[key]
-        source = self.raw.get("raw")
+        source: dict[str, Any] | None = self.raw.get("raw")
         if isinstance(source, dict):
             if key in source:
                 return source[key]
             for name in ("message", "edited_message", "channel_post", "edited_channel_post"):
-                obj = source.get(name)
+                obj: dict[str, object] | None = source.get(name)
                 if isinstance(obj, dict) and key in obj:
                     return obj[key]
-        update = self.raw.get("raw_update")
+        update: dict[str, Any] | None = self.raw.get("raw_update")
         if isinstance(update, dict):
-            obj = update.get("message")
+            obj = cast("dict[str, object] | None", update.get("message"))
             if isinstance(obj, dict) and key in obj:
                 return obj[key]
             if key in update:
@@ -399,7 +398,7 @@ class Obj:
                     data["entities"] = ents
             if kbd is not None:
                 data["reply_markup"] = kbd
-            inline_mid = self.inline_message_id
+            inline_mid: dict[str, object] | str | bytes | int | None = self.inline_message_id
             if inline_mid is not None:
                 id_field = inline_mid if isinstance(inline_mid, dict) else {"_": "inputBotInlineMessageID", "raw": inline_mid} if isinstance(inline_mid, (str, bytes)) else None
                 if id_field is None:
@@ -420,7 +419,6 @@ class Obj:
         return await self.app.bot_req("editMessageText", chat_id=self.chat_id, message_id=int(self.msg_id), text=text, **data)
 
     async def reply(self, txt: str, kbd: Any | None = None, topic_id: int | None = None, link_options: Any | None = None, **kw: Any) -> Any:
-        from goygram import ext as rx
         if self.chat_id is None:
             return None
         if self.src == "bot" and self.app.bot is not None:
@@ -494,9 +492,9 @@ class Obj:
                 fd, path = tempfile.mkstemp(prefix="goygram-dl-")
                 os.close(fd)
                 os.unlink(path)
-                return await self.app.download_media(self.raw if isinstance(self.raw, dict) else self, path)
-            return await self.app.download_media(self.raw if isinstance(self.raw, dict) else self, destination)
-        media = self.get("document") or self.get("video") or self.get("audio") or self.get("voice") or self.get("animation") or self.get("video_note") or self.get("photo")
+                return await self.app.download_media(self.raw, path)
+            return await self.app.download_media(self.raw, destination)
+        media: dict[str, str] | list[dict[str, str]] | None = self.get("document") or self.get("video") or self.get("audio") or self.get("voice") or self.get("animation") or self.get("video_note") or self.get("photo")
         if isinstance(media, list):
             media = media[-1] if media else None
         file_id = media.get("file_id") if isinstance(media, dict) else None
@@ -547,7 +545,7 @@ class Obj:
             "input_message_content": message,
         }
         if kbd is not None:
-            markup = dump(kbd)
+            markup: list[object] | dict[str, object] | None = dump(kbd)
             if isinstance(markup, list):
                 markup = {"inline_keyboard": markup}
             result["reply_markup"] = markup

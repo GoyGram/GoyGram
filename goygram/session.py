@@ -46,7 +46,7 @@ class Session:
 
     @property
     def self_id(self) -> int | None:
-        user = self.data.get("user")
+        user: dict[str, Any] | None = self.data.get("user")
         if isinstance(user, dict):
             uid = user.get("id") or user.get("user_id")
             if uid and uid != 0:
@@ -60,7 +60,7 @@ class Session:
     def is_bot(self) -> bool:
         if bool(self.data.get("is_bot", False)):
             return True
-        user = self.data.get("user")
+        user: dict[str, Any] | None = self.data.get("user")
         if isinstance(user, dict) and bool(user.get("bot", False)):
             return True
         return False

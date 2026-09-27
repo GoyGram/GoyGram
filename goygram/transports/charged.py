@@ -2,7 +2,7 @@
 from __future__ import annotations
 import asyncio, hashlib, math, os, re as _re, secrets, tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, cast
 
 from goygram.errors import FileReferenceExpiredError, GoyGramError
 from goygram.transports.mtproto import MTNet
@@ -59,7 +59,7 @@ class _UploadLane:
             kw["file_total_parts"] = self.total
         act = "upload.saveBigFilePart" if self.big else "upload.saveFilePart"
         result = await self.conn.call(act, **kw)
-        if result is False or (isinstance(result, dict) and result.get("ok") is False):
+        if result.get("ok") is False:
             raise RuntimeError("upload part rejected")
         self.index += self.stride
 
@@ -85,8 +85,8 @@ class _DownloadLane:
         response = await self.conn.call("upload.getFile", location=self.location, offset=self.offset, limit=self.limit)
         self.remaining -= 1
         self.offset += self.stride
-        body = response.get("result") if isinstance(response, dict) and isinstance(response.get("result"), dict) else response
-        payload = body.get("bytes") if isinstance(body, dict) else None
+        body = cast(Dict[str, Any], response.get("result")) if isinstance(response.get("result"), dict) else response
+        payload = body.get("bytes")
         if isinstance(payload, str):
             try:
                 payload = bytes.fromhex(payload)
@@ -99,10 +99,10 @@ class _DownloadLane:
 
 async def _spawn_sender(mtnet: MTNet, host: str, port: int, auth_key: bytes | None, salt: bytes) -> ChargedSender:
     sender = ChargedSender(host, port, auth_key, salt, proxy=mtnet.proxy_url, app_name=mtnet.app_name, app_version=mtnet.app_version, device_model=mtnet.device_model, system_version=mtnet.system_version, system_lang_code=mtnet.system_lang_code, lang_pack=mtnet.lang_pack, lang_code=mtnet.lang_code)
-    sender._api_id = mtnet._api_id
+    sender.api_id = mtnet.api_id
     sender.layer = mtnet.layer
     await sender.ensure_auth_key()
-    await sender._ensure_reader()
+    await sender.ensure_reader()
     return sender
 
 
@@ -121,9 +121,9 @@ async def _file_dc_senders(mtnet: MTNet, count: int, dc_id: int) -> list[Charged
     if isinstance(cached, dict) and cached.get("key"):
         return [await _spawn_sender(mtnet, endpoint.host, endpoint.port, cached["key"], cached.get("salt") or b"\x00" * 8) for _ in range(count)]
     export = await mtnet.call("auth.exportAuthorization", dc_id=int(dc_id))
-    body = export.get("result") if isinstance(export, dict) and isinstance(export.get("result"), dict) else export
-    export_id = body.get("id") if isinstance(body, dict) else None
-    export_bytes = body.get("bytes") if isinstance(body, dict) else None
+    body = cast(Dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
+    export_id = body.get("id")
+    export_bytes = body.get("bytes")
     if isinstance(export_bytes, str):
         export_bytes = bytes.fromhex(export_bytes)
     if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
@@ -134,7 +134,7 @@ async def _file_dc_senders(mtnet: MTNet, count: int, dc_id: int) -> list[Charged
     if auth_key is None:
         raise RuntimeError("file DC authorization produced no auth key")
     mtnet.dc_auth_keys[int(dc_id)] = {"key": auth_key, "salt": first.server_salt}
-    hook = getattr(mtnet, "_entity_flush_hook", None)
+    hook = getattr(mtnet, "entity_flush_hook", None)
     if callable(hook):
         try:
             hook()
@@ -149,7 +149,7 @@ async def charged_upload(mtnet: MTNet, source: Any, *, file_name: str | None = N
         raise ValueError("part_size must be a multiple of 1024 between 1024 and 524288")
     close_source = False
     if isinstance(source, (str, os.PathLike)):
-        path = Path(source)
+        path = Path(os.fsdecode(cast("str | os.PathLike[str] | os.PathLike[bytes]", source)))
         handle = path.open("rb")
         close_source = True
         file_name = file_name or path.name
@@ -207,7 +207,7 @@ async def charged_download(mtnet: MTNet, location: Any, destination: Any, *, siz
     close_target = False
     temp_path: Path | None = None
     if isinstance(destination, (str, os.PathLike)):
-        target = Path(destination)
+        target = Path(os.fsdecode(cast("str | os.PathLike[str] | os.PathLike[bytes]", destination)))
         target.parent.mkdir(parents=True, exist_ok=True)
         handle = tempfile.NamedTemporaryFile(dir=target.parent, delete=False)
         temp_path = Path(handle.name)
@@ -225,7 +225,7 @@ async def charged_download(mtnet: MTNet, location: Any, destination: Any, *, siz
             if refreshed or media_source is None:
                 raise
             refreshed = True
-            location = await mtnet._refresh_file_reference(media_source, location)
+            location = await mtnet.refresh_file_reference(media_source, location)
         except GoyGramError as exc:
             match = _re.search(r"FILE_MIGRATE_(\d+)", str(exc).upper())
             if match is None:
@@ -282,7 +282,7 @@ async def charged_download(mtnet: MTNet, location: Any, destination: Any, *, siz
             except FileReferenceExpiredError:
                 if attempt >= 2 or media_source is None:
                     raise
-                location = await mtnet._refresh_file_reference(media_source, location)
+                location = await mtnet.refresh_file_reference(media_source, location)
     except Exception:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)

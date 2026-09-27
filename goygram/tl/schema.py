@@ -1,7 +1,7 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 import struct
-from typing import Any
+from typing import Any, Type, cast
 
 def pad4(n: int) -> int:
     return (4 - (n % 4)) % 4
@@ -51,7 +51,8 @@ def enc_val(tp: str, v: Any) -> bytes:
         return struct.pack("<I", 0x997275b5 if v else 0xbc799737)
     if tp.startswith("Vector<") and tp.endswith(">"):
         return enc_vec(tp[7:-1], list(v))
-    fn = getattr(type(v), "to_bytes", None)
+    cls = cast(Type[object], type(v))
+    fn = getattr(cls, "to_bytes", None)
     if fn is not None:
         return fn(v)
     raise TypeError(tp)

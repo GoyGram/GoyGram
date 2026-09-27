@@ -5,7 +5,7 @@ import json
 import re
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, cast
 
 log = logging.getLogger("goygram.tl.schema_loader")
 
@@ -109,9 +109,10 @@ def parse_api_json(raw: str) -> dict[str, Any]:
     document = json.loads(raw)
     result: dict[str, dict[str, dict[str, Any]]] = {"methods": {}, "constructors": {}}
     for source, target in (("methods", "methods"), ("constructors", "constructors")):
-        for item in document.get(source, []):
+        for item in cast(List[object], document.get(source, [])):
             if not isinstance(item, dict):
                 continue
+            item = cast(Dict[str, Any], item)
             name_key = "method" if source == "methods" else "predicate"
             name = item.get(name_key)
             if not isinstance(name, str):
@@ -122,8 +123,11 @@ def parse_api_json(raw: str) -> dict[str, Any]:
                 continue
             fields: list[dict[str, Any]] = []
             has_flags = False
-            for param in item.get("params", []):
-                if not isinstance(param, dict) or not isinstance(param.get("name"), str):
+            for param in cast(List[object], item.get("params", [])):
+                if not isinstance(param, dict):
+                    continue
+                param = cast(Dict[str, object], param)
+                if not isinstance(param.get("name"), str):
                     continue
                 field = _parse_field_type(str(param.get("type", "")))
                 field["name"] = param["name"]

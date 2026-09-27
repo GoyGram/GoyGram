@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List, cast
 
 
 class StateItem:
@@ -50,9 +50,10 @@ class FSMEngine:
         if type(snapshot) is not list:
             return
         now = time.time()
-        for item in snapshot:
+        for item in cast(List[object], snapshot):
             if type(item) is not dict:
                 continue
+            item = cast(Dict[str, Any], item)
             try:
                 chat_id = int(item["chat_id"])
                 user_id = int(item["user_id"])
@@ -62,7 +63,7 @@ class FSMEngine:
                 continue
             data = item.get("data", {})
             if expiry > now and type(data) is dict:
-                self._states[(chat_id, user_id)] = StateItem(state, data.copy(), expiry)
+                self._states[(chat_id, user_id)] = StateItem(state, cast(Dict[str, Any], data).copy(), expiry)
 
     def _changed(self) -> None:
         snap = self.snapshot()
