@@ -4,7 +4,7 @@ import asyncio, hashlib, json, os, secrets, struct, tempfile, time, urllib.parse
 from hashlib import sha1, sha256
 from pathlib import Path
 from typing import Any, Dict, Literal, Protocol, Sequence, Tuple, TypedDict, TYPE_CHECKING, Union, cast
-from goygram.errors import ConnectionClosedError, FileReferenceExpiredError, FloodWaitError, GoyGramError
+from goygram.errors import ChannelNotFoundError, ConnectionClosedError, FileReferenceExpiredError, FloodWaitError, GoyGramError
 from goygram.api.types import mtname
 import re as _re
 
@@ -25,6 +25,19 @@ def _inline_dc(obj: Any) -> int | None:
             found = _inline_dc(value)
             if found is not None:
                 return found
+    return None
+
+
+_INPUT_PEER_CHANNEL = 0x27BCBBFC
+
+
+def _peer_channel_id(peer: Any) -> int | None:
+    if isinstance(peer, int) and peer < -1000000000000:
+        return peer
+    if isinstance(peer, (bytes, bytearray, memoryview)):
+        raw = bytes(cast(Sequence[int], peer))
+        if len(raw) >= 12 and int.from_bytes(raw[:4], "little") == _INPUT_PEER_CHANNEL:
+            return -1000000000000 - int.from_bytes(raw[4:12], "little", signed=True)
     return None
 
 
@@ -1788,6 +1801,21 @@ class MTNet:
                 obj["access_hash"] = obj.get("access_hash") or entity.get("access_hash", 0)
         return self._resolve_peer(obj)
 
+    async def refresh_channel_hash(self, chat_id: int) -> bool:
+        if chat_id >= -1000000000000:
+            return False
+        channel_id = -1000000000000 - int(chat_id)
+        try:
+            result = await self._rpc_call("channels.getChannels", id=[{"_": "inputChannel", "channel_id": channel_id, "access_hash": 0}])
+        except Exception:
+            return False
+        body = result.get("result", result)
+        if not isinstance(body, dict):
+            return False
+        self._ingest_entities(cast(Dict[str, Any], body))
+        entity = self.entities.get(("chat", channel_id))
+        return bool(isinstance(entity, dict) and entity.get("access_hash"))
+
     def _resolve_channel(self, obj:dict[str,Any])->bytes:
         chat_id = obj.get('chat_id') or obj.get('channel')
         access_hash = obj.get('access_hash', 0)
@@ -2400,6 +2428,7 @@ class MTNet:
         if normalized == 'auth.checkPassword' and 'srp_id' not in kw and 'password' in kw and isinstance(kw['password'], str):
             return await self._auth_check_password_flow(kw['password'], int(kw.get('api_id', 0)))
         attempt = 0
+        rehash_done = False
         while True:
             try:
                 if dispatch_chat_id is not None:
@@ -2412,6 +2441,17 @@ class MTNet:
                     raise
                 attempt += 1
                 await asyncio.sleep(max(1, min(int(exc.seconds), 300)))
+            except ChannelNotFoundError:
+                chat_id = _peer_channel_id(kw.get("peer"))
+                if rehash_done or on_dc or attempt >= retry_budget or chat_id is None:
+                    raise
+                if not await self.refresh_channel_hash(chat_id):
+                    raise
+                rehash_done = True
+                attempt += 1
+                kw = dict(kw)
+                kw["peer"] = await self.resolve_peer(chat_id)
+                continue
             except GoyGramError as exc:
                 if on_dc or attempt >= retry_budget:
                     raise
