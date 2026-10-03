@@ -112,6 +112,20 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
             return {"_": "inlineButtonTypeCopy", "copy_text": str(b["copy_text"])}
         return {"_": "inlineButtonTypeCallback", "data": as_bytes(b.get("callback_data") or "noop")}
 
+    def button_style(b: dict[str, Any]) -> dict[str, Any]:
+        style = b.get("style")
+        icon = b.get("icon_custom_emoji_id")
+        if style is None and icon is None:
+            return {}
+        fields: dict[str, Any] = {"_": "keyboardButtonStyle"}
+        if style is not None:
+            if style not in ("primary", "success", "danger"):
+                raise ValueError("button style is invalid")
+            fields["bg_" + style] = True
+        if icon is not None:
+            fields["icon"] = int(icon)
+        return {"style": fields}
+
     def btn(b: object) -> dict[str, Any]:
         if isinstance(b, dict):
             d = cast(Dict[str, Any], b)
@@ -121,9 +135,7 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
             fn = getattr(type(b), "to_dict", None)
             d = fn(b) if fn is not None else {"text": str(b)}
         fields: dict[str, Any] = {"_": "keyboardInlineButton", "text": str(d.get("text", "")), "type": btn_type(d)}
-        icon = d.get("icon_custom_emoji_id")
-        if icon is not None:
-            fields["style"] = {"_": "keyboardButtonStyle", "icon": int(icon)}
+        fields.update(button_style(d))
         return fields
 
     def reply_btn(b: dict[str, Any]) -> dict[str, Any]:
@@ -134,7 +146,7 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
             t = {"_": "buttonTypeRequestGeoLocation"}
         elif b.get("request_poll"):
             t = {"_": "buttonTypeRequestPoll"}
-        return {"_": "keyboardButton", "text": str(b.get("text", "")), "type": t}
+        return {"_": "keyboardButton", "text": str(b.get("text", "")), "type": t, **button_style(b)}
 
     if isinstance(kbd, KbdBuilder):
         kbd = kbd.build()
