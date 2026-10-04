@@ -1,10 +1,11 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 import asyncio, hashlib, json, os, secrets, struct, tempfile, time, urllib.parse, logging
+from contextlib import suppress
 from hashlib import sha1, sha256
 from pathlib import Path
 from typing import Any, Dict, Literal, Protocol, Sequence, Tuple, TypedDict, TYPE_CHECKING, Union, cast
-from goygram.errors import ChannelNotFoundError, ConnectionClosedError, FileReferenceExpiredError, FloodWaitError, GoyGramError
+from goygram.errors import ChannelNotFoundError, ConnectionClosedError, FileReferenceExpiredError, FloodWaitError, GoyGramError, RPCError
 from goygram.api.types import mtname
 import re as _re
 
@@ -2332,28 +2333,33 @@ class MTNet:
         if isinstance(cached, dict) and cached.get("key"):
             sender.auth_key = cached["key"]
             sender.server_salt = cached.get("salt") or b"\x00" * 8
-        await sender.ensure_auth_key()
-        await sender.ensure_reader()
-        if isinstance(cached, dict) and cached.get("key"):
-            return sender
-        export = await self.call("auth.exportAuthorization", dc_id=int(dc_id), _on_dc=True)
-        body: dict[str, Any] = cast(Dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
-        export_id = body.get("id")
-        export_bytes = body.get("bytes")
-        if isinstance(export_bytes, str):
-            try:
-                export_bytes = bytes.fromhex(export_bytes)
-            except ValueError:
-                export_bytes = None
-        if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
-            raise RuntimeError("auth.exportAuthorization returned no usable payload")
-        await sender.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes), _on_dc=True)
-        if not getattr(self, "dc_auth_keys", None):
-            self.dc_auth_keys = {}
-        auth_key = sender.auth_key
-        if auth_key is None:
-            raise RuntimeError("exported DC authorization produced no auth key")
-        self.dc_auth_keys[int(dc_id)] = {"key": auth_key, "salt": sender.server_salt}
+        try:
+            await sender.ensure_auth_key()
+            await sender.ensure_reader()
+            if isinstance(cached, dict) and cached.get("key"):
+                return sender
+            export = await self.call("auth.exportAuthorization", dc_id=int(dc_id), _on_dc=True)
+            body: dict[str, Any] = cast(Dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
+            export_id = body.get("id")
+            export_bytes = body.get("bytes")
+            if isinstance(export_bytes, str):
+                try:
+                    export_bytes = bytes.fromhex(export_bytes)
+                except ValueError:
+                    export_bytes = None
+            if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
+                raise RuntimeError("auth.exportAuthorization returned no usable payload")
+            await sender.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes), _on_dc=True)
+            if not getattr(self, "dc_auth_keys", None):
+                self.dc_auth_keys = {}
+            auth_key = sender.auth_key
+            if auth_key is None:
+                raise RuntimeError("exported DC authorization produced no auth key")
+            self.dc_auth_keys[int(dc_id)] = {"key": auth_key, "salt": sender.server_salt}
+        except BaseException:
+            with suppress(Exception):
+                await sender.close()
+            raise
         hook = getattr(self, "entity_flush_hook", None)
         if callable(hook):
             try:
@@ -2373,6 +2379,20 @@ class MTNet:
             self._dc_locks: dict[int, asyncio.Lock] = {}
         lock = self._dc_locks.setdefault(dc_id, asyncio.Lock())
         async with lock:
+            sender = self._dc_senders.get(dc_id)
+            if sender is None or getattr(sender, "wr", None) is None:
+                sender = await self._open_dc(dc_id, endpoint)
+                self._dc_senders[dc_id] = sender
+        try:
+            return await sender.call(act, _on_dc=True, **kw)
+        except RPCError as exc:
+            if exc.code != 401 or exc.message not in ("SESSION_REVOKED", "AUTH_KEY_UNREGISTERED"):
+                raise
+        async with lock:
+            if self._dc_senders.get(dc_id) is sender:
+                self._dc_senders.pop(dc_id)
+                self.dc_auth_keys.pop(dc_id, None)
+                await sender.close()
             sender = self._dc_senders.get(dc_id)
             if sender is None or getattr(sender, "wr", None) is None:
                 sender = await self._open_dc(dc_id, endpoint)
