@@ -5,6 +5,10 @@ import inspect
 from typing import Any
 
 
+def utf16_slice(text: str, offset: int, length: int) -> str:
+    return text.encode("utf-16-le")[offset * 2:(offset + length) * 2].decode("utf-16-le")
+
+
 def print_methods(app: Any) -> None:
     lines: list[str] = []
     lines.append("=== GoyGram Developer Help ===")

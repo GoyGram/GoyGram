@@ -51,6 +51,8 @@ def enc_val(tp: str, v: Any) -> bytes:
         return struct.pack("<I", 0x997275b5 if v else 0xbc799737)
     if tp.startswith("Vector<") and tp.endswith(">"):
         return enc_vec(tp[7:-1], list(v))
+    if tp.startswith("!") and isinstance(v, bytes):
+        return v
     cls = cast(Type[object], type(v))
     fn = getattr(cls, "to_bytes", None)
     if fn is not None:
@@ -105,7 +107,7 @@ class PQInnerData(TlObj):
         return raw
 
 class Ping(TlObj):
-    __slots__ = ('ping_id')
+    __slots__ = ('ping_id',)
     cid = 0x7abe77ec
     res = 'Pong'
     def __init__(self, ping_id: Any) -> None:
@@ -116,7 +118,7 @@ class Ping(TlObj):
         return raw
 
 class MsgsAck(TlObj):
-    __slots__ = ('msg_ids')
+    __slots__ = ('msg_ids',)
     cid = 0x62d6b459
     res = 'MsgsAck'
     def __init__(self, msg_ids: Any) -> None:
@@ -136,7 +138,7 @@ class InvokeWithLayer(TlObj):
     def to_bytes(self) -> bytes:
         raw = struct.pack("<I", self.cid)
         raw += enc_val('int', self.layer)
-        raw += enc_val('bytes', self.query)
+        raw += enc_val('!X', self.query)
         return raw
 
 REG = {

@@ -77,7 +77,7 @@ class FSMEngine:
         existing = self._states.get(key)
         now = time.time()
         exp = now + (ttl if ttl is not None else self._ttl)
-        if existing is not None:
+        if existing is not None and existing.expiry > now:
             if data is not None:
                 existing.data.update(data)
             existing.state = state

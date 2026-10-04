@@ -56,6 +56,8 @@ struct TlFieldDef {
     #[serde(default)]
     is_vector: bool,
     #[serde(default)]
+    vector_bare: bool,
+    #[serde(default)]
     vector_inner: Option<String>,
     #[serde(default)]
     vector_inner_is_vector: bool,
@@ -286,12 +288,18 @@ fn read_field_value(py: Python<'_>, data: &[u8], pos: &mut usize, f: &TlFieldDef
         "double" | "Double" => Ok(read_f64(data, pos).map_err(PyValueError::new_err)?.to_object(py)),
         "Bool" | "boolTrue" | "boolFalse" => {
             let cid = read_u32(data, pos).map_err(PyValueError::new_err)?;
-            Ok((cid == 0x997275b5).to_object(py))
+            match cid {
+                0x997275b5 => Ok(true.to_object(py)),
+                0xbc799737 => Ok(false.to_object(py)),
+                _ => Err(PyValueError::new_err("invalid Bool constructor")),
+            }
         }
         "true" | "True" => Ok(true.to_object(py)),
         _ => {
             if f.is_vector {
                 read_tl_vector(py, data, pos, f)
+            } else if let Some(ctor) = schema_arc().and_then(|s| s.ctors.get(&f.ftype).cloned()) {
+                Ok(deserialize_fields(py, data, pos, &ctor.fields, ctor.has_flags, &f.ftype)?.into_any().unbind())
             } else {
                 deserialize_tl(py, data, pos)
             }
@@ -300,9 +308,11 @@ fn read_field_value(py: Python<'_>, data: &[u8], pos: &mut usize, f: &TlFieldDef
 }
 
 fn read_tl_vector(py: Python<'_>, data: &[u8], pos: &mut usize, f: &TlFieldDef) -> PyResult<PyObject> {
-    let vec_cid = read_u32(data, pos).map_err(PyValueError::new_err)?;
-    if vec_cid != 0x1cb5c415 {
-        return Err(PyValueError::new_err(format!("not a vector: {:08x}", vec_cid)));
+    if !f.vector_bare {
+        let vec_cid = read_u32(data, pos).map_err(PyValueError::new_err)?;
+        if vec_cid != 0x1cb5c415 {
+            return Err(PyValueError::new_err(format!("not a vector: {:08x}", vec_cid)));
+        }
     }
     let count = read_i32(data, pos).map_err(PyValueError::new_err)?;
     if count < 0 || count > 1_000_000 {
@@ -317,6 +327,7 @@ fn read_tl_vector(py: Python<'_>, data: &[u8], pos: &mut usize, f: &TlFieldDef) 
         flags_group: None,
         is_bare: false,
         is_vector: f.vector_inner_is_vector,
+        vector_bare: false,
         vector_inner: if f.vector_inner_is_vector { Some("int".to_string()) } else { None },
         vector_inner_is_vector: false,
     };
@@ -467,7 +478,7 @@ fn py_raw_bytes(val: &Bound<'_, PyAny>) -> Result<Vec<u8>, String> {
     if let Ok(l) = val.downcast::<PyList>() {
         let mut b = Vec::with_capacity(l.len());
         for item in l.iter() {
-            b.push(py_i64(&item)? as u8);
+            b.push(u8::try_from(py_i64(&item)?).map_err(|_| "byte out of range".to_string())?);
         }
         return Ok(b);
     }
@@ -506,14 +517,12 @@ fn serialize_tl_py(name: &str, args: &Bound<'_, PyDict>, cid: u32, fields: &[TlF
                 continue;
             }
             let val = args.get_item(&f.name).ok().flatten();
-            if f.flag_bit.is_some() {
-                if !flag_set(val.as_ref(), f.is_bare) {
+            if let Some(bit) = f.flag_bit {
+                let group = f.flags_group.as_deref().unwrap_or("flags");
+                if buckets[flag_index(group)] & (1 << bit) == 0 || f.is_bare {
                     continue;
                 }
-                if f.is_bare {
-                    continue;
-                }
-                let v = val.unwrap();
+                let v = val.filter(|v| !v.is_none()).ok_or_else(|| PyValueError::new_err(format!("{}: missing field {} for {}.{}", name, f.name, group, bit)))?;
                 let fb = encode_field_py(f, &v)
                     .map_err(|e| PyValueError::new_err(format!("{}:{}: {}", name, f.name, e)))?;
                 buf.extend_from_slice(&fb);
@@ -557,15 +566,7 @@ fn encode_field_py(f: &TlFieldDef, val: &Bound<'_, PyAny>) -> Result<Vec<u8>, St
             if b.len() == 16 {
                 return Ok(b);
             }
-            if b.len() == 8 {
-                let mut out = vec![0u8; 16];
-                out[..8].copy_from_slice(&b);
-                return Ok(out);
-            }
-            let n = py_i64(val).unwrap_or(0);
-            let mut out = vec![0u8; 16];
-            out[..8].copy_from_slice(&n.to_le_bytes());
-            Ok(out)
+            Err("int128 must be 16 bytes".to_string())
         }
         "int256" => {
             let b = py_raw_bytes(val)?;
@@ -580,7 +581,7 @@ fn encode_field_py(f: &TlFieldDef, val: &Bound<'_, PyAny>) -> Result<Vec<u8>, St
             } else if let Ok(b) = val.downcast::<PyBytes>() {
                 encode_tl_bytes(b.as_bytes())
             } else {
-                encode_tl_string("")
+                Err("string expected".to_string())
             }
         }
         "bytes" | "Bytes" => encode_tl_bytes(&py_raw_bytes(val)?),
@@ -589,7 +590,7 @@ fn encode_field_py(f: &TlFieldDef, val: &Bound<'_, PyAny>) -> Result<Vec<u8>, St
             Ok(n.to_le_bytes().to_vec())
         }
         "Bool" | "boolTrue" | "boolFalse" => {
-            let b = val.extract::<bool>().unwrap_or(false);
+            let b = val.extract::<bool>().map_err(|_| "bool expected".to_string())?;
             if b {
                 Ok(0x997275b5u32.to_le_bytes().to_vec())
             } else {
@@ -600,8 +601,10 @@ fn encode_field_py(f: &TlFieldDef, val: &Bound<'_, PyAny>) -> Result<Vec<u8>, St
         _ => {
             if f.is_vector {
                 encode_tl_vector_py(f, val)
-            } else if f.ftype.starts_with('!') {
-                encode_nested(val)
+            } else if let Some(ctor) = schema_arc().and_then(|s| s.ctors.get(&f.ftype).cloned()) {
+                let args = val.downcast::<PyDict>().map_err(|_| "bare constructor expected dict".to_string())?;
+                let encoded = serialize_tl_py(&f.ftype, args, ctor.cid, &ctor.fields, ctor.has_flags).map_err(|e| e.to_string())?;
+                Ok(encoded[4..].to_vec())
             } else {
                 encode_nested(val)
             }
@@ -640,6 +643,9 @@ fn encode_tl_string(s: &str) -> Result<Vec<u8>, String> {
 }
 
 fn encode_tl_bytes(b: &[u8]) -> Result<Vec<u8>, String> {
+    if b.len() > 0x00ff_ffff {
+        return Err("TL bytes length exceeds 24 bits".to_string());
+    }
     let mut buf = Vec::new();
     if b.len() <= 253 {
         buf.push(b.len() as u8);
@@ -664,7 +670,9 @@ fn encode_tl_vector_py(f: &TlFieldDef, val: &Bound<'_, PyAny>) -> Result<Vec<u8>
     };
     let inner_type = f.vector_inner.as_deref().unwrap_or("int");
     let mut buf: Vec<u8> = Vec::new();
-    buf.extend_from_slice(&0x1cb5c415u32.to_le_bytes());
+    if !f.vector_bare {
+        buf.extend_from_slice(&0x1cb5c415u32.to_le_bytes());
+    }
     buf.extend_from_slice(&(iter.len() as u32).to_le_bytes());
     for item in iter {
         let inner_field = TlFieldDef {
@@ -674,6 +682,7 @@ fn encode_tl_vector_py(f: &TlFieldDef, val: &Bound<'_, PyAny>) -> Result<Vec<u8>
             flags_group: None,
             is_bare: false,
             is_vector: f.vector_inner_is_vector,
+            vector_bare: false,
             vector_inner: if f.vector_inner_is_vector { Some("int".to_string()) } else { None },
             vector_inner_is_vector: false,
         };
@@ -952,6 +961,9 @@ fn aes_ige_dec_raw(data: &[u8], key: &[u8], iv: &[u8]) -> PyResult<Vec<u8>> {
 fn aes_gcm_encrypt(py: Python<'_>, key: &[u8], nonce: &[u8], plaintext: &[u8], aad: &[u8]) -> PyResult<Py<PyBytes>> {
     let cipher = Aes256Gcm::new_from_slice(key)
         .map_err(|e| PyRuntimeError::new_err(format!("AES-GCM key error: {}", e)))?;
+    if nonce.len() != 12 {
+        return Err(PyValueError::new_err("AES-GCM nonce must be 12 bytes"));
+    }
     let n = Nonce::from_slice(nonce);
     let ct = cipher.encrypt(n, Payload { msg: plaintext, aad })
         .map_err(|e| PyRuntimeError::new_err(format!("AES-GCM encrypt error: {}", e)))?;
@@ -962,6 +974,9 @@ fn aes_gcm_encrypt(py: Python<'_>, key: &[u8], nonce: &[u8], plaintext: &[u8], a
 fn aes_gcm_decrypt(py: Python<'_>, key: &[u8], nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> PyResult<Py<PyBytes>> {
     let cipher = Aes256Gcm::new_from_slice(key)
         .map_err(|e| PyRuntimeError::new_err(format!("AES-GCM key error: {}", e)))?;
+    if nonce.len() != 12 {
+        return Err(PyValueError::new_err("AES-GCM nonce must be 12 bytes"));
+    }
     let n = Nonce::from_slice(nonce);
     let pt = cipher.decrypt(n, Payload { msg: ciphertext, aad })
         .map_err(|e| PyRuntimeError::new_err(format!("AES-GCM decrypt error: {}", e)))?;

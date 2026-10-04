@@ -317,7 +317,7 @@ class _SearchIter:
 
 
 class _DialogIter:
-    __slots__ = ("app", "limit", "batch", "folder", "_offset_date", "_offset_id", "_left", "_buf", "_started")
+    __slots__ = ("app", "limit", "batch", "folder", "_offset_date", "_offset_id", "_offset_peer", "_left", "_buf", "_started")
 
     def __init__(self, app: "AppCore", limit: int, batch: int, folder: int) -> None:
         self.app = app
@@ -326,6 +326,7 @@ class _DialogIter:
         self.folder = folder
         self._offset_date = 0
         self._offset_id = 0
+        self._offset_peer: Any = {"_": "inputPeerEmpty"}
         self._left = self.limit
         self._buf: list[dict[str, Any] | None] = []
         self._started = False
@@ -341,14 +342,30 @@ class _DialogIter:
             "messages.getDialogs",
             offset_date=self._offset_date,
             offset_id=self._offset_id,
-            offset_peer={"_": "inputPeerEmpty"},
+            offset_peer=self._offset_peer,
+            folder_id=self.folder,
+            exclude_pinned=bool(self._offset_id),
             limit=min(self.batch, self._left) if self._left else self.batch,
             hash=0,
         )
         res: dict[str, Any] | None = raw.get("result", raw)
         dialogs: list[dict[str, Any] | None] | None = res.get("dialogs") if isinstance(res, dict) else None
-        if dialogs is None and isinstance(res, dict):
-            dialogs = [x for x in res.get("chats", []) + res.get("users", []) if isinstance(x, dict)]
+        if dialogs and isinstance(res, dict):
+            last = dialogs[-1]
+            if isinstance(last, dict):
+                peer: dict[str, Any] = last.get("peer") or {}
+                target = peer.get("user_id")
+                if "channel_id" in peer:
+                    target = -1000000000000 - int(peer["channel_id"])
+                elif "chat_id" in peer:
+                    target = -int(peer["chat_id"])
+                if target is not None:
+                    self._offset_peer = await app.mt.resolve_peer(target)
+                self._offset_id = int(last.get("top_message") or 0)
+                for message in cast(Sequence[Dict[str, Any]], res.get("messages") or []):
+                    if message.get("id") == self._offset_id and message.get("peer_id") == peer:
+                        self._offset_date = int(message.get("date") or 0)
+                        break
         return list(dialogs) if isinstance(dialogs, list) else []
 
     async def __anext__(self) -> Any:
@@ -483,7 +500,7 @@ class AppCore:
             self.mt.entity_flush_hook = self._entity_cache_schedule
         self.fsm = FSMEngine(backend=fsm_backend, on_change=fsm_on_change)
         self.disp = Disp(self, self.bus)
-        self._conv: dict[tuple[int | str, int | str | None], asyncio.Future[Obj]] = {}
+        self._conv: dict[tuple[int | str, int | str | None], tuple[asyncio.Future[Obj], Filter | None]] = {}
         self.hook: list[Fn] = []
         self.edit_hook: list[Fn] = []
         self.update_hook: list[Fn] = []
@@ -590,16 +607,13 @@ class AppCore:
             vault = self.session.path if getattr(self.session, "path", None) is not None else Path(f"{self.session_name}.vault")
             if vault is None:
                 return
-            try:
-                data = _read_vault(vault, Path(self.session_name).name) or {}
-            except Exception:
-                data = {}
+            data = _read_vault(vault, Path(self.session.name).name) or {}
             snapshot = self.mt.snapshot_entity_cache()
             snapshot = self.mt.merge_entity_cache(data.get("entities"), snapshot)
             if snapshot.get("users") or snapshot.get("chats") or self.mt.dc_auth_keys:
                 data["entities"] = snapshot
                 data["dc_auth_keys"] = {str(dc_id): {"key": entry["key"].hex(), "salt": (entry.get("salt") or b"").hex()} for dc_id, entry in self.mt.dc_auth_keys.items()}
-                _write_vault(vault, data, Path(self.session_name).name)
+                _write_vault(vault, data, Path(self.session.name).name)
                 self.mt.entity_cache_dirty = False
         except Exception:
             pass
@@ -634,15 +648,10 @@ class AppCore:
             host_ref = host
             def wrap(inner: Fn) -> Fn:
                 async def guarded(msg: "Obj") -> Any:
-                    try:
-                        if active_filter is None or active_filter(msg):
-                            return await inner(msg)
+                    if guarded not in host_ref or (active_filter is not None and not active_filter(msg)):
                         return None
-                    finally:
-                        try:
-                            host_ref.remove(guarded)
-                        except ValueError:
-                            pass
+                    host_ref.remove(guarded)
+                    return await inner(msg)
                 host_ref.append(guarded)
                 return inner
             if fn is not None:
@@ -696,7 +705,7 @@ class AppCore:
             return "mtproto"
         if self.mt is None:
             return "api"
-        return self.default_transport if self.default_transport != "auto" else "mtproto"
+        return "api" if self.via(0) == "bot" else "mtproto"
 
     def use(self, which: str) -> None:
         norm = {"api": "api", "bot": "api", "botapi": "api", "mt": "mtproto", "mtproto": "mtproto"}
@@ -758,7 +767,7 @@ class AppCore:
     async def get_self(self, *, full: bool = False, refresh: bool = False) -> dict[str, Any] | None:
         me = None if refresh else self._me_cache
         if me is None:
-            me = await self.get_me()
+            me = await self.get_me(refresh=refresh)
         if me is None:
             return None
         if not full:
@@ -816,7 +825,8 @@ class AppCore:
         async def _once() -> None:
             try:
                 await asyncio.sleep(seconds)
-                await _call(fn, *args, **kw)
+                if not self.stop_ev.is_set():
+                    await _call(fn, *args, **kw)
             except asyncio.CancelledError:
                 pass
         return asyncio.create_task(_once(), name="goygram-later")
@@ -825,15 +835,18 @@ class AppCore:
         key = (chat_id, user_id)
         fut: asyncio.Future[Obj] = asyncio.get_running_loop().create_future()
         if key in self._conv:
-            old = self._conv.pop(key)
+            old, _ = self._conv.pop(key)
             if not old.done():
                 old.set_exception(RuntimeError("conversation superseded"))
-        self._conv[key] = fut
+        self._conv[key] = (fut, filt)
         try:
             return await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
-            self._conv.pop(key, None)
             return None
+        finally:
+            current = self._conv.get(key)
+            if current is not None and current[0] is fut:
+                self._conv.pop(key, None)
 
     async def ask(self, chat_id: int | str, text: str, *, user_id: int | str | None = None, timeout: float = 60.0, kbd: Any = None) -> "Obj | None":
         if text:
@@ -846,22 +859,19 @@ class AppCore:
         chat_id = msg.chat_id
         if chat_id is None:
             return
-        key = (chat_id, None)
-        target = self._conv.pop(key, None)
-        if target is None and msg.from_id is not None:
-            target = self._conv.pop((chat_id, msg.from_id), None)
-        if target is None and msg.from_id is None:
-            for k in list(self._conv):
-                if k[0] == chat_id:
-                    target = self._conv.pop(k)
-                    break
-        if target is not None and not target.done():
+        for key in ((chat_id, None), (chat_id, msg.from_id)):
+            current = self._conv.get(key)
+            if current is None:
+                continue
+            target, filt = current
+            if target.done():
+                self._conv.pop(key, None)
+                continue
+            if filt is not None and not filt(msg):
+                continue
+            self._conv.pop(key, None)
             target.set_result(msg)
             return
-        key2 = (chat_id, msg.from_id)
-        target = self._conv.pop(key2, None)
-        if target is not None and not target.done():
-            target.set_result(msg)
 
     def _bot_method_name(self, name: str) -> str:
         return camel(name)
@@ -1034,12 +1044,16 @@ class AppCore:
     async def download_media(self, source: Any, destination: str, *, via: str | None = None, progress: Any = None) -> Any:
         media: dict[str, Any] | None = None
         src_kind = None
+        origin: dict[str, Any] | None = None
         if isinstance(source, tuple) and len(cast(Tuple[object, ...], source)) == 2 and isinstance(source[0], (int, str)) and isinstance(source[1], int):
+            origin = {"peer": source[0], "msg_id": int(source[1])}
             source = await self.get_msg(source[0], source[1], via=via)
         if isinstance(source, dict):
             source = cast(Dict[str, Any], source)
             src_kind = source.get("src")
             media = source.get("media") if isinstance(source.get("media"), dict) else source
+            if origin is None and isinstance(source.get("msg_id"), int) and source.get("chat_id") is not None:
+                origin = {"peer": source.get("chat_id"), "msg_id": int(cast(int, source.get("msg_id")))}
         else:
             src_kind = getattr(cast(object, source), "src", None)
             media = getattr(cast(object, source), "media", None)
@@ -1058,6 +1072,7 @@ class AppCore:
         location = self._media_location(media) or self._media_location(source if isinstance(source, dict) else getattr(cast(object, source), "raw", None))
         if location is None:
             raise ValueError("no downloadable media found in source")
+        media_source: Any = {**media, "message": origin} if (origin is not None and isinstance(media, dict)) else media
         if progress is not None:
             size = 0
             doc = media.get("document") if isinstance(media, dict) and isinstance(media.get("document"), dict) else media
@@ -1073,8 +1088,8 @@ class AppCore:
                 def sync_progress_cb(done: int, _t: int) -> None:
                     progress(done, wrap_total or done)
                 progress_cb = sync_progress_cb
-            return await self.mt.download_file(location, destination, progress=progress_cb, media_source=media)
-        return await self.mt.download_file(location, destination, media_source=media)
+            return await self.mt.download_file(location, destination, progress=progress_cb, media_source=media_source)
+        return await self.mt.download_file(location, destination, media_source=media_source)
 
     async def upload_file(self, source: Any, **kw: Any) -> Any:
         if self.mt is None:
@@ -1119,7 +1134,7 @@ class AppCore:
             plain, ents = html_to_entities(text)
             data["entities"] = ents
             text = plain
-        elif pm == "md":
+        elif pm in {"md", "markdown", "markdownv2"}:
             from goygram.sugar import md_to_entities
             plain, ents = md_to_entities(text)
             data["entities"] = ents
@@ -1132,11 +1147,22 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         data = dict(kw)
-        if act.startswith("messages.") and isinstance(data.get("reply_markup"), dict) and "inline_keyboard" in data.get("reply_markup", {}):
-            from goygram.types.kbd import kbd_to_tl
-            tl_kbd = kbd_to_tl(data["reply_markup"])
-            if tl_kbd is not None:
-                data["reply_markup"] = tl_kbd
+        if act.startswith("messages."):
+            pm = str(data.pop("parse_mode", "")).lower()
+            if "message" in data and pm in {"html", "md", "markdown", "markdownv2"}:
+                from goygram.sugar import html_to_entities, md_to_entities
+                parser = html_to_entities if pm == "html" else md_to_entities
+                data["message"], data["entities"] = parser(data["message"])
+            markup = data.pop("kbd", None)
+            if markup is not None:
+                data["reply_markup"] = markup
+            if "reply_markup" in data:
+                from goygram.types.kbd import kbd_to_tl
+                tl_kbd = kbd_to_tl(data["reply_markup"])
+                if tl_kbd is not None:
+                    data["reply_markup"] = tl_kbd
+            if isinstance(data.get("reply_to"), int):
+                data["reply_to"] = {"_": "inputReplyToMessage", "reply_to_msg_id": data["reply_to"]}
         if 'api_id' not in data and self.api_id is not None:
             data['api_id'] = self.api_id
         if 'api_hash' not in data and self.api_hash is not None:
@@ -1288,7 +1314,7 @@ class AppCore:
             plain, ents = html_to_entities(text)
             data["entities"] = ents
             text = plain
-        elif pm == "md":
+        elif pm in {"md", "markdown", "markdownv2"}:
             from goygram.sugar import md_to_entities
             plain, ents = md_to_entities(text)
             data["entities"] = ents
@@ -1305,7 +1331,11 @@ class AppCore:
             return True
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        await self.mt.resolve_peer(target)
+        peer = await self.mt.resolve_peer(target)
+        from goygram import ext
+        decoded = cast(Dict[str, Any], ext.deserialize_constructor(peer))
+        if decoded.get("_") == "inputPeerChannel":
+            return await self.mt_req("channels.deleteMessages", channel=await self._typed_peer(peer, "channel"), id=ids)
         return await self.mt_req("messages.deleteMessages", id=ids, revoke=revoke)
 
     async def get_chat(self, chat_id: int | str, *, via: str | None = None, refresh: bool = False) -> Any:
@@ -1321,9 +1351,23 @@ class AppCore:
             if self.mt is None:
                 raise RuntimeError("mt net is not configured")
             peer = await self.mt.resolve_peer(target)
-            info = await self.mt_req("messages.getPeerDialogs", peers=[peer])
+            info = await self.mt_req("messages.getPeerDialogs", peers=[{"_": "inputDialogPeer", "peer": peer}])
         self._chats[target] = info
         return info
+
+    async def _typed_peer(self, target: Any, kind: str) -> dict[str, Any]:
+        if self.mt is None:
+            raise RuntimeError("mt net is not configured")
+        from goygram import ext
+        peer = cast(Dict[str, Any], ext.deserialize_constructor(await self.mt.resolve_peer(target)))
+        ctor = peer.get("_")
+        if kind == "user" and ctor == "inputPeerSelf":
+            return {"_": "inputUserSelf"}
+        expected = "inputPeerUser" if kind == "user" else "inputPeerChannel"
+        if ctor != expected:
+            raise ValueError("expected a " + kind + " peer")
+        peer["_"] = "inputUser" if kind == "user" else "inputChannel"
+        return peer
 
     async def get_user(self, user_id: int | str, *, via: str | None = None, refresh: bool = False) -> Any:
         target = self.raw_chat(user_id)
@@ -1337,7 +1381,7 @@ class AppCore:
         else:
             if self.mt is None:
                 raise RuntimeError("mt net is not configured")
-            info = await self.mt_req("users.getUsers", id=[{"_": "inputUser", "user_id": target}])
+            info = await self.mt_req("users.getUsers", id=[await self._typed_peer(target, "user")])
             info = _find_ctor(info, "user") or info
         self._users[target] = info
         return info
@@ -1348,6 +1392,7 @@ class AppCore:
         to_target = self.raw_chat(to)
         if transport == "bot":
             return await self.bot_req("copyMessage", chat_id=to_target, from_chat_id=src_target, message_id=msg_id, **kw)
+        kw.setdefault("drop_author", True)
         return await self.forward_msg(from_chat, msg_id, to=to, via=via, **kw)
 
     async def forward_msg(self, from_chat: int | str, msg_id: int, *, to: int | str, via: str | None = None, **kw: Any) -> Any:
@@ -1373,10 +1418,11 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        mt_data: dict[str, Any] = {"peer": peer}
-        if max_id is not None:
-            mt_data["max_id"] = int(max_id)
-        return await self.mt_req("messages.readHistory", **mt_data)
+        from goygram import ext
+        decoded = cast(Dict[str, Any], ext.deserialize_constructor(peer))
+        if decoded.get("_") == "inputPeerChannel":
+            return await self.mt_req("channels.readHistory", channel=await self._typed_peer(peer, "channel"), max_id=int(max_id or 0))
+        return await self.mt_req("messages.readHistory", peer=peer, max_id=int(max_id or 0))
 
     async def send_reaction(self, chat_id: int | str, msg_id: int, emoji: str = "👍", *, big: bool = False, via: str | None = None) -> Any:
         transport = self.via(chat_id, via)
@@ -1402,7 +1448,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        return await self.mt_req("messages.updatePinnedMessage", peer=peer, msg_id=int(msg_id), unpin=False, silent=not notify)
+        return await self.mt_req("messages.updatePinnedMessage", peer=peer, id=int(msg_id), unpin=False, silent=not notify)
 
     async def unpin_msg(self, chat_id: int | str, msg_id: int, via: str | None = None) -> Any:
         transport = self.via(chat_id, via)
@@ -1412,7 +1458,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        return await self.mt_req("messages.updatePinnedMessage", peer=peer, msg_id=int(msg_id), unpin=True)
+        return await self.mt_req("messages.updatePinnedMessage", peer=peer, id=int(msg_id), unpin=True)
 
     async def unpin_all(self, chat_id: int | str, via: str | None = None) -> Any:
         transport = self.via(chat_id, via)
@@ -1428,11 +1474,17 @@ class AppCore:
         transport = self.via(chat_id, via)
         target = self.raw_chat(chat_id)
         if transport == "bot":
-            return await self.bot_req("copyMessage", chat_id=target, from_chat_id=target, message_id=msg_id)
+            raise NotImplementedError("get_msg requires the mtproto transport")
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        res = await self.mt_req("messages.getMessages", id=[{"_": "inputMessageID", "id": int(msg_id)}], peer=peer)
+        from goygram import ext
+        decoded = cast(Dict[str, Any], ext.deserialize_constructor(peer))
+        ids = [{"_": "inputMessageID", "id": int(msg_id)}]
+        if decoded.get("_") == "inputPeerChannel":
+            res = await self.mt_req("channels.getMessages", channel=await self._typed_peer(peer, "channel"), id=ids)
+        else:
+            res = await self.mt_req("messages.getMessages", id=ids)
         msgs: list[object] = res.get("messages", [])
         if not msgs:
             inner = cast(Dict[str, Any], res.get("result")) if isinstance(res.get("result"), dict) else {}
@@ -1445,6 +1497,9 @@ class AppCore:
         if transport == "bot":
             group: list[dict[str, object]] = []
             for m in media:
+                if isinstance(m, dict):
+                    group.append(dict(cast(Dict[str, Any], m)))
+                    continue
                 if isinstance(m, tuple):
                     m = cast(Tuple[str, object, str], m)
                     kind, src = m[0], m[1]
@@ -1473,9 +1528,9 @@ class AppCore:
                 kind, src, cap = "photo", m, None
             up = await self.mt.upload_file(src)
             if kind == "photo":
-                im = {"_": "inputMediaUploadedPhoto", "file": {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"]}}
+                im = {"_": "inputMediaUploadedPhoto", "file": {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")}}
             else:
-                im = {"_": "inputMediaUploadedDocument", "file": {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"]}, "mime_type": _guess_mime(src, kind), "attributes": [{"_": "documentAttributeFilename", "file_name": up["name"]}]}
+                im = {"_": "inputMediaUploadedDocument", "file": {"_": "inputFile", "id": up["id"], "parts": up["parts"], "name": up["name"], "md5_checksum": up.get("md5", "")}, "mime_type": _guess_mime(src, kind), "attributes": [{"_": "documentAttributeFilename", "file_name": up["name"]}]}
             singles.append({"_": "inputSingleMedia", "media": im, "random_id": secrets.randbits(63), "message": cap or ""})
         data = dict(kw)
         if reply_to is not None:
@@ -1516,7 +1571,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        geo = {"_": "geoPoint", "long": long, "lat": lat, "access_hash": 0}
+        geo = {"_": "inputGeoPoint", "long": long, "lat": lat}
         media = {"_": "inputMediaGeoPoint", "geo_point": geo}
         data = dict(kw)
         if reply_to is not None:
@@ -1535,7 +1590,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        geo = {"_": "geoPoint", "long": long, "lat": lat, "access_hash": 0}
+        geo = {"_": "inputGeoPoint", "long": long, "lat": lat}
         media = {"_": "inputMediaVenue", "geo_point": geo, "title": title, "address": address, "provider": "", "venue_id": "", "venue_type": ""}
         data = dict(kw)
         if reply_to is not None:
@@ -1561,8 +1616,7 @@ class AppCore:
             "question": {"_": "textWithEntities", "text": question, "entities": []},
             "answers": [{"_": "pollAnswer", "text": {"_": "textWithEntities", "text": o, "entities": []}, "option": bytes([i])} for i, o in enumerate(options)],
         }
-        if not anonymous:
-            media["poll"] = {"_": "poll", "id": 0, "question": {"_": "textWithEntities", "text": question, "entities": []}, "answers": media["answers"], "public_voters": True}
+        media["poll"] = {"_": "poll", "id": 0, "hash": 0, "question": media.pop("question"), "answers": media.pop("answers"), "public_voters": not anonymous}
         data = dict(kw)
         if reply_to is not None:
             data["reply_to"] = {"_": "inputReplyToMessage", "reply_to_msg_id": int(reply_to)}
@@ -1659,7 +1713,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("iter_participants requires the mtproto transport")
         target = self.raw_chat(chat_id)
-        peer = await self.mt.resolve_peer(target)
+        peer = await self._typed_peer(target, "channel")
         offset = 0
         seen = 0
         while True:
@@ -1747,20 +1801,18 @@ class AppCore:
         target = self.raw_chat(chat_id)
         transport = self.via(chat_id, via)
         if transport == "bot":
-            if full:
-                return await self.bot_req("getChatFullInfo", chat_id=target) if await self._bot_has("getChatFullInfo") else await self.bot_req("getChat", chat_id=target)
             return await self.bot_req("getChat", chat_id=target)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
         if full:
-            res = await self.mt_req("messages.getPeerDialogs", peers=[peer])
+            res = await self.mt_req("messages.getPeerDialogs", peers=[{"_": "inputDialogPeer", "peer": peer}])
             inner: dict[str, Any] | None = res.get("result", res)
             dialogs: list[object] | None = inner.get("dialogs") if isinstance(inner, dict) else None
             if dialogs:
                 return dialogs[0]
             return res
-        res = await self.mt_req("messages.getPeerDialogs", peers=[peer])
+        res = await self.mt_req("messages.getPeerDialogs", peers=[{"_": "inputDialogPeer", "peer": peer}])
         inner = res.get("result", res)
         chats: list[object] | None = inner.get("chats") if isinstance(inner, dict) else None
         users: list[object] | None = inner.get("users") if isinstance(inner, dict) else None
@@ -1787,7 +1839,7 @@ class AppCore:
             return await self.bot_req("banChatMember", **data)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        peer = await self.mt.resolve_peer(target)
+        peer = await self._typed_peer(target, "channel")
         uid = self.raw_chat(user_id)
         uper = await self.mt.resolve_peer(uid)
         data = {"channel": peer, "participant": uper}
@@ -1802,14 +1854,13 @@ class AppCore:
             return await self.bot_req("unbanChatMember", chat_id=target, user_id=self.raw_chat(user_id), only_if_banned=True)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        peer = await self.mt.resolve_peer(target)
+        peer = await self._typed_peer(target, "channel")
         uper = await self.mt.resolve_peer(self.raw_chat(user_id))
         return await self.mt_req("channels.editBanned", channel=peer, participant=uper, banned_rights={"_": "chatBannedRights", "until_date": 0, "view_messages": False})
 
     async def kick_member(self, chat_id: int | str, user_id: int | str, *, via: str | None = None) -> Any:
-        if self.via(chat_id, via) == "bot":
-            return await self.ban_member(chat_id, user_id, via=via) and await self.unban_member(chat_id, user_id, via=via)
-        return await self.ban_member(chat_id, user_id, via=via)
+        await self.ban_member(chat_id, user_id, via=via)
+        return await self.unban_member(chat_id, user_id, via=via)
 
     async def promote_member(self, chat_id: int | str, user_id: int | str, *, rights: dict[str, bool] | None = None, title: str | None = None, via: str | None = None) -> Any:
         transport = self.via(chat_id, via)
@@ -1835,8 +1886,8 @@ class AppCore:
             return await self.bot_req("promoteChatMember", **data)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        peer = await self.mt.resolve_peer(target)
-        uper = await self.mt.resolve_peer(self.raw_chat(user_id))
+        peer = await self._typed_peer(target, "channel")
+        uper = await self._typed_peer(self.raw_chat(user_id), "user")
         admin: dict[str, Any] = {"_": "chatAdminRights"}
         for k, v in r.items():
             admin[k] = bool(v)
@@ -1852,7 +1903,7 @@ class AppCore:
             return await self.bot_req("setChatTitle", chat_id=target, title=title)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        peer = await self.mt.resolve_peer(target)
+        peer = await self._typed_peer(target, "channel")
         return await self.mt_req("channels.editTitle", channel=peer, title=title)
 
     async def set_chat_about(self, chat_id: int | str, about: str, *, via: str | None = None) -> Any:
@@ -1863,7 +1914,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        return await self.mt_req("channels.editAbout", about=about, **{"channel": peer})
+        return await self.mt_req("messages.editChatAbout", peer=peer, about=about)
 
     async def create_invite_link(self, chat_id: int | str, *, name: str | None = None, expires: int | None = None, member_limit: int | None = None, via: str | None = None) -> Any:
         transport = self.via(chat_id, via)
@@ -1880,13 +1931,13 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        return await self.mt_req("channels.exportInvite", **{"channel": peer})
+        return await self.mt_req("messages.exportChatInvite", peer=peer, title=name, expire_date=expires, usage_limit=member_limit)
 
     async def join_chat(self, chat_id: int | str, *, via: str | None = None) -> Any:
         if self.mt is None:
             raise RuntimeError("join_chat requires the mtproto transport")
         target = self.raw_chat(chat_id)
-        peer = await self.mt.resolve_peer(target)
+        peer = await self._typed_peer(target, "channel")
         return await self.mt_req("channels.joinChannel", **{"channel": peer})
 
     async def leave_chat(self, chat_id: int | str, *, via: str | None = None) -> Any:
@@ -1896,7 +1947,7 @@ class AppCore:
             return await self.bot_req("leaveChat", chat_id=target)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        peer = await self.mt.resolve_peer(target)
+        peer = await self._typed_peer(target, "channel")
         return await self.mt_req("channels.leaveChannel", **{"channel": peer})
 
     async def iter_members(self, chat_id: int | str, *, limit: int = 0, batch: int = 200, via: str | None = None) -> Any:
@@ -1930,22 +1981,21 @@ class AppCore:
             data: dict[str, Any] = {"chat_id": target, "user_id": self.raw_chat(user_id)}
             mapping = {
                 "send_messages": "can_send_messages",
-                "send_media": "can_send_media_messages",
                 "send_polls": "can_send_polls",
-                "add_members": "can_add_page_members",
+                "add_members": "can_invite_users",
                 "pin_messages": "can_pin_messages",
                 "invite_members": "can_invite_users",
                 "change_info": "can_change_info",
             }
-            for k, bk in mapping.items():
-                if k in r:
-                    data[bk] = not bool(r[k])
+            data["permissions"] = {bk: not bool(r[k]) for k, bk in mapping.items() if k in r}
+            if "send_media" in r:
+                data["permissions"].update({"can_send_" + kind: not bool(r["send_media"]) for kind in ("audios", "documents", "photos", "videos", "video_notes", "voice_notes")})
             if until is not None:
                 data["until_date"] = until
             return await self.bot_req("restrictChatMember", **data)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        peer = await self.mt.resolve_peer(target)
+        peer = await self._typed_peer(target, "channel")
         uper = await self.mt.resolve_peer(self.raw_chat(user_id))
         banned = {"_": "chatBannedRights", "until_date": int(until or 0)}
         for k, v in r.items():
@@ -1962,18 +2012,18 @@ class AppCore:
             return await self.bot_req("promoteChatMember", **data)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        peer = await self.mt.resolve_peer(target)
-        uper = await self.mt.resolve_peer(self.raw_chat(user_id))
+        peer = await self._typed_peer(target, "channel")
+        uper = await self._typed_peer(self.raw_chat(user_id), "user")
         return await self.mt_req("channels.editAdmin", channel=peer, user_id=uper, admin_rights={"_": "chatAdminRights"})
 
     async def set_slow_mode(self, chat_id: int | str, seconds: int, *, via: str | None = None) -> Any:
         transport = self.via(chat_id, via)
         target = self.raw_chat(chat_id)
         if transport == "bot":
-            return await self.bot_req("setChatPermissions", chat_id=target, permissions={})
+            raise NotImplementedError("set_slow_mode requires the mtproto transport")
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
-        peer = await self.mt.resolve_peer(target)
+        peer = await self._typed_peer(target, "channel")
         return await self.mt_req("channels.editSlowMode", channel=peer, slowmode_seconds=int(seconds))
 
     async def get_invite_links(self, chat_id: int | str, *, admin_id: int | str | None = None, revoked: bool = False, limit: int = 100, via: str | None = None) -> Any:
@@ -1984,7 +2034,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        admin = await self.mt.resolve_peer(self.raw_chat(admin_id) if admin_id is not None else self.me)
+        admin = await self._typed_peer(self.raw_chat(admin_id) if admin_id is not None else "me", "user")
         return await self.mt_req("messages.getExportedChatInvites", peer=peer, admin_id=admin, limit=int(limit), revoked=revoked)
 
     async def edit_invite_link(self, chat_id: int | str, link: str, *, name: str | None = None, expires: int | None = None, member_limit: int | None = None, request_needed: bool | None = None, revoke: bool = False, via: str | None = None) -> Any:
@@ -2001,7 +2051,7 @@ class AppCore:
             if request_needed is not None:
                 data["creates_join_request"] = request_needed
             if revoke:
-                data["is_revoked"] = True
+                return await self.bot_req("revokeChatInviteLink", chat_id=target, invite_link=link)
             return await self.bot_req("editChatInviteLink", **data)
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
@@ -2030,8 +2080,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        uper = await self.mt.resolve_peer(self.raw_chat(user_id))
-        return await self.mt_req("messages.hideChatJoinRequest", peer=peer, user_id=uper, approved=True)
+        return await self.mt_req("messages.hideChatJoinRequest", peer=peer, user_id=await self._typed_peer(self.raw_chat(user_id), "user"), approved=True)
 
     async def decline_join_request(self, chat_id: int | str, user_id: int | str, *, via: str | None = None) -> Any:
         transport = self.via(chat_id, via)
@@ -2041,8 +2090,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
-        uper = await self.mt.resolve_peer(self.raw_chat(user_id))
-        return await self.mt_req("messages.hideChatJoinRequest", peer=peer, user_id=uper, approved=False)
+        return await self.mt_req("messages.hideChatJoinRequest", peer=peer, user_id=await self._typed_peer(self.raw_chat(user_id), "user"), approved=False)
 
     async def get_stars_balance(self, *, via: str | None = None) -> Any:
         if self.mt is None:
@@ -2083,14 +2131,21 @@ class AppCore:
             return await self.mt_req("stories.getStoriesByID", peer=peer, id=[int(i) for i in ids])
         return await self.mt_req("stories.getPeerStories", peer=peer)
 
+    async def _story_media(self, source: Any) -> dict[str, Any]:
+        if isinstance(source, dict) and str(cast(Dict[str, Any], source).get("_", "")).startswith("inputMedia"):
+            return cast(Dict[str, Any], source)
+        upload = await self.upload_file(source)
+        file = {"_": "inputFileBig" if upload.get("big") else "inputFile", "id": upload["id"], "parts": upload["parts"], "name": upload["name"], "md5_checksum": upload.get("md5", "")}
+        mime = _guess_mime(source, "photo")
+        if mime.startswith("image/"):
+            return {"_": "inputMediaUploadedPhoto", "file": file}
+        return {"_": "inputMediaUploadedDocument", "file": file, "mime_type": mime, "attributes": [{"_": "documentAttributeFilename", "file_name": upload["name"]}]}
+
     async def send_story(self, chat_id: int | str, media: Any, caption: str | None = None, *, pinned: bool = False, period: int = 86400, privacy: list[dict[str, Any]] | None = None, via: str | None = None, **kw: Any) -> Any:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
-        file = await self.upload_file(media)
-        doc = _find_ctor(file, "inputMediaUploadedDocument")
-        if doc is None and isinstance(file, dict):
-            doc = cast(Dict[str, Any], file)
+        doc = await self._story_media(media)
         data: dict[str, Any] = {"peer": peer, "media": doc, "privacy_rules": privacy or [{"_": "inputPrivacyValueAllowAll"}]}
         if caption:
             data["caption"] = caption
@@ -2107,9 +2162,7 @@ class AppCore:
         peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
         data: dict[str, Any] = {"peer": peer, "id": int(story_id)}
         if media is not None:
-            file = await self.upload_file(media)
-            doc = _find_ctor(file, "inputMediaUploadedDocument")
-            data["media"] = doc if doc is not None else file
+            data["media"] = await self._story_media(media)
         if caption is not None:
             data["caption"] = caption
         if privacy is not None:
@@ -2160,7 +2213,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(self.raw_chat(chat_id))
-        return await self.mt_req("messages.getScheduledMessages", peer=peer, id=[])
+        return await self.mt_req("messages.getScheduledHistory", peer=peer, hash=0)
 
     async def send_scheduled(self, chat_id: int | str, text: str, schedule_date: int, *, via: str | None = None, reply_to: int | None = None, kbd: Any | None = None, **kw: Any) -> Any:
         return await self.send_msg(chat_id, text, via=via, reply_to=reply_to, kbd=kbd, schedule_date=int(schedule_date), **kw)

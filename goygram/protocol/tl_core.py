@@ -23,12 +23,16 @@ def tl_str(s:str)->bytes: return tl_bytes(s.encode())
 
 class Reader:
     def __init__(self,b:bytes): self.b=b; self.p=0
-    def take(self,n:int)->bytes: x=self.b[self.p:self.p+n]; self.p+=n; return x
+    def take(self,n:int)->bytes:
+        if n < 0 or n > len(self.b) - self.p:
+            raise ValueError("unexpected eof or invalid length")
+        x=self.b[self.p:self.p+n]; self.p+=n; return x
     def u32(self)->int: return struct.unpack('<I',self.take(4))[0]
     def i32(self)->int: return struct.unpack('<i',self.take(4))[0]
     def i64(self)->int: return struct.unpack('<q',self.take(8))[0]
     def tl_bytes(self)->bytes:
         n0=self.take(1)[0]
+        if n0==255: raise ValueError("invalid TL bytes length")
         if n0==254: n=int.from_bytes(self.take(3),'little'); head=4
         else: n=n0; head=1
         d=self.take(n); pad=(4-((head+n)%4))%4; self.take(pad); return d
@@ -46,7 +50,7 @@ class MsgIdGen:
         self.last_time=0
         self.offset=0
     def next(self)->int:
-        now=int(time.time())
+        now=max(int(time.time()), self.last_time)
         self.offset = self.offset + 4 if now == self.last_time else 0
         self.last_time = now
         return (now * (2**32)) + self.offset

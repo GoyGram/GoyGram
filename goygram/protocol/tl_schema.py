@@ -20,7 +20,7 @@ def _parse_field_type(raw: str) -> dict[str, Any]:
         inner = _parse_field_type(m.group(1))
         if inner.get("is_vector"):
             inner["type"] = "Vector"
-        return {"type": "Vector", "is_vector": True, "vector_inner": inner["type"].lstrip("%"), "vector_inner_is_vector": inner.get("is_vector", False)}
+        return {"type": "Vector", "is_vector": True, "vector_bare": raw.startswith("vector<"), "vector_inner": inner["type"].lstrip("%"), "vector_inner_is_vector": inner.get("is_vector", False)}
 
     m = FLAG_RE.match(raw)
     if m:

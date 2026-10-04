@@ -1,6 +1,11 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 from typing import Any
+from html import escape
+
+
+def _attr(value: Any) -> str:
+    return escape(str(value), quote=True)
 
 
 class Rich:
@@ -52,17 +57,17 @@ class Rich:
         return self.add(f"<pre>{s}</pre>")
 
     def link(self, s: Any, url: str) -> "Rich":
-        return self.add(f'<a href="{url}">{s}</a>')
+        return self.add(f'<a href="{_attr(url)}">{s}</a>')
 
     def mention(self, uid: Any, name: str) -> "Rich":
         return self.add(f'<a href="tg://user?id={uid}">{name}</a>')
 
     def emoji(self, eid: Any, alt: str = "❤") -> "Rich":
-        return self.add(f'<tg-emoji emoji-id="{eid}">{alt}</tg-emoji>')
+        return self.add(f'<tg-emoji emoji-id="{_attr(eid)}">{alt}</tg-emoji>')
 
     def time(self, ts: Any, fmt: str = "wDT", label: str | None = None) -> "Rich":
         inner = label if label is not None else ""
-        return self.add(f'<tg-time unix="{ts}" format="{fmt}">{inner}</tg-time>')
+        return self.add(f'<tg-time unix="{_attr(ts)}" format="{_attr(fmt)}">{inner}</tg-time>')
 
     def heading(self, s: Any, level: int = 1) -> "Rich":
         lv = max(1, min(6, int(level)))
@@ -95,16 +100,16 @@ class Rich:
     def img(self, url: str, caption: str | None = None, cite: str | None = None) -> "Rich":
         if caption is not None or cite is not None:
             inner = f"<figcaption>{caption or ''}{f'<cite>{cite}</cite>' if cite else ''}</figcaption>"
-            return self.add(f'<img src="{url}"/>{inner}')
-        return self.add(f'<img src="{url}"/>')
+            return self.add(f'<img src="{_attr(url)}"/>{inner}')
+        return self.add(f'<img src="{_attr(url)}"/>')
 
     def video(self, url: str, caption: str | None = None) -> "Rich":
-        return self.add(f'<video src="{url}">{f"<figcaption>{caption}</figcaption>" if caption else ""}</video>')
+        return self.add(f'<video src="{_attr(url)}">{f"<figcaption>{caption}</figcaption>" if caption else ""}</video>')
 
     def collage(self, media: list[str], caption: str | None = None, cite: str | None = None) -> "Rich":
         self.add("<tg-collage>")
         for m in media:
-            self.add(f'<img src="{m}"/>')
+            self.add(f'<img src="{_attr(m)}"/>')
         if caption or cite:
             self.add(f"<figcaption>{caption or ''}{f'<cite>{cite}</cite>' if cite else ''}</figcaption>")
         return self.add("</tg-collage>")
@@ -113,51 +118,51 @@ class Rich:
         self.add("<tg-slideshow>")
         for kind, m in media:
             if kind == "video":
-                self.add(f'<video src="{m}"/>')
+                self.add(f'<video src="{_attr(m)}"/>')
             else:
-                self.add(f'<img src="{m}"/>')
+                self.add(f'<img src="{_attr(m)}"/>')
         if caption or cite:
             self.add(f"<figcaption>{caption or ''}{f'<cite>{cite}</cite>' if cite else ''}</figcaption>")
         return self.add("</tg-slideshow>")
 
     def map(self, lat: Any, long: Any, zoom: int = 14) -> "Rich":
-        return self.add(f'<tg-map lat="{lat}" long="{long}" zoom="{zoom}"/>')
+        return self.add(f'<tg-map lat="{_attr(lat)}" long="{_attr(long)}" zoom="{_attr(zoom)}"/>')
 
     def math(self, src: str) -> "Rich":
         return self.add(f"<tg-math>{src}</tg-math>")
 
     def anchor(self, name: str) -> "Rich":
-        return self.add(f'<a name="{name}"></a>')
+        return self.add(f'<a name="{_attr(name)}"></a>')
 
     def btn_url(self, s: str, url: str, *, style: str | None = None) -> "Rich":
-        st = f' style="{style}"' if style else ""
-        return self.add(f'<tg-button type="url"{st} url="{url}">{s}</tg-button>')
+        st = f' style="{_attr(style)}"' if style else ""
+        return self.add(f'<tg-button type="url"{st} url="{_attr(url)}">{s}</tg-button>')
 
     def btn_user(self, s: str, uid: Any, *, style: str | None = None) -> "Rich":
-        st = f' style="{style}"' if style else ""
+        st = f' style="{_attr(style)}"' if style else ""
         return self.add(f'<tg-button type="url"{st} url="tg://user?id={uid}">{s}</tg-button>')
 
     def btn_cb(self, s: str, data: str, *, style: str | None = None) -> "Rich":
-        st = f' style="{style}"' if style else ""
-        return self.add(f'<tg-button type="callback_data"{st} data="{data}">{s}</tg-button>')
+        st = f' style="{_attr(style)}"' if style else ""
+        return self.add(f'<tg-button type="callback_data"{st} data="{_attr(data)}">{s}</tg-button>')
 
     def btn_app(self, s: str, url: str, *, style: str | None = None) -> "Rich":
-        st = f' style="{style}"' if style else ""
-        return self.add(f'<tg-button type="web_app"{st} url="{url}">{s}</tg-button>')
+        st = f' style="{_attr(style)}"' if style else ""
+        return self.add(f'<tg-button type="web_app"{st} url="{_attr(url)}">{s}</tg-button>')
 
     def btn_login(self, s: str, url: str, *, forward_text: str | None = None, write_access: bool = False, style: str | None = None) -> "Rich":
-        st = f' style="{style}"' if style else ""
-        ft = f' forward-text="{forward_text}"' if forward_text else ""
+        st = f' style="{_attr(style)}"' if style else ""
+        ft = f' forward-text="{_attr(forward_text)}"' if forward_text else ""
         wa = " request-write-access" if write_access else ""
-        return self.add(f'<tg-button type="login_url"{st} url="{url}"{ft}{wa}>{s}</tg-button>')
+        return self.add(f'<tg-button type="login_url"{st} url="{_attr(url)}"{ft}{wa}>{s}</tg-button>')
 
     def btn_inline(self, s: str, query: str, *, current: bool = False, style: str | None = None) -> "Rich":
-        st = f' style="{style}"' if style else ""
+        st = f' style="{_attr(style)}"' if style else ""
         t = "switch_inline_query_current_chat" if current else "switch_inline_query"
-        return self.add(f'<tg-button type="{t}"{st} query="{query}">{s}</tg-button>')
+        return self.add(f'<tg-button type="{_attr(t)}"{st} query="{_attr(query)}">{s}</tg-button>')
 
     def btn_inline_chosen(self, s: str, query: str, *, allow_user: bool = False, allow_bot: bool = False, allow_group: bool = False, allow_channel: bool = False, style: str | None = None) -> "Rich":
-        st = f' style="{style}"' if style else ""
+        st = f' style="{_attr(style)}"' if style else ""
         flags = ""
         if allow_user:
             flags += " allow-user-chats"
@@ -167,23 +172,23 @@ class Rich:
             flags += " allow-group-chats"
         if allow_channel:
             flags += " allow-channel-chats"
-        return self.add(f'<tg-button type="switch_inline_query_chosen_chat"{st} query="{query}"{flags}>{s}</tg-button>')
+        return self.add(f'<tg-button type="switch_inline_query_chosen_chat"{st} query="{_attr(query)}"{flags}>{s}</tg-button>')
 
     def btn_copy(self, s: str, text: str) -> "Rich":
-        return self.add(f'<tg-button type="copy_text" text="{text}">{s}</tg-button>')
+        return self.add(f'<tg-button type="copy_text" text="{_attr(text)}">{s}</tg-button>')
 
     def btn_disabled(self, s: str) -> "Rich":
         return self.add(f'<tg-button type="disabled">{s}</tg-button>')
 
     def btn_row(self, *buttons: "Rich", align: str = "left") -> "Rich":
-        self.add(f'<tg-button-row align="{align}">')
+        self.add(f'<tg-button-row align="{_attr(align)}">')
         for b in buttons:
             self.add(b)
         return self.add("</tg-button-row>")
 
     def buttons(self, rows: list[list[dict[str, Any]]], align: str = "left") -> "Rich":
         for row in rows:
-            self.add(f'<tg-button-row align="{align}">')
+            self.add(f'<tg-button-row align="{_attr(align)}">')
             for b in row:
                 self.add(btn_html(b))
             self.add("</tg-button-row>")
@@ -225,17 +230,17 @@ class Rich:
 
 def btn_html(b: dict[str, Any]) -> str:
     btype = b.get("type", "url")
-    attrs = f'type="{btype}"'
+    attrs = f'type="{_attr(btype)}"'
     if b.get("style"):
-        attrs += f' style="{b["style"]}"'
+        attrs += f' style="{_attr(b["style"])}"'
     if b.get("url") is not None:
-        attrs += f' url="{b["url"]}"'
+        attrs += f' url="{_attr(b["url"])}"'
     if b.get("data") is not None:
-        attrs += f' data="{b["data"]}"'
+        attrs += f' data="{_attr(b["data"])}"'
     if b.get("query") is not None:
-        attrs += f' query="{b["query"]}"'
+        attrs += f' query="{_attr(b["query"])}"'
     if b.get("text") is not None:
-        attrs += f' text="{b["text"]}"'
+        attrs += f' text="{_attr(b["text"])}"'
     return f"<tg-button {attrs}>{b.get('label', '')}</tg-button>"
 
 

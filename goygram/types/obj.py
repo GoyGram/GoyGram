@@ -4,6 +4,7 @@ from __future__ import annotations
 import secrets
 from typing import Any, List, cast
 from goygram.api.types import dump
+from goygram.utils import utf16_slice
 
 
 class Obj:
@@ -89,9 +90,9 @@ class Obj:
 
     @property
     def chat_type(self) -> Any:
-        v = self.raw.get("chat_type")
+        v = self._value("chat_type")
         if v is None:
-            chat: dict[str, str] | None = self.raw.get("chat")
+            chat: dict[str, str] | None = self._value("chat")
             if isinstance(chat, dict):
                 return chat.get("type")
         return v
@@ -110,18 +111,18 @@ class Obj:
 
     @property
     def urls(self) -> list[str]:
-        raw: list[dict[str, Any] | None] = self.raw.get("entities") or []
+        raw: list[dict[str, Any]] = self.entities
         out: list[str] = []
         for ent in raw:
-            if isinstance(ent, dict) and ent.get("type") == "url":
+            if ent.get("type") == "url":
                 off = int(ent.get("offset", 0))
                 ln = int(ent.get("length", 0))
-                out.append(self.text[off:off + ln])
+                out.append(utf16_slice(self.text, off, ln))
         return out
 
     @property
     def entities(self) -> list[dict[str, Any]]:
-        v: list[dict[str, Any]] | None = self.raw.get("entities")
+        v: list[dict[str, Any]] | None = self._value("entities") or self._value("caption_entities")
         return v if isinstance(v, list) else []
 
     @property
@@ -135,7 +136,7 @@ class Obj:
 
     @property
     def caption(self) -> str:
-        return str(self.raw.get("caption", "") or "")
+        return str(self._value("caption", "") or "")
 
     @property
     def is_private(self) -> bool:
@@ -147,14 +148,14 @@ class Obj:
 
     @property
     def chat_title(self) -> str | None:
-        chat: dict[str, str] | None = self.raw.get("chat")
+        chat: dict[str, str] | None = self._value("chat")
         if isinstance(chat, dict):
             return chat.get("title") or chat.get("first_name") or chat.get("username")
         return None
 
     @property
     def username(self) -> str | None:
-        chat: dict[str, str] | None = self.raw.get("chat")
+        chat: dict[str, str] | None = self._value("chat")
         if isinstance(chat, dict):
             return chat.get("username")
         return None
@@ -169,7 +170,7 @@ class Obj:
 
     @property
     def file_name(self) -> str | None:
-        raw = self.raw
+        raw = self
         for key in ("document", "video", "audio", "voice", "animation", "video_note"):
             v: dict[str, str] | None = raw.get(key)
             if isinstance(v, dict) and v.get("file_name"):
@@ -178,7 +179,7 @@ class Obj:
 
     @property
     def mime(self) -> str | None:
-        raw = self.raw
+        raw = self
         for key in ("document", "video", "audio", "voice", "animation", "video_note"):
             v: dict[str, str] | None = raw.get(key)
             if isinstance(v, dict) and v.get("mime_type"):
@@ -196,22 +197,26 @@ class Obj:
 
     @property
     def date_ts(self) -> int | None:
-        v = self.raw.get("date")
+        v = self._value("date")
         return int(v) if v is not None else None
 
     @property
     def edit_date_ts(self) -> int | None:
-        v = self.raw.get("edit_date")
+        v = self._value("edit_date")
         return int(v) if v is not None else None
 
     @property
     def is_reply(self) -> bool:
-        return bool(self.raw.get("reply_to_message"))
+        return bool(self._value("reply_to_message"))
 
     @property
     def reply_msg(self) -> "Obj | None":
-        r: dict[str, Any] | None = self.raw.get("reply_to_message")
+        r: dict[str, Any] | None = self._value("reply_to_message")
         if isinstance(r, dict):
+            if self.src == "bot":
+                chat: dict[str, Any] = r.get("chat") or {}
+                sender: dict[str, Any] = r.get("from") or {}
+                r = {**r, "kind": "msg", "msg_id": r.get("message_id"), "chat_id": chat.get("id", self.chat_id), "from_id": sender.get("id")}
             return Obj(self.src, r, self.app)
         return None
 
@@ -233,7 +238,7 @@ class Obj:
         first = self._value("first_name")
         last = self._value("last_name")
         if first is None or last is None:
-            chat: dict[str, str] | None = self.raw.get("chat")
+            chat: dict[str, str] | None = self._value("chat")
             if isinstance(chat, dict):
                 if first is None:
                     first = chat.get("first_name") or chat.get("title")
@@ -252,7 +257,7 @@ class Obj:
     def ago(self) -> str:
         from datetime import datetime, timezone
 
-        ts = self.raw.get("date")
+        ts = self._value("date")
         if ts is None:
             return ""
         delta = datetime.now(tz=timezone.utc).timestamp() - float(ts)
@@ -301,10 +306,14 @@ class Obj:
         if isinstance(source, dict):
             if key in source:
                 return source[key]
-            for name in ("message", "edited_message", "channel_post", "edited_channel_post"):
-                obj: dict[str, object] | None = source.get(name)
-                if isinstance(obj, dict) and key in obj:
-                    return obj[key]
+            for name in ("message", "edited_message", "channel_post", "edited_channel_post", "callback_query", "inline_query", "poll", "poll_answer", "chat_member", "my_chat_member"):
+                obj: dict[str, Any] | None = source.get(name)
+                if isinstance(obj, dict):
+                    if key in obj:
+                        return obj[key]
+                    message = obj.get("message")
+                    if isinstance(message, dict) and key in message:
+                        return cast("dict[str, Any]", message)[key]
         update: dict[str, Any] | None = self.raw.get("raw_update")
         if isinstance(update, dict):
             obj = cast("dict[str, object] | None", update.get("message"))
@@ -391,7 +400,7 @@ class Obj:
                 text, ents = html_to_entities(text)
                 if ents:
                     data["entities"] = ents
-            elif pm == "md":
+            elif pm in {"md", "markdown", "markdownv2"}:
                 from goygram.sugar import md_to_entities
                 text, ents = md_to_entities(text)
                 if ents:
@@ -423,8 +432,8 @@ class Obj:
             return None
         if self.src == "bot" and self.app.bot is not None:
             data = dict(kw)
-            if self.id is not None:
-                data["reply_parameters"] = {"message_id": self.id}
+            if self.msg_id is not None:
+                data["reply_parameters"] = {"message_id": self.msg_id}
             if kbd is not None:
                 self._kbd(data, kbd)
             if topic_id is not None:
@@ -435,8 +444,8 @@ class Obj:
         if self.app.mt is not None:
             data = dict(kw)
             peer = await self.app.mt.resolve_peer(self.chat_id)
-            if self.id is not None:
-                data["reply_to"] = {"_": "inputReplyToMessage", "reply_to_msg_id": int(self.id)}
+            if self.msg_id is not None:
+                data["reply_to"] = {"_": "inputReplyToMessage", "reply_to_msg_id": int(self.msg_id)}
             if kbd is not None:
                 data["kbd"] = kbd
             if link_options is not None:
@@ -452,37 +461,37 @@ class Obj:
         data["reply_markup"] = dump(kbd)
 
     async def forward_to(self, chat_id: int | str, *, via: str | None = None, **kw: Any) -> Any:
-        if self.chat_id is None or self.id is None:
+        if self.chat_id is None or self.msg_id is None:
             return None
         if self.src == "bot":
-            return await self.app.bot_req("forwardMessage", chat_id=chat_id, from_chat_id=self.chat_id, message_id=int(self.id), **kw)
+            return await self.app.bot_req("forwardMessage", chat_id=chat_id, from_chat_id=self.chat_id, message_id=int(self.msg_id), **kw)
         from_peer = await self.app.mt.resolve_peer(self.chat_id)
         to_peer = await self.app.mt.resolve_peer(self.app.raw_chat(chat_id))
-        return await self.app.mt_req("messages.forwardMessages", from_peer=from_peer, to_peer=to_peer, id=[int(self.id)], random_id=[secrets.randbits(63)], **kw)
+        return await self.app.mt_req("messages.forwardMessages", from_peer=from_peer, to_peer=to_peer, id=[int(self.msg_id)], random_id=[secrets.randbits(63)], **kw)
 
     async def pin(self, *, disable_notification: bool = False, **kw: Any) -> Any:
-        if self.chat_id is None or self.id is None:
+        if self.chat_id is None or self.msg_id is None:
             return None
         if self.src == "bot":
-            return await self.app.bot_req("pinChatMessage", chat_id=self.chat_id, message_id=int(self.id), disable_notification=disable_notification, **kw)
+            return await self.app.bot_req("pinChatMessage", chat_id=self.chat_id, message_id=int(self.msg_id), disable_notification=disable_notification, **kw)
         peer = await self.app.mt.resolve_peer(self.chat_id)
-        return await self.app.mt_req("messages.updatePinnedMessage", peer=peer, id=int(self.id), silent=disable_notification, **kw)
+        return await self.app.mt_req("messages.updatePinnedMessage", peer=peer, id=int(self.msg_id), silent=disable_notification, **kw)
 
     async def unpin(self, **kw: Any) -> Any:
-        if self.chat_id is None or self.id is None:
+        if self.chat_id is None or self.msg_id is None:
             return None
         if self.src == "bot":
-            return await self.app.bot_req("unpinChatMessage", chat_id=self.chat_id, message_id=int(self.id), **kw)
+            return await self.app.bot_req("unpinChatMessage", chat_id=self.chat_id, message_id=int(self.msg_id), **kw)
         peer = await self.app.mt.resolve_peer(self.chat_id)
-        return await self.app.mt_req("messages.updatePinnedMessage", peer=peer, id=int(self.id), unpin=True, **kw)
+        return await self.app.mt_req("messages.updatePinnedMessage", peer=peer, id=int(self.msg_id), unpin=True, **kw)
 
     async def react(self, reaction: Any, **kw: Any) -> Any:
-        if self.chat_id is None or self.id is None:
+        if self.chat_id is None or self.msg_id is None:
             return None
         if self.src == "bot":
-            return await self.app.bot_req("setMessageReaction", chat_id=self.chat_id, message_id=int(self.id), reaction=reaction, **kw)
+            return await self.app.bot_req("setMessageReaction", chat_id=self.chat_id, message_id=int(self.msg_id), reaction=reaction, **kw)
         peer = await self.app.mt.resolve_peer(self.chat_id)
-        return await self.app.mt_req("messages.sendReaction", peer=peer, msg_id=int(self.id), reaction=reaction, **kw)
+        return await self.app.mt_req("messages.sendReaction", peer=peer, msg_id=int(self.msg_id), reaction=reaction, **kw)
 
     async def download(self, destination: str | None = None) -> Any:
         if self.src != "bot":
@@ -512,12 +521,12 @@ class Obj:
         return self.app.mt
 
     async def delete(self) -> Any:
-        if self.chat_id is None or self.id is None:
+        if self.chat_id is None or self.msg_id is None:
             return None
         if self.src == "bot" and self.app.bot is not None:
-            return await self.app.bot_req("deleteMessage", chat_id=self.chat_id, message_id=self.id)
+            return await self.app.bot_req("deleteMessage", chat_id=self.chat_id, message_id=self.msg_id)
         if self.app.mt is not None:
-            return await self.app.mt_req("messages.deleteMessages", id=[int(self.id)], revoke=True)
+            return await self.app.delete_msg(self.chat_id, int(self.msg_id), via=self.src)
         return None
 
     @staticmethod

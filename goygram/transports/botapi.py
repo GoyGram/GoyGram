@@ -72,6 +72,7 @@ class BotNet:
         self.web_runner: Any | None = None
         self.web_site: Any | None = None
         self.webhook_seen: set[int] = set()
+        self._webhook_lock = asyncio.Lock()
         self.webhook_highest_update_id = -1
 
     def _save_offset(self, offset: int) -> None:
@@ -144,17 +145,18 @@ class BotNet:
         if not isinstance(update, dict) or not isinstance(update.get("update_id"), int):
             return web.json_response({"ok": False, "error": "invalid update"}, status=400)
         update_id = int(update["update_id"])
-        if update_id <= self.webhook_highest_update_id or update_id in self.webhook_seen:
-            return web.json_response({"ok": True, "duplicate": True})
-        pkt = self.norm(update)
-        if pkt is not None:
-            await self.bus.push("bot", pkt)
-        self.webhook_seen.add(update_id)
-        self.webhook_highest_update_id = max(self.webhook_highest_update_id, update_id)
-        if len(self.webhook_seen) > 4096:
-            floor = self.webhook_highest_update_id - 2048
-            self.webhook_seen = {item for item in self.webhook_seen if item >= floor}
-        return web.json_response({"ok": True})
+        async with self._webhook_lock:
+            if update_id in self.webhook_seen:
+                return web.json_response({"ok": True, "duplicate": True})
+            pkt = self.norm(update)
+            if pkt is not None:
+                await self.bus.push("bot", pkt)
+            self.webhook_seen.add(update_id)
+            self.webhook_highest_update_id = max(self.webhook_highest_update_id, update_id)
+            if len(self.webhook_seen) > 4096:
+                floor = self.webhook_highest_update_id - 2048
+                self.webhook_seen = {item for item in self.webhook_seen if item >= floor}
+            return web.json_response({"ok": True})
 
     async def start_webhook(self) -> None:
         if not self.webhook_url:
@@ -233,7 +235,7 @@ class BotNet:
             raise RuntimeError("botapi getFile returned no file_path")
         await self.boot()
         assert self.sess is not None
-        url = f"https://api.telegram.org/file/bot{self.token}/{info['file_path']}"
+        url = f"{self.base.rsplit('/bot', 1)[0]}/file/bot{self.token}/{info['file_path']}"
         async with self.sess.get(url) as response:
             if response.status >= 400:
                 raise RuntimeError(f"botapi download file http {response.status}")
@@ -241,19 +243,44 @@ class BotNet:
                 return await response.read()
             target = Path(destination)
             target.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as handle:
-                temp_path = Path(handle.name)
-                async for chunk in response.content.iter_chunked(1024 * 1024):
-                    handle.write(chunk)
-            os.replace(temp_path, target)
-            return target
+            temp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as handle:
+                    temp_path = Path(handle.name)
+                    async for chunk in response.content.iter_chunked(1024 * 1024):
+                        handle.write(chunk)
+                os.replace(temp_path, target)
+                return target
+            finally:
+                if temp_path is not None:
+                    temp_path.unlink(missing_ok=True)
 
     def body(self, data: dict[str, Any]) -> dict[str, Any]:
         mod = self.mod()
         if not self.has_file(data):
             return {"json": data}
         form = mod.FormData()
+        attachments: dict[str, Any] = {}
+
+        def attach(value: Any) -> Any:
+            if isinstance(value, (bytes, bytearray, memoryview)) or (
+                isinstance(value, tuple) and len(cast(Tuple[object, ...], value)) >= 2
+                and isinstance(value[1], (bytes, bytearray, memoryview))
+            ):
+                name = "file" + str(len(attachments))
+                while name in data or name in attachments:
+                    name += "_"
+                attachments[name] = value
+                return "attach://" + name
+            if isinstance(value, dict):
+                return {k: attach(v) for k, v in cast(Dict[str, Any], value).items()}
+            if isinstance(value, (list, tuple)):
+                return [attach(v) for v in cast(Sequence[object], value)]
+            return dump(value)
+
         for k, v in data.items():
+            self.add_form(form, k, attach(v) if isinstance(v, (dict, list)) else v)
+        for k, v in attachments.items():
             self.add_form(form, k, v)
         return {"data": form}
 

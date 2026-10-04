@@ -59,7 +59,7 @@ class _UploadLane:
             kw["file_total_parts"] = self.total
         act = "upload.saveBigFilePart" if self.big else "upload.saveFilePart"
         result = await self.conn.call(act, **kw)
-        if result.get("ok") is False:
+        if result.get("ok") is False or result.get("result") == {"_": "boolFalse"}:
             raise RuntimeError("upload part rejected")
         self.index += self.stride
 
@@ -101,13 +101,24 @@ async def _spawn_sender(mtnet: MTNet, host: str, port: int, auth_key: bytes | No
     sender = ChargedSender(host, port, auth_key, salt, proxy=mtnet.proxy_url, app_name=mtnet.app_name, app_version=mtnet.app_version, device_model=mtnet.device_model, system_version=mtnet.system_version, system_lang_code=mtnet.system_lang_code, lang_pack=mtnet.lang_pack, lang_code=mtnet.lang_code)
     sender.api_id = mtnet.api_id
     sender.layer = mtnet.layer
-    await sender.ensure_auth_key()
-    await sender.ensure_reader()
+    try:
+        await sender.ensure_auth_key()
+        await sender.ensure_reader()
+    except BaseException:
+        await asyncio.gather(sender.close(), return_exceptions=True)
+        raise
     return sender
 
 
 async def _home_senders(mtnet: MTNet, count: int) -> list[ChargedSender]:
-    return [await _spawn_sender(mtnet, mtnet.host, mtnet.port, mtnet.auth_key, mtnet.server_salt) for _ in range(count)]
+    senders: list[ChargedSender] = []
+    try:
+        for _ in range(count):
+            senders.append(await _spawn_sender(mtnet, mtnet.host, mtnet.port, mtnet.auth_key, mtnet.server_salt))
+        return senders
+    except BaseException:
+        await asyncio.gather(*(sender.close() for sender in senders), return_exceptions=True)
+        raise
 
 
 async def _file_dc_senders(mtnet: MTNet, count: int, dc_id: int) -> list[ChargedSender]:
@@ -118,30 +129,40 @@ async def _file_dc_senders(mtnet: MTNet, count: int, dc_id: int) -> list[Charged
     if not getattr(mtnet, "dc_auth_keys", None):
         mtnet.dc_auth_keys = {}
     cached = mtnet.dc_auth_keys.get(int(dc_id))
-    if isinstance(cached, dict) and cached.get("key"):
-        return [await _spawn_sender(mtnet, endpoint.host, endpoint.port, cached["key"], cached.get("salt") or b"\x00" * 8) for _ in range(count)]
-    export = await mtnet.call("auth.exportAuthorization", dc_id=int(dc_id))
-    body = cast(Dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
-    export_id = body.get("id")
-    export_bytes = body.get("bytes")
-    if isinstance(export_bytes, str):
-        export_bytes = bytes.fromhex(export_bytes)
-    if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
-        raise RuntimeError("auth.exportAuthorization returned no usable payload")
-    first = await _spawn_sender(mtnet, endpoint.host, endpoint.port, None, b"\x00" * 8)
-    await first.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes))
-    auth_key = first.auth_key
-    if auth_key is None:
-        raise RuntimeError("file DC authorization produced no auth key")
-    mtnet.dc_auth_keys[int(dc_id)] = {"key": auth_key, "salt": first.server_salt}
-    hook = getattr(mtnet, "entity_flush_hook", None)
-    if callable(hook):
-        try:
-            hook()
-        except Exception:
-            pass
-    rest = [await _spawn_sender(mtnet, endpoint.host, endpoint.port, auth_key, first.server_salt) for _ in range(count - 1)]
-    return [first, *rest]
+    senders: list[ChargedSender] = []
+    try:
+        if isinstance(cached, dict) and cached.get("key"):
+            auth_key = cached["key"]
+            salt = cached.get("salt") or b"\x00" * 8
+        else:
+            export = await mtnet.call("auth.exportAuthorization", dc_id=int(dc_id))
+            body = cast(Dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
+            export_id = body.get("id")
+            export_bytes = body.get("bytes")
+            if isinstance(export_bytes, str):
+                export_bytes = bytes.fromhex(export_bytes)
+            if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
+                raise RuntimeError("auth.exportAuthorization returned no usable payload")
+            first = await _spawn_sender(mtnet, endpoint.host, endpoint.port, None, b"\x00" * 8)
+            senders.append(first)
+            await first.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes))
+            auth_key = first.auth_key
+            if auth_key is None:
+                raise RuntimeError("file DC authorization produced no auth key")
+            salt = first.server_salt
+            mtnet.dc_auth_keys[int(dc_id)] = {"key": auth_key, "salt": salt}
+            hook = getattr(mtnet, "entity_flush_hook", None)
+            if callable(hook):
+                try:
+                    hook()
+                except Exception:
+                    pass
+        for _ in range(count - len(senders)):
+            senders.append(await _spawn_sender(mtnet, endpoint.host, endpoint.port, auth_key, salt))
+        return senders
+    except BaseException:
+        await asyncio.gather(*(sender.close() for sender in senders), return_exceptions=True)
+        raise
 
 
 async def charged_upload(mtnet: MTNet, source: Any, *, file_name: str | None = None, part_size: int = 524288, progress: Any = None, connections: int | None = None) -> dict[str, Any]:
@@ -161,7 +182,7 @@ async def charged_upload(mtnet: MTNet, source: Any, *, file_name: str | None = N
             if not handle.seekable():
                 return await mtnet.upload_file(source, file_name=file_name, part_size=part_size, progress=progress)
             current = handle.tell()
-            size = handle.seek(0, os.SEEK_END)
+            size = handle.seek(0, os.SEEK_END) - current
             handle.seek(current)
         except Exception:
             return await mtnet.upload_file(source, file_name=file_name, part_size=part_size, progress=progress)
@@ -171,11 +192,13 @@ async def charged_upload(mtnet: MTNet, source: Any, *, file_name: str | None = N
     conns = max(1, min(conns, max_connections, parts_total))
     file_id = secrets.randbits(63)
     md5 = hashlib.new("md5")
-    senders = await _home_senders(mtnet, conns)
-    lanes = [_UploadLane(conn, file_id, big, parts_total, i, conns) for i, conn in enumerate(senders)]
+    senders: list[ChargedSender] = []
+    lanes: list[_UploadLane] = []
     sent = 0
     ticker = 0
     try:
+        senders = await _home_senders(mtnet, conns)
+        lanes = [_UploadLane(conn, file_id, big, parts_total, i, conns) for i, conn in enumerate(senders)]
         while True:
             chunk = handle.read(part_size)
             if not chunk:
@@ -193,6 +216,10 @@ async def charged_upload(mtnet: MTNet, source: Any, *, file_name: str | None = N
         for lane in lanes:
             await lane.finish()
     finally:
+        tasks = [lane.previous for lane in lanes if lane.previous is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await asyncio.gather(*(sender.close() for sender in senders), return_exceptions=True)
         if close_source:
             handle.close()
@@ -215,31 +242,7 @@ async def charged_download(mtnet: MTNet, location: Any, destination: Any, *, siz
     else:
         target = None
         handle = destination
-    file_dc: int | None = None
-    refreshed = False
-    while True:
-        try:
-            await mtnet.call("upload.getFile", location=location, offset=0, limit=4096)
-            break
-        except FileReferenceExpiredError:
-            if refreshed or media_source is None:
-                raise
-            refreshed = True
-            location = await mtnet.refresh_file_reference(media_source, location)
-        except GoyGramError as exc:
-            match = _re.search(r"FILE_MIGRATE_(\d+)", str(exc).upper())
-            if match is None:
-                raise
-            file_dc = int(match.group(1))
-            break
-    conns = connections or connection_count(size)
-    conns = max(1, min(conns, max_connections))
-    parts_total = (size + part_size - 1) // part_size
     senders: list[ChargedSender] = []
-    if file_dc is not None:
-        senders = await _file_dc_senders(mtnet, conns, file_dc)
-    else:
-        senders = await _home_senders(mtnet, conns)
     total = 0
 
     def build_lanes() -> list[_DownloadLane]:
@@ -257,6 +260,30 @@ async def charged_download(mtnet: MTNet, location: Any, destination: Any, *, siz
         return lanes
 
     try:
+        file_dc: int | None = None
+        refreshed = False
+        while True:
+            try:
+                await mtnet.call("upload.getFile", location=location, offset=0, limit=4096)
+                break
+            except FileReferenceExpiredError:
+                if refreshed or media_source is None:
+                    raise
+                refreshed = True
+                location = await mtnet.refresh_file_reference(media_source, location)
+            except GoyGramError as exc:
+                match = _re.search(r"FILE_MIGRATE_(\d+)", str(exc).upper())
+                if match is None:
+                    raise
+                file_dc = int(match.group(1))
+                break
+        conns = connections or connection_count(size)
+        conns = max(1, min(conns, max_connections))
+        parts_total = (size + part_size - 1) // part_size
+        if file_dc is not None:
+            senders = await _file_dc_senders(mtnet, conns, file_dc)
+        else:
+            senders = await _home_senders(mtnet, conns)
         for attempt in range(3):
             try:
                 lanes = build_lanes()
@@ -278,12 +305,14 @@ async def charged_download(mtnet: MTNet, location: Any, destination: Any, *, siz
                             await progress(total, size)
                         else:
                             progress(total, size)
+                if total != size:
+                    raise RuntimeError("downloaded size does not match expected size")
                 break
             except FileReferenceExpiredError:
                 if attempt >= 2 or media_source is None:
                     raise
                 location = await mtnet.refresh_file_reference(media_source, location)
-    except Exception:
+    except BaseException:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
         raise

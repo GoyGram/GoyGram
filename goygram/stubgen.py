@@ -29,15 +29,15 @@ PRIM = {
     "Double": "float",
     "string": "str",
     "String": "str",
-    "bytes": "str",
-    "Bytes": "str",
+    "bytes": "bytes | str",
+    "Bytes": "bytes | str",
     "true": "bool",
     "True": "bool",
     "Bool": "bool",
     "boolTrue": "bool",
     "boolFalse": "bool",
-    "int128": "str",
-    "int256": "str",
+    "int128": "bytes | str",
+    "int256": "bytes | str",
 }
 
 
@@ -92,7 +92,7 @@ def _emit_typed(name: str, fields: List[FieldSpec], known: set[str], tag: str | 
             break
         rows.append((fname, _field_ann(f, known)))
     if bad:
-        bits = [f'"_": "{tag}"'] if tag is not None else []
+        bits = [f'"_": "Literal[\'{tag}\']"'] if tag is not None else []
         for f in fields:
             fname = str(f.get("name") or "")
             if not fname or fname == "_":

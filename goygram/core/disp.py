@@ -37,13 +37,16 @@ class Disp:
             qid = data.get("query_id") or data.get("upd_id")
             if qid is None:
                 return None
-            return (kind, "q", int(qid))
+            return (kind, "q", str(qid))
         chat = data.get("chat_id")
         mid = data.get("msg_id")
         if chat is None or mid is None:
             return None
         if kind == "edit":
-            return (kind, int(chat), int(mid), str(data.get("text", "")))
+            raw: dict[str, Any] = data.get("raw_update") or data.get("raw") or {}
+            message: dict[str, Any] = raw.get("message") or raw.get("edited_message") or raw.get("edited_channel_post") or {}
+            revision = data.get("edit_date", message.get("edit_date"))
+            return (kind, int(chat), int(mid), str(data.get("text", "")), revision)
         return (kind, int(chat), int(mid))
 
     def _is_duplicate(self, data: dict[str, Any]) -> bool:
@@ -65,7 +68,10 @@ class Disp:
 
     async def _report_error(self, e: Exception, data: Obj | dict[str, Any] | None) -> None:
         self.log.error("Handler failure: %r", e)
-        await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+        try:
+            self.bus.q.put_nowait({"src": "sys", "data": {"kind": "err", "src": "disp", "text": repr(e)}})
+        except asyncio.QueueFull:
+            pass
         handlers = getattr(self.app, "_error_handlers", None) or ()
         if handlers:
             try:
@@ -94,7 +100,7 @@ class Disp:
         if kind != "update":
             update = Obj(pkt.get("src", "sys"), data, self.app)
             evt = update
-            for fn in self.app.update_hook:
+            for fn in tuple(self.app.update_hook):
                 try:
                     await fn(update)
                 except StopPropagation:
@@ -105,7 +111,7 @@ class Disp:
             msg = Obj(pkt.get("src", "sys"), data, self.app)
             evt = msg
             await self.app._conv_dispatch(msg)
-            for fn in self.app.hook:
+            for fn in tuple(self.app.hook):
                 try:
                     await fn(msg)
                 except StopPropagation:
@@ -116,7 +122,7 @@ class Disp:
         if kind == "edit":
             msg = Obj(pkt.get("src", "sys"), data, self.app)
             evt = msg
-            for fn in self.app.edit_hook:
+            for fn in tuple(self.app.edit_hook):
                 try:
                     await fn(msg)
                 except StopPropagation:
@@ -127,7 +133,7 @@ class Disp:
         if kind == "poll":
             poll = Obj(pkt.get("src", "sys"), data, self.app)
             evt = poll
-            for fn in self.app.poll_hook:
+            for fn in tuple(self.app.poll_hook):
                 try:
                     await fn(poll)
                 except StopPropagation:
@@ -138,7 +144,7 @@ class Disp:
         if kind == "cb":
             cb = Obj(pkt.get("src", "sys"), data, self.app)
             evt = cb
-            for fn in self.app.cb_hook:
+            for fn in tuple(self.app.cb_hook):
                 try:
                     await fn(cb)
                 except StopPropagation:
@@ -149,7 +155,7 @@ class Disp:
         if kind == "inline":
             inline = Obj(pkt.get("src", "sys"), data, self.app)
             evt = inline
-            for fn in self.app.inline_hook:
+            for fn in tuple(self.app.inline_hook):
                 try:
                     await fn(inline)
                 except StopPropagation:
@@ -160,7 +166,7 @@ class Disp:
         if kind == "update":
             update = Obj(pkt.get("src", "sys"), data, self.app)
             evt = update
-            for fn in self.app.update_hook:
+            for fn in tuple(self.app.update_hook):
                 try:
                     await fn(update)
                 except StopPropagation:
@@ -172,14 +178,13 @@ class Disp:
             return
         mem = Obj(pkt.get("src", "sys"), data, self.app)
         evt = mem
-        for fn in self.app.member_hook:
+        for fn in tuple(self.app.member_hook):
             try:
                 await fn(mem)
             except StopPropagation:
                 return
             except Exception as e:
-                self.log.error("Handler failure: %r", e)
-                await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+                await self._report_error(e, evt)
 
     async def consume(self) -> None:
         while not self.stop_ev.is_set():
@@ -189,5 +194,4 @@ class Disp:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.log.error("Handler failure: %r", e)
-                await self.bus.push("sys", {"kind": "err", "src": "disp", "text": repr(e)})
+                await self._report_error(e, None)

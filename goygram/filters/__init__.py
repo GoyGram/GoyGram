@@ -9,6 +9,7 @@ from importlib import import_module
 from typing import Any, Callable, Dict, Hashable, Iterable, Protocol, Type, cast
 
 from goygram.types.obj import Obj
+from goygram.utils import utf16_slice
 
 
 class _LanguageProbability(Protocol):
@@ -152,6 +153,9 @@ def _rget(e: Obj, *keys: str) -> Any:
 
 
 def _ct(e: Obj) -> str | None:
+    chat = _rget(e, "chat")
+    if isinstance(chat, dict) and cast(Dict[str, Any], chat).get("type"):
+        return str(cast(Dict[str, Any], chat)["type"])
     raw: dict[str, Any] | None = getattr(e, "raw", None)
     if isinstance(raw, dict):
         for src in (raw, raw.get("message") or {}, raw.get("edited_message") or {}, raw.get("callback_query", {}).get("message") or {}):
@@ -175,7 +179,7 @@ def _ct(e: Obj) -> str | None:
 def media_kind(e: Obj) -> str | None:
     for k in ("photo", "video", "audio", "document", "sticker", "animation",
               "voice", "video_note", "location", "contact", "venue", "dice",
-              "game", "invoice", "story", "giveaway"):
+              "game", "invoice", "story", "giveaway", "poll"):
         if _rget(e, k):
             return k
     return None
@@ -458,7 +462,15 @@ class line_count(Filter):
 
 
 numeric = Filter(lambda e: (getattr(e, "text", None) or "").strip().lstrip("-").replace(".", "", 1).isdigit(), name="numeric")
-json_text = Filter(lambda e: bool(_json.loads(getattr(e, "text", None) or "{}")), name="json_text")
+def _json_text(e: Obj) -> bool:
+    try:
+        _json.loads(e.text)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+json_text = Filter(_json_text, name="json_text")
 
 
 class is_language(Filter):
@@ -518,7 +530,7 @@ class _mentioned(Filter):
         if not isinstance(raw, dict):
             return False
         for src in ("entities", "caption_entities"):
-            lst: list[dict[str, Any] | None] | None = raw.get(src)
+            lst: list[dict[str, Any] | None] | None = e.get(src)
             if isinstance(lst, list):
                 for ent in lst:
                     if not isinstance(ent, dict):
@@ -535,7 +547,7 @@ class _mentioned(Filter):
                             try:
                                 offset = int(ent.get("offset", 0))
                                 length = int(ent.get("length", 0))
-                                mention = txt[offset:offset + length]
+                                mention = utf16_slice(txt, offset, length)
                                 if mention.startswith("@"):
                                     return True
                             except Exception:
@@ -808,7 +820,7 @@ class topic(Filter):
 
 
 me = Filter(
-    lambda e: bool(getattr(e, "is_me", False) or getattr(e, "from_id", None) == getattr(getattr(e, "app", None), "self_id", object())),
+    lambda e: bool(getattr(e, "is_me", False) or (getattr(e, "from_id", None) is not None and getattr(e, "from_id", None) == getattr(getattr(e, "app", None), "self_id", object()))),
     name="me"
 )
 
@@ -1185,7 +1197,7 @@ class poll_type(Filter):
         super().__init__(fn=self._chk, name=f"poll_type({pt})")
 
     def _chk(self, e: Obj) -> bool:
-        return getattr(e, "kind", None) == self._pt
+        return _rget(e, "type") == self._pt
 
 
 class poll_chat(Filter):
@@ -1208,7 +1220,7 @@ class poll_option(Filter):
         if not isinstance(raw, dict):
             return False
         for src in ("options", "chosen_options", "option_ids"):
-            opts: list[int | str | dict[str, object]] | None = raw.get(src)
+            opts: list[int | str | dict[str, object]] | None = e.get(src)
             if isinstance(opts, list):
                 for o in opts:
                     v = o if not isinstance(o, dict) else (o.get("option_id") or o.get("option") or o.get("id"))
@@ -1218,7 +1230,7 @@ class poll_option(Filter):
 
 
 poll_any = poll_filter
-poll_answer = Filter(lambda e: getattr(e, "kind", None) == "poll_answer", name="poll_answer")
+poll_answer = Filter(lambda e: getattr(e, "update_type", None) == "poll_answer", name="poll_answer")
 
 
 
@@ -1284,7 +1296,7 @@ class member_by(Filter):
 
 
 member_self = Filter(
-    lambda e: getattr(e, "user_id", None) == getattr(getattr(e, "app", None), "self_id", object()),
+    lambda e: getattr(e, "user_id", None) is not None and getattr(e, "user_id", None) == getattr(getattr(e, "app", None), "self_id", object()),
     name="member_self"
 )
 member_any = Filter(lambda e: True, name="member_any")
@@ -1545,7 +1557,10 @@ class _MagicAttr:
         cur: Any = e
         for step in self._path:
             if isinstance(step, tuple):
-                cur = cur[step[0]]
+                try:
+                    cur = cur[step[0]]
+                except (KeyError, IndexError, TypeError):
+                    return None
             else:
                 cur = getattr(cur, step, None)
                 if cur is None:
@@ -1872,9 +1887,9 @@ class from_chat_type(Filter):
 class has_caption_entities(Filter):
     def __init__(self, etype: str | None = None):
         if etype is not None:
-            super().__init__(fn=lambda e: any(isinstance(x, dict) and x.get("type") == etype for x in (cast("list[dict[str, object] | None]", e.raw.get("caption_entities") or []))), name=f"has_caption_entities({etype})")
+            super().__init__(fn=lambda e: any(isinstance(x, dict) and x.get("type") == etype for x in (cast("list[dict[str, object] | None]", e.get("caption_entities") or []))), name=f"has_caption_entities({etype})")
         else:
-            super().__init__(fn=lambda e: bool(getattr(e, "raw", {}).get("caption_entities")), name="has_caption_entities")
+            super().__init__(fn=lambda e: bool(e.get("caption_entities")), name="has_caption_entities")
 
 
 class mime_is(Filter):
@@ -1896,7 +1911,7 @@ class file_ext(Filter):
             if not isinstance(raw, dict):
                 return False
             for key in ("document", "video", "audio", "animation"):
-                v: dict[str, str] | None = raw.get(key)
+                v: dict[str, str] | None = e.get(key)
                 if isinstance(v, dict) and v.get("file_name"):
                     name = str(v["file_name"])
                     dot = name.rfind(".")
@@ -1914,7 +1929,7 @@ class poll_answered_by(Filter):
                 return False
             data: dict[str, int] | str | None = raw.get("data")
             d = data if isinstance(data, dict) else {}
-            user: dict[str, int] | None = raw.get("user")
+            user: dict[str, int] | None = e.get("user")
             u = user.get("id") if isinstance(user, dict) else None
             return _same_int(u or d.get("user_id"), uid)
         super().__init__(fn=chk, name=f"poll_answered_by({uid})")
@@ -1953,10 +1968,10 @@ class url_contains(Filter):
             if urls:
                 return any(s in u for u in urls)
             raw: dict[str, Any] | None = getattr(e, "raw", {})
-            ents: list[dict[str, Any] | None] | None = raw.get("entities") if isinstance(raw, dict) else None
+            ents: list[dict[str, Any]] | None = e.entities if isinstance(raw, dict) else None
             if isinstance(ents, list):
                 for ent in ents:
-                    if isinstance(ent, dict) and ent.get("type") in ("url", "text_link"):
+                    if ent.get("type") in ("url", "text_link"):
                         url = ent.get("url") or ""
                         if s in url:
                             return True
@@ -1969,14 +1984,14 @@ class hashtag(Filter):
         ts = {t.lstrip("#").lower() for t in tags}
         def chk(e: Obj) -> bool:
             raw: dict[str, Any] | None = getattr(e, "raw", {})
-            ents: list[dict[str, Any] | None] | None = raw.get("entities") if isinstance(raw, dict) else None
+            ents: list[dict[str, Any]] | None = e.entities if isinstance(raw, dict) else None
             txt = str(getattr(e, "text", "") or "")
             if isinstance(ents, list):
                 for ent in ents:
-                    if isinstance(ent, dict) and ent.get("type") == "hashtag":
+                    if ent.get("type") == "hashtag":
                         off = int(ent.get("offset", 0))
                         ln = int(ent.get("length", 0))
-                        tag = txt[off + 1:off + ln].lower()
+                        tag = utf16_slice(txt, off, ln)[1:].lower()
                         if tag in ts:
                             return True
             return False

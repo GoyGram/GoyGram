@@ -10,6 +10,7 @@ import re
 import sys
 import time
 import sqlite3
+import tempfile
 from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Protocol, Sequence, TypeVar, cast
@@ -164,9 +165,10 @@ def _write_vault(path: Path, payload: dict[str, Any], session_name: str) -> None
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists() and _vault_env_key() is None:
         log.warning("Vault %s is created with the machine-derived key (machine-id + salt stored in the file): anyone with this file and this host's machine-id can decrypt it. Set GOYGRAM_VAULT_KEY for a key that does not live on the host.", path.name)
-    tmp_path = path.with_name(f".{path.name}.tmp")
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp_path = Path(tmp_name)
     try:
-        with tmp_path.open("wb") as handle:
+        with os.fdopen(fd, "wb") as handle:
             handle.write(encrypted)
             handle.flush()
             os.fsync(handle.fileno())
@@ -453,13 +455,15 @@ def _extract_migrate_dc(err_text: str) -> int | None:
 async def _mt_req_with_migrate(app: Any, act: str, **kw: Any) -> dict[str, Any]:
     while True:
         try:
-            res: dict[str, Any] | None = await app.mt_req(act, **kw)
+            res: dict[str, Any] | list[Any] | None = await app.mt_req(act, **kw)
         except GoyGramError as exc:
             dc_id = _extract_migrate_dc(str(exc))
             if dc_id is None:
                 raise
             log.info("MT request %s triggered migration to dc%s", act, dc_id)
         else:
+            if isinstance(res, list):
+                return {"result": res}
             if not isinstance(res, dict):
                 return {"error": "UNEXPECTED_RESPONSE", "raw": res}
             err = (_extract_error(res) or "")

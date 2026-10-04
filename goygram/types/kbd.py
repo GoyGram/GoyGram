@@ -24,7 +24,7 @@ class KbdBuilder:
         return self.btn(text, callback_data=data, **kw)
 
     def copy(self, text: str, copy_text: str, **kw: Any) -> KbdBuilder:
-        return self.btn(text, copy_text=copy_text, **kw)
+        return self.btn(text, copy_text={"text": copy_text}, **kw)
 
     def switch(self, text: str, query: str = "", current: bool = False, **kw: Any) -> KbdBuilder:
         if current:
@@ -44,7 +44,7 @@ class KbdBuilder:
             if r:
                 self._rows[-1].extend(r)
                 self._rows.append([])
-        if self._rows and not self._rows[-1]:
+        if len(self._rows) > 1 and not self._rows[-1]:
             self._rows.pop()
         return self
 
@@ -109,7 +109,7 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
         if b.get("switch_inline_query_current_chat") is not None:
             return {"_": "inlineButtonTypeSwitchInline", "query": str(b["switch_inline_query_current_chat"]), "same_peer": True}
         if b.get("copy_text") is not None:
-            return {"_": "inlineButtonTypeCopy", "copy_text": str(b["copy_text"])}
+            return {"_": "inlineButtonTypeCopy", "copy_text": str(cast(Dict[str, Any], b["copy_text"]).get("text", "") if isinstance(b["copy_text"], dict) else b["copy_text"])}
         return {"_": "inlineButtonTypeCallback", "data": as_bytes(b.get("callback_data") or "noop")}
 
     def button_style(b: dict[str, Any]) -> dict[str, Any]:
@@ -153,8 +153,12 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
     if not isinstance(kbd, dict):
         return None
     kbd = cast(Dict[str, Any], kbd)
-    if kbd.get("_") in {"replyInlineMarkup", "replyKeyboardMarkup", "replyKeyboardHide", "replyForceReply"}:
+    if kbd.get("_") in {"replyInlineMarkup", "replyKeyboardMarkup", "replyKeyboardHide", "replyKeyboardForceReply"}:
         return kbd
+    if kbd.get("remove_keyboard"):
+        return {"_": "replyKeyboardHide", "selective": bool(kbd.get("selective"))}
+    if kbd.get("force_reply"):
+        return {"_": "replyKeyboardForceReply", "single_use": True, "selective": bool(kbd.get("selective")), "placeholder": kbd.get("input_field_placeholder")}
     rows_raw: list[list[object] | tuple[object, ...] | None] | None = kbd.get("inline_keyboard")
     if rows_raw is None:
         rows_raw = kbd.get("keyboard")
@@ -174,9 +178,9 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
                 if isinstance(row, (list, tuple))
             ],
             "resize": bool(kbd.get("resize_keyboard", kbd.get("resize"))),
-            "single_use": bool(kbd.get("single_use")),
+            "single_use": bool(kbd.get("one_time_keyboard", kbd.get("single_use"))),
             "selective": bool(kbd.get("selective")),
-            "persistent": bool(kbd.get("persistent")),
+            "persistent": bool(kbd.get("is_persistent", kbd.get("persistent"))),
         }
     return {
         "_": "replyInlineMarkup",

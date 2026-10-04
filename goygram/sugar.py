@@ -136,24 +136,34 @@ def plural_ru(n: int, one: str, few: str, many: str) -> str:
 def parse_entities_html(text: str, entities: list[dict[str, Any]] | None) -> str:
     if not entities:
         return _esc(text)
+    encoded = text.encode("utf-16-le")
     marks: list[tuple[int, int, str, dict[str, Any]]] = []
     for ent in entities:
         et = ent.get("type", "")
         off = int(ent.get("offset", 0))
         ln = int(ent.get("length", 0))
         marks.append((off, off + ln, et, ent))
-    marks.sort(key=lambda m: m[0])
-    out: list[str] = []
-    pos = 0
-    for start, end, et, ent in marks:
-        if start < pos:
-            continue
-        out.append(_esc(text[pos:start]))
-        frag = _esc(text[start:end])
-        out.append(_apply_ent(frag, et, ent))
-        pos = end
-    out.append(_esc(text[pos:]))
-    return "".join(out)
+    marks.sort(key=lambda m: (m[0], -m[1]))
+    index = 0
+
+    def render(start: int, end: int) -> str:
+        nonlocal index
+        out: list[str] = []
+        pos = start
+        while index < len(marks):
+            left, right, et, ent = marks[index]
+            if left >= end:
+                break
+            index += 1
+            if left < pos or right > end or right <= left:
+                continue
+            out.append(_esc(encoded[pos * 2:left * 2].decode("utf-16-le")))
+            out.append(_apply_ent(render(left, right), et, ent))
+            pos = right
+        out.append(_esc(encoded[pos * 2:end * 2].decode("utf-16-le")))
+        return "".join(out)
+
+    return render(0, len(encoded) // 2)
 
 
 def _apply_ent(frag: str, et: str, ent: dict[str, Any]) -> str:
@@ -172,7 +182,7 @@ def _apply_ent(frag: str, et: str, ent: dict[str, Any]) -> str:
     if et == "text_link":
         return f'<a href="{_attr(ent.get("url", ""))}">{frag}</a>'
     if et == "url":
-        return f'<a href="{_attr(frag)}">{frag}</a>'
+        return f'<a href="{_attr(_unescape(frag))}">{frag}</a>'
     if et == "email":
         return f'<a href="mailto:{frag}">{frag}</a>'
     if et == "phone":
@@ -254,7 +264,7 @@ def extract_sent_message(result: Any) -> dict[str, Any] | None:
                 return msg
     if inner.get("_") == "updateShortSentMessage":
         return dict(inner)
-    if inner.get("id") is not None:
+    if inner.get("id") is not None or inner.get("message_id") is not None:
         return inner
     if result.get("id") is not None:
         return result
@@ -297,78 +307,42 @@ def _utf16_fix(plain: str, ents: list[dict[str, Any]]) -> None:
 def split_html_text(text: str, limit: int = 4096) -> list[str]:
     if limit < 256:
         raise ValueError("limit must be at least 256")
-    tokens = _TOKEN_RE.findall(text)
     parts: list[str] = []
-    stack: list[str] = []
-
-    def open_tags() -> str:
-        return "".join(f"<{name}>" for name in stack)
-
-    def close_tags() -> str:
-        return "".join(f"</{name}>" for name in reversed(stack))
-
-    def close_units() -> int:
-        n = 0
-        for name in stack:
-            n += 3 + len(name)
-        return n
-
-    current = [open_tags()]
-    size = _u16n(current[0])
+    stack: list[tuple[str, str]] = []
+    current: list[str] = []
+    size = 0
 
     def flush() -> None:
         nonlocal current, size
-        parts.append("".join(current) + close_tags())
-        current = [open_tags()]
-        size = _u16n(current[0])
+        parts.append("".join(current) + "".join(f"</{name}>" for name, _ in reversed(stack)))
+        current = [tag for _, tag in stack]
+        size = 0
 
-    for token in tokens:
+    for token in _TOKEN_RE.findall(text):
         if token.startswith("<"):
             opening = _OPEN_RE.fullmatch(token)
             closing = _CLOSE_RE.fullmatch(token)
             if opening is not None:
                 name = opening.group(1)
                 if name not in _VOID:
-                    stack.append(name)
-                current.append(token)
-                size += _u16n(token)
-                continue
-            if closing is not None:
+                    stack.append((name, token))
+            elif closing is not None:
                 name = closing.group(1)
                 for i in range(len(stack) - 1, -1, -1):
-                    if stack[i] == name:
+                    if stack[i][0] == name:
                         stack.pop(i)
                         break
-                current.append(token)
-                size += _u16n(token)
-                continue
             current.append(token)
-            size += _u16n(token)
             continue
-        while token:
-            budget = max(limit - size - close_units(), 1)
-            tu = _u16n(token)
-            if tu <= budget:
-                current.append(token)
-                size += tu
-                break
-            cut_n = 0
-            acc = 0
-            for c in token:
-                w = 1 + (ord(c) > 0xFFFF)
-                if acc + w > budget:
-                    break
-                acc += w
-                cut_n += 1
-            current.append(token[:cut_n])
-            flush()
-            token = token[cut_n:]
-    tail = "".join(current)
-    if tail.strip() or tail != open_tags():
-        parts.append(tail + close_tags())
-    if not parts:
-        parts.append("")
-    return parts
+        for char in _unescape(token):
+            width = _u16n(char)
+            if size + width > limit:
+                flush()
+            current.append(_esc(char))
+            size += width
+    if current:
+        parts.append("".join(current) + "".join(f"</{name}>" for name, _ in reversed(stack)))
+    return parts or [""]
 
 
 _ENT_MAP = {
@@ -483,6 +457,22 @@ def md_to_entities(src: str) -> tuple[str, list[dict[str, Any]]]:
             pos += len(body)
             i = j + 3
             continue
+        if c == "`":
+            j = i + 1
+            while j < n:
+                if src[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if src[j] == "`":
+                    break
+                j += 1
+            if j < n:
+                body = src[i + 1:j].replace("\\`", "`").replace("\\\\", "\\")
+                ents.append({"_": "messageEntityCode", "offset": pos, "length": len(body)})
+                out.append(body)
+                pos += len(body)
+                i = j + 1
+                continue
         two = src[i:i + 2]
         if two in _MD2:
             if not close(two):
@@ -531,7 +521,7 @@ def md_escape(text: str) -> str:
 def _attrs(raw: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for m in _ATTR_RE.finditer(raw):
-        out[m.group(1)] = m.group(2) or m.group(3) or m.group(4) or ""
+        out[m.group(1)] = _unescape(m.group(2) or m.group(3) or m.group(4) or "")
     return out
 
 
@@ -601,7 +591,7 @@ def html_to_entities(html_src: str) -> tuple[str, list[dict[str, Any]]]:
         if tag == "pre":
             lang = at.get("class") or ""
             ent["language"] = lang[9:] if lang.startswith("language-") else ""
-        elif tag == "blockquote" and (at.get("expandable") or "").lower() == "true":
+        elif tag == "blockquote" and "expandable" in at and at["expandable"].lower() != "false":
             ent["collapsed"] = True
         stack.append((tag, pos, ent))
     tail = _unescape(html_src[last:])

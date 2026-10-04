@@ -75,10 +75,15 @@ def _latest_layer() -> int:
     return max(layer, CURRENT_LAYER_FLOOR)
 
 
+def _schema_layer(text: str) -> int | None:
+    match = re.search(r"(?m)^//\s*LAYER\s+(\d+)\s*$", text)
+    return int(match.group(1)) if match else None
+
+
 def cached_schema_layer() -> int | None:
     try:
         layer = int(CACHE_LAYER_PATH.read_text().strip())
-        return layer if layer > 0 else None
+        return layer if layer > 0 and _schema_layer(CACHE_SCHEMA_PATH.read_text()) == layer else None
     except (OSError, ValueError):
         return None
 
@@ -98,18 +103,21 @@ def _fetch_and_cache_schema(layer: int) -> tuple[str | None, str | None]:
         mtp_etag = CACHE_MTPROTO_ETAG_PATH.read_text().strip() if CACHE_MTPROTO_ETAG_PATH.exists() else None
         api_text, api_new_etag = _http_get(SCHEMA_URL, api_etag)
         mtp_text, mtp_new_etag = _http_get(MTPROTO_SCHEMA_URL, mtp_etag)
+        if (api_text is None and not api_new_etag) or (mtp_text is None and not mtp_new_etag):
+            return None, None
         if api_text is None and CACHE_SCHEMA_PATH.exists():
             api_text = CACHE_SCHEMA_PATH.read_text()
         if mtp_text is None and CACHE_MTPROTO_PATH.exists():
             mtp_text = CACHE_MTPROTO_PATH.read_text()
         if api_text is None or mtp_text is None:
-            return api_text, mtp_text
+            return None, None
+        if _schema_layer(api_text) != layer:
+            log.warning("Official schema does not match requested layer %s; keeping cache", layer)
+            return None, None
         _atomic_write(CACHE_SCHEMA_PATH, api_text)
         _atomic_write(CACHE_MTPROTO_PATH, mtp_text)
-        if api_new_etag:
-            _atomic_write(CACHE_ETAG_PATH, api_new_etag)
-        if mtp_new_etag:
-            _atomic_write(CACHE_MTPROTO_ETAG_PATH, mtp_new_etag)
+        _atomic_write(CACHE_ETAG_PATH, api_new_etag or "")
+        _atomic_write(CACHE_MTPROTO_ETAG_PATH, mtp_new_etag or "")
         _atomic_write(CACHE_LAYER_PATH, str(layer))
         return api_text, mtp_text
 
@@ -148,15 +156,12 @@ def init_schema(
     cached_layer = cached_schema_layer()
     api_text = CACHE_SCHEMA_PATH.read_text() if CACHE_SCHEMA_PATH.exists() else None
     mtproto_text = CACHE_MTPROTO_PATH.read_text() if CACHE_MTPROTO_PATH.exists() else None
-    if api_text is None or mtproto_text is None:
+    if api_text is None or mtproto_text is None or cached_layer is None:
         latest_layer = _latest_layer()
         api_text, mtproto_text = _fetch_and_cache_schema(latest_layer)
         cached_layer = latest_layer
     if api_text is None or mtproto_text is None:
         raise RuntimeError("Unable to load official Telegram schema from the network or cache")
-    if cached_layer is None:
-        cached_layer = CURRENT_LAYER_FLOOR
-        _atomic_write(CACHE_LAYER_PATH, str(cached_layer))
     _load_schema(ext_module, api_text, mtproto_text, cached_layer)
     threading.Thread(target=_background_update, args=(ext_module, on_layer, can_reload), daemon=True).start()
     return cached_layer

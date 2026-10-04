@@ -393,6 +393,9 @@ class MTNet:
                 loaded = json.loads(self.cursor_path.read_text())
                 if isinstance(loaded, dict):
                     self.cursor = {key: int(value) for key, value in cast(Dict[str, int], loaded).items() if key in {"pts", "qts", "date", "seq"}}
+                    channels = cast(Dict[str, Any], loaded).get("channels")
+                    if isinstance(channels, dict):
+                        self.cursor["channels"] = {int(key): int(value) for key, value in cast(Dict[str, int], channels).items()}
             except (OSError, TypeError, ValueError):
                 self.cursor = {}
         self.auth_ready=asyncio.Event()
@@ -426,6 +429,16 @@ class MTNet:
             if isinstance(value, int) and isinstance(current, int) and value > current:
                 self.cursor[key] = value
                 changed = True
+        incoming = cursor.get("channels")
+        if isinstance(incoming, dict):
+            current_channels = self.cursor.get("channels")
+            channels = dict(current_channels) if isinstance(current_channels, dict) else {}
+            for channel_id, pts in cast(Dict[Union[int, str], Any], incoming).items():
+                channel_id = int(channel_id)
+                if isinstance(pts, int) and pts > channels.get(channel_id, 0):
+                    channels[channel_id] = pts
+                    changed = True
+            self.cursor["channels"] = channels
         if not changed or self.cursor_path is None:
             return
         self.cursor_path.parent.mkdir(parents=True, exist_ok=True)
@@ -465,12 +478,18 @@ class MTNet:
 
     async def open_via_proxy(self, px:ProxyCfg)->tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         rd, wr = await asyncio.open_connection(px.host, px.port)
-        if px.scheme in {"socks5", "socks5h"}:
-            await self.socks5_handshake(rd, wr, px, self.host, self.port)
-        elif px.scheme == "http":
-            await self.http_connect_handshake(rd, wr, px, self.host, self.port)
-        else:
-            raise ConnectionError(f"Unsupported proxy scheme: {px.scheme}")
+        try:
+            if px.scheme in {"socks5", "socks5h"}:
+                await self.socks5_handshake(rd, wr, px, self.host, self.port)
+            elif px.scheme == "http":
+                await self.http_connect_handshake(rd, wr, px, self.host, self.port)
+            else:
+                raise ConnectionError(f"Unsupported proxy scheme: {px.scheme}")
+        except BaseException:
+            wr.close()
+            with suppress(Exception):
+                await wr.wait_closed()
+            raise
         return rd, wr
 
     async def _read_http_headers(self, rd:asyncio.StreamReader, limit:int=65536)->bytes:
@@ -556,7 +575,7 @@ class MTNet:
             self.rd,self.wr=await asyncio.open_connection(self.host,self.port)
         self.wr.write(b"\xee\xee\xee\xee"); await self.wr.drain(); self.wrote_tag=True
 
-    def cut(self)->list[bytes]:
+    def cut(self, limit:int|None=None)->list[bytes]:
         out: list[bytes]=[]; i=0; raw=bytes(self.buf)
         while i < len(raw):
             if i+4>len(raw): break
@@ -565,6 +584,7 @@ class MTNet:
                 i -= 4
                 break
             out.append(raw[i:i+ln]); i+=ln
+            if limit is not None and len(out) >= limit: break
         self.buf[:]=raw[i:]
         return out
 
@@ -580,7 +600,7 @@ class MTNet:
         if reader is None:
             raise ConnectionError('mt socket is not open')
         while True:
-            for p in self.cut(): return p
+            for p in self.cut(1): return p
             raw=await reader.read(65536)
             if not raw:
                 self._log_socket_close()
@@ -705,7 +725,7 @@ class MTNet:
             if ca.take(16)!=nonce or ca.take(16)!=server_nonce: raise RuntimeError('dh_gen nonce mismatch')
             key=pow(g_a,b,dh_prime).to_bytes(256,'big')
             number={0x3bcbf734:1, 0x46dc1fb9:2, 0xa69dae02:3}[c]
-            if ca.take(20)!=_new_nonce_hash(new_nonce,key,number): raise RuntimeError(f'dh_gen new_nonce_hash{number} mismatch')
+            if ca.take(16)!=_new_nonce_hash(new_nonce,key,number): raise RuntimeError(f'dh_gen new_nonce_hash{number} mismatch')
             if c==0xa69dae02: raise RuntimeError('dh_gen_fail: server rejected the DH exchange')
             if c==0x3bcbf734:
                 self.auth_key=key
@@ -1118,12 +1138,7 @@ class MTNet:
             return 0
 
     def _update_channel_pts(self, channel_id: int, pts: int) -> None:
-        current = self.cursor.get("channels")
-        channels = dict(current) if isinstance(current, dict) else {}
-        channels[int(channel_id)] = int(pts)
-        self.cursor["channels"] = channels
-        if self.cursor_path is not None:
-            self.update_cursor({})
+        self.update_cursor({"channels": {int(channel_id): int(pts)}})
 
     async def _recover_channel_difference(self, channel_id: int, force: bool = False) -> None:
         peer = None
@@ -1398,6 +1413,12 @@ class MTNet:
                 decoded = _require_rx().deserialize_constructor(inner)
                 if isinstance(decoded, dict):
                     decoded_type = str(decoded.get("_", ""))
+                    if decoded_type == "pong":
+                        pong_msg_id = decoded.get("msg_id")
+                        entry = self.pending.pop(pong_msg_id, None) if isinstance(pong_msg_id, int) else None
+                        if isinstance(entry, tuple) and not entry[0].done():
+                            entry[0].set_result({"ok": True, "result": decoded})
+                        return
                     if decoded_type in {"updates", "updatesCombined", "updateShort", "updatesTooLong"}:
                         self._dispatch_updates(decoded)
                         return
@@ -1498,7 +1519,7 @@ class MTNet:
                             if fut2.done():
                                 continue
                             new_id = self.msg_ids.next()
-                            self.pending[new_id] = (fut2, saved_obj2)
+                            self.pending[new_id] = sub_entry
                             new_sub_ids.append(new_id)
                             saved_objs.append(saved_obj2)
                         if new_sub_ids:
@@ -1512,7 +1533,7 @@ class MTNet:
                             return
                         if not fut.done():
                             new_msg_id = self.msg_ids.next()
-                            self.pending[new_msg_id] = (fut, saved_obj)
+                            self.pending[new_msg_id] = entry
                             asyncio.create_task(self._resend(new_msg_id, saved_obj))
                 except Exception as exc:
                     log.error('bad_server_salt handler error: %r', exc)
@@ -1683,6 +1704,8 @@ class MTNet:
                     result = _gz.decompress(compressed)
                 except Exception:
                     pass
+                else:
+                    return self._parse_rpc_result(result)
         try:
             deserializer = getattr(rx, "deserialize_constructor", None)
             if deserializer is None:
@@ -1733,12 +1756,13 @@ class MTNet:
             if chat_id.lstrip('-').isdigit():
                 chat_id = int(chat_id)
             else:
-                entity = self.entity_usernames.get(chat_id.casefold())
+                entity = self.entity_usernames.get(chat_id.lstrip("@").casefold())
                 if entity is None:
                     raise ValueError('username peer requires explicit entity resolution')
                 chat_id = int(entity["id"])
                 access_hash = entity.get("access_hash", 0)
-                self._entity_touch(("user", chat_id))
+                if entity.get("_") in {"channel", "channelForbidden"}:
+                    chat_id = -1000000000000 - chat_id
         if isinstance(chat_id, int):
             if chat_id == 0:
                 return bytes(_require_rx().serialize_constructor('inputPeerSelf', {}))
@@ -1779,11 +1803,6 @@ class MTNet:
                 entity = self.entity_usernames.get(username)
             if entity is None:
                 raise ValueError('username resolution returned no entity')
-            resolved_id = int(entity["id"])
-            self._entity_touch(("user", resolved_id))
-            obj = dict(obj)
-            obj["chat_id"] = resolved_id
-            obj["access_hash"] = entity.get("access_hash", 0)
         if isinstance(chat_id, int) and chat_id > 0 and chat_id != getattr(self, "self_id", None):
             entity = self.entities.get(("user", chat_id))
             if entity is None:
@@ -1995,7 +2014,7 @@ class MTNet:
                     break
                 md5.update(chunk)
                 result = await self.call("upload.saveFilePart", file_id=file_id, file_part=parts, bytes=chunk)
-                if result.get("ok") is False:
+                if result.get("ok") is False or result.get("result") == {"_": "boolFalse"}:
                     raise RuntimeError("upload.saveFilePart failed")
                 parts += 1
                 sent += len(chunk)
@@ -2019,12 +2038,26 @@ class MTNet:
                 document = media.get("document") if isinstance(media, dict) else None
         if not isinstance(document, dict) or not isinstance(document.get("id"), int):
             raise FileReferenceExpiredError(400, "file reference expired and source is unknown")
-        result = await self.call("messages.getMessages", id=[{"_": "inputDocument", "id": document.get("id"), "access_hash": document.get("access_hash") or 0, "file_reference": b""}])
+        src_value: Dict[str, Any] = cast(Dict[str, Any], source) if isinstance(source, dict) else {}
+        origin_value = src_value.get("message")
+        origin: Dict[str, Any] | None = cast(Dict[str, Any], origin_value) if isinstance(origin_value, dict) else None
+        if origin is None or origin.get("msg_id") is None:
+            raise FileReferenceExpiredError(400, "file reference refresh requires the message origin")
+        peer = await self.resolve_peer(origin.get("peer"))
+        decoded = _require_rx().deserialize_constructor(peer)
+        ids: list[dict[str, Any]] = [{"_": "inputMessageID", "id": int(origin["msg_id"])}]
+        if isinstance(decoded, dict) and decoded.get("_") == "inputPeerChannel":
+            result = await self.call("channels.getMessages", channel={**decoded, "_": "inputChannel"}, id=ids)
+        else:
+            result = await self.call("messages.getMessages", id=ids)
         body: dict[str, Any] = cast(Dict[str, Any], result.get("result")) if isinstance(result.get("result"), dict) else result
         messages: list[dict[str, Any] | None] | None = body.get("messages")
-        fresh = next((item for item in messages or [] if isinstance(item, dict) and item.get("id") == document.get("id")), None) if isinstance(messages, list) else None
-        doc: dict[str, Any] | None = fresh.get("media", {}).get("document") if isinstance(fresh, dict) and isinstance(fresh.get("media"), dict) else None
-        if isinstance(doc, dict) and isinstance(doc.get("file_reference"), (bytes, bytearray)):
+        fresh: dict[str, Any] | None = messages[0] if isinstance(messages, list) and messages else None
+        fresh_media_value = fresh.get("media") if isinstance(fresh, dict) else None
+        fresh_media: Dict[str, Any] | None = cast(Dict[str, Any], fresh_media_value) if isinstance(fresh_media_value, dict) else None
+        fresh_doc_value = fresh_media.get("document") if isinstance(fresh_media, dict) else None
+        doc: Dict[str, Any] | None = cast(Dict[str, Any], fresh_doc_value) if isinstance(fresh_doc_value, dict) else None
+        if doc is not None and doc.get("id") == document.get("id") and isinstance(doc.get("file_reference"), (bytes, bytearray)):
             self._ingest_entities(body)
             updated = dict(location)
             updated["file_reference"] = bytes(doc["file_reference"])
@@ -2079,7 +2112,7 @@ class MTNet:
                         progress(total, 0)
                 if len(chunk) < limit:
                     break
-        except Exception:
+        except BaseException:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
             raise
@@ -2251,15 +2284,24 @@ class MTNet:
             await asyncio.gather(task, return_exceptions=True)
         if task is not asyncio.current_task():
             self.reader_task = None
-        if self.wr:
-            self.wr.close(); await self.wr.wait_closed()
-            self.wr=None; self.rd=None
+        writer = self.wr
+        self.wr = None; self.rd = None
+        self.buf.clear()
+        self.auth_ready.clear()
         for entry in self.pending.values():
             if isinstance(entry, tuple):
                 future = entry[0]
                 if not future.done():
                     future.cancel()
         self.pending.clear()
+        if writer is not None:
+            writer.close()
+            with suppress(Exception):
+                await writer.wait_closed()
+        if hasattr(self, "_dc_senders"):
+            senders = list(self._dc_senders.values())
+            self._dc_senders.clear()
+            await asyncio.gather(*(sender.close() for sender in senders), return_exceptions=True)
 
     async def ensure_reader(self) -> None:
         async with self._reader_lock:
@@ -2287,10 +2329,13 @@ class MTNet:
             await self.send(obj, req_msg_id=req_msg_id)
             return await asyncio.wait_for(fut, timeout=30.0)
         except asyncio.TimeoutError:
+            raise TimeoutError(f"no response for act={act} msg_id={req_msg_id}")
+        finally:
             for pending_id, pending_entry in list(self.pending.items()):
                 if isinstance(pending_entry, tuple) and pending_entry[0] is fut:
                     self.pending.pop(pending_id, None)
-            raise TimeoutError(f"no response for act={act} msg_id={req_msg_id}")
+            if not fut.done():
+                fut.cancel()
 
     async def _auth_check_password_flow(self, password:str, api_id:int)->dict[str,Any]:
         state = await self._rpc_call('account.getPassword')
@@ -2540,6 +2585,7 @@ class MTNet:
                     pass
                 self.wr = None
                 self.rd = None
+                self.buf.clear()
                 await asyncio.sleep(backoff)
                 if self.stop_ev.is_set():
                     break
