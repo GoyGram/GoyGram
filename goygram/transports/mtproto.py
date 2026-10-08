@@ -1960,6 +1960,8 @@ class MTNet:
                 else:
                     from_id = from_peer if isinstance(from_peer, int) else None
                 is_out = is_out or from_id == self_id or (peer_kind == "peerUser" and int(peer_id) == self_id)
+                if from_peer is None and peer_kind == "peerUser" and not is_out:
+                    from_id = int(peer_id)
                 return {
                     "kind": "msg", "msg_id": decoded["id"], "chat_id": chat_id,
                     "from_id": self_id if is_out else from_id, "text": decoded.get("message", ""),
