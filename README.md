@@ -95,7 +95,7 @@ asyncio.run(app.run())
 
 ### Key features
 
-- **Ready**: `pip install goygram`. Python 3.13 and newer, with wheels for Linux, Windows and macOS.
+- **Ready**: `pip install goygram`. Python 3.13 and newer, with wheels for Linux, Windows, macOS and Android.
 - **Two transports**: Bot API and MTProto in one app. Switch per call with `via="api"` or `via="mtproto"`, and a reply goes back the way the original message arrived.
 - **Fast to start**: 77 ms to import, about 11 MB of memory. Telethon takes 342 ms and 48 MB for the same job.
 - **Rust core**: AES-256-IGE for MTProto packets, AES-256-GCM for vaults, with AES-NI used when the CPU has it.
@@ -148,11 +148,7 @@ pkg install python-pip
 pip install goygram
 ```
 
-Phones (`arm64_v8a`) and emulator or Chromebook builds (`x86_64`) are both covered, built against Android API level 24. The one dependency with no Android wheel on PyPI is `aiohttp`; Termux packages it, so take that one from the repository and pip will find it instead of compiling it:
-
-```bash
-pkg install python-aiohttp
-```
+Phones (`arm64_v8a`) and emulator or Chromebook builds (`x86_64`) are both covered, built against Android API level 24. The dependencies resolve to wheels as well, so nothing is compiled on the device.
 
 To build from source when your platform has no wheel, Rust has to be on the machine:
 
