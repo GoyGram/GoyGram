@@ -17,12 +17,6 @@ jobs:
             name: win
           - os: macos-latest
             name: mac
-          - os: ubuntu-latest
-            name: dro-arm64
-            target: aarch64-linux-android
-          - os: ubuntu-latest
-            name: dro-x64
-            target: x86_64-linux-android
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -30,11 +24,50 @@ jobs:
         with:
           python-version: '3.13'
       - uses: PyO3/maturin-action@v1
-        env:
-          ANDROID_API_LEVEL: '24'
         with:
-          target: ${{ matrix.target }}
           args: --release --out d
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whl-${{ matrix.name }}
+          path: d
+
+  dro:
+    strategy:
+      matrix:
+        include:
+          - triple: aarch64-linux-android
+            name: dro-arm64
+          - triple: x86_64-linux-android
+            name: dro-x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+      - name: Android Python for cross-compilation
+        run: |
+          curl -sSfLo py.tgz "https://www.python.org/ftp/python/3.14.3/python-3.14.3-${{ matrix.triple }}.tar.gz"
+          tar xzf py.tgz
+          echo "PYO3_CROSS_LIB_DIR=$PWD/prefix/lib" >> "$GITHUB_ENV"
+      - name: Android NDK toolchain
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          bin="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cc="$bin/${TRIPLE}24-clang"
+          {
+            echo "ANDROID_CC=$cc"
+            echo "ANDROID_API_LEVEL=24"
+            echo "CC=$cc"
+            echo "CXX=${cc}++"
+            echo "AR=$bin/llvm-ar"
+            echo "CARGO_TARGET_$(echo "$TRIPLE" | tr 'a-z-' 'A-Z_')_LINKER=$GITHUB_WORKSPACE/ci/android-linker.py"
+          } >> "$GITHUB_ENV"
+      - name: Build wheel
+        run: |
+          pip install --quiet maturin
+          maturin build --release --target ${{ matrix.triple }} --out d
       - uses: actions/upload-artifact@v4
         with:
           name: whl-${{ matrix.name }}
@@ -56,7 +89,7 @@ jobs:
   pub:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    needs: [build, src]
+    needs: [build, dro, src]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
