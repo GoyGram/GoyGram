@@ -20,6 +20,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 
+[target.'cfg(windows)'.dependencies]
+pyo3 = { version = "0.24", features = ["generate-import-lib"] }
+
 [profile.release]
 strip = true
 lto = true
