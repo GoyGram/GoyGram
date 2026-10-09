@@ -12,7 +12,7 @@ name = "goygram_ext"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.21.2", features = ["extension-module", "abi3", "abi3-py38"] }
+pyo3 = { version = "0.24", features = ["extension-module", "abi3", "abi3-py38"] }
 aes = "0.8.4"
 aes-gcm = "0.10.3"
 cipher = "0.4.4"
