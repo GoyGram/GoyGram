@@ -1,46 +1,116 @@
-# GoyGram
+<!-- Improved compatibility of back to top link: See: https://github.com/othneildrew/Best-README-Template/pull/73 -->
+<a id="readme-top"></a>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/GoyGram/GoyGram/main/GoyGram.png" alt="GoyGram Logo" width="650">
-</p>
+<!-- PROJECT LOGO -->
+<br />
+<div align="center">
+  <a href="https://github.com/GoyGram/GoyGram">
+    <img src="https://raw.githubusercontent.com/GoyGram/GoyGram/main/GoyGram.png" alt="GoyGram logo" width="650">
+  </a>
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg?style=for-the-badge&logo=python)](https://www.python.org)
-[![Rust Core](https://img.shields.io/badge/Rust_Core-Blazing_Fast-orange.svg?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-red.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
-[![PyPI version](https://img.shields.io/pypi/v/goygram.svg?style=for-the-badge&logo=pypi&color=3775A9)](https://pypi.org/project/goygram/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/goygram.svg?style=for-the-badge&logo=pypi&color=3775A9)](https://pypi.org/project/goygram/)
-[![Telegram API](https://img.shields.io/badge/Telegram-MTProto_%7C_BotAPI-2CA5E0.svg?style=for-the-badge&logo=telegram)](https://telegram.org)
-[![Security](https://img.shields.io/badge/OpSec-Vault_Encrypted-black.svg?style=for-the-badge&logo=security)](https://github.com/GoyGram/GoyGram)
-[![Docs & Wiki](https://img.shields.io/badge/Docs-Read_the_Wiki-blue.svg?style=for-the-badge&logo=readthedocs)](https://goygram.github.io/docs)
+  <h3 align="center">GoyGram</h3>
 
-## What is this?
+  <p align="center">
+    A Telegram framework where Bot API and MTProto run side by side, with the crypto in Rust.
+    <br />
+    <a href="https://goygram.github.io/docs"><strong>Read the docs »</strong></a>
+    <br />
+    <br />
+    <a href="https://goygram.github.io/docs">Documentation</a>
+    &middot;
+    <a href="https://github.com/GoyGram/GoyGram/wiki">Wiki</a>
+    &middot;
+    <a href="https://pypi.org/project/goygram/">PyPI</a>
+    &middot;
+    <a href="https://github.com/GoyGram/GoyGram/issues">Report bug</a>
+    &middot;
+    <a href="https://github.com/GoyGram/GoyGram/issues">Request feature</a>
+  </p>
+</div>
 
-Ultimate hybrid Telegram framework (Python + Rust core) built for production-grade speed, control, and maximum OpSec.
+<!-- PROJECT SHIELDS -->
+<!-- Reference style links are declared at the bottom of this file. -->
+<div align="center">
 
-Under the hood: a Python orchestration layer drives two completely independent network transports (Bot API over aiohttp + MTProto over raw TCP with full DH key exchange), both feeding into a single async event bus. Every crypto operation — AES-256-IGE for MTProto packets, AES-256-GCM for session vaults — runs in a Rust `.so` compiled with LTO and opt-level=3. Hand-written TL codec, no code generation at runtime. QR code login rendering in the terminal via `qrcode` + Rich. SRP password proofs for 2FA. And the vault: your auth key locked to your machine-id through PBKDF2-SHA256 at 600,000 iterations.
+[![Python 3.8+][python-shield]][python-url]
+[![Rust core][rust-shield]][rust-url]
+[![PyPI version][pypi-shield]][pypi-url]
+[![PyPI downloads][downloads-shield]][pypi-url]
+[![License: AGPL v3][license-shield]][license-url]
+[![Strict CI][strict-shield]][strict-url]
+[![Publish][pub-shield]][pub-url]
+[![Telegram][telegram-shield]][telegram-url]
+[![MTProto][mtproto-shield]][mtproto-url]
+[![OpSec][opsec-shield]][opsec-url]
+[![Docs][docs-shield]][docs-url]
+[![Wiki][wiki-shield]][wiki-url]
+[![Last commit][commit-shield]][commit-url]
+[![Stars][stars-shield]][stars-url]
+[![Forks][forks-shield]][forks-url]
+[![Issues][issues-shield]][issues-url]
 
-## Key Features
-- **Hybrid architecture**: ergonomic Python layer + blazing-fast Rust extension.
-- **Session zeroize**: aggressive in-memory cleanup (zeroize strategy for legacy `.session` files after migration).
-- **Vault AES-256-GCM**: encrypted local session bootstrap. Key derived from machine-id + session name via PBKDF2 (or bypass with `GOYGRAM_VAULT_KEY`).
-- **TUI auth flow**: terminal-first authorization workflow — phone login with SMS code, QR code scanning in ASCII art, 2FA/SRP password challenges. All Rich-styled when a TTY is present.
-- **Proxy support**: SOCKS5 (with user/pass auth) and HTTP CONNECT tunneling for MTProto connections. Also respects `ALL_PROXY` / `HTTPS_PROXY` / `HTTP_PROXY` env vars.
-- **Dual transport**: Bot API (HTTP long-polling via aiohttp, multipart uploads, auto-webhook-clear on 409) + MTProto (raw TCP with AES-256-IGE, dynamic salt recovery on `bad_server_salt`, auto-DC migration on `PHONE_MIGRATE_N`) — in one app runtime.
-- **Bot over MTProto**: pass `bot_token` + `api_id`/`api_hash` to authorize a bot through `auth.importBotAuthorization` and switch between `via="api"` and `via="mtproto"` in the same runtime.
-- **DC Routing**: MTProto uses a built-in map of the five Telegram DC endpoints and selects the preferred DC, falling back to `149.154.167.50:443` (DC 2).
-- **Dynamic API dispatch**: every Bot API method works via `__getattr__` — `sendAnimation`, `getUserProfilePhotos`, `setMyCommands`, whatever. Snake_case auto-converts to CamelCase. `mt_` prefix routes to MTProto.
-- **Keyboard system**: inline keyboards, reply keyboards, force reply, reply removal. All with `to_dict()` serialization that adapts per transport.
-- **Forum topic management**: full create/edit/close/reopen/delete lifecycle for forum topics and the General topic. Both transports supported.
-- **One dynamic event object**: `Obj` with kind-dispatch; `MsgObj`, `CbObj`, `PollObj`, `MemberObj`, `InlineObj` are aliases — lazy raw-field access, no model registry, no per-kind classes.
-- **Composable filters**: boolean AND/OR/NOT on `Filter` (`filters.text & ~filters.me`).
-- **Multi-session**: named vaults (`session_name="worker_1"`) for farming multiple accounts from the same process. Separate auth keys, separate TCP connections, separate `self_id`.
-- **Portable sessions**: a single `Session` object doubles as memory, file (`.vault`), and encrypted string (`export_string()` / `from_string()`). Rename-safe vaults let you name the file by `self_id` after login.
-- **Durable delivery state**: Bot API offsets and MTProto `pts/qts/date/seq` cursors are persisted atomically with restrictive permissions.
-- **Direct media primitives**: chunked MTProto `upload_file()`/`download_file()` and Bot API `download_file()` without a heavyweight media framework.
+</div>
 
-## Benchmarks
+<!-- TABLE OF CONTENTS -->
+<details>
+  <summary>Table of contents</summary>
+  <ol>
+    <li><a href="#goygram">GoyGram</a></li>
+    <li><a href="#key-features">Key features</a></li>
+    <li><a href="#benchmarks">Benchmarks</a></li>
+    <li>
+      <a href="#getting-started">Getting started</a>
+      <ul>
+        <li><a href="#prerequisites">Prerequisites</a></li>
+        <li><a href="#installation">Installation</a></li>
+      </ul>
+    </li>
+    <li><a href="#usage">Usage</a></li>
+    <li><a href="#documentation">Documentation</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#license">License</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ol>
+</details>
 
-Cold import, memory footprint, and MTProto crypto (AES-256-IGE) measured against telethon, pyrogram, aiogram and python-telegram-bot. Full methodology in [`benchmarks/`](./benchmarks).
+<!-- ABOUT THE PROJECT -->
+## GoyGram
+
+> Bot API and MTProto in one process, with the crypto in Rust
+
+GoyGram is a Telegram framework for Python. Bot API and MTProto run in the same process and share one event loop and one set of handlers, so a bot and a userbot can live in the same app instead of two. Nothing on the hot path is Python: AES for every packet and the TL codec are Rust, compiled straight into the package.
+
+```python
+import asyncio
+from goygram import GoyGram, filters
+
+app = GoyGram(bot_token="123456:ABC_TOKEN")
+
+@app.on_msg(filt=filters.text)
+async def echo(msg):
+    await msg.reply("Hello from GoyGram")
+
+asyncio.run(app.run())
+```
+
+### Key features
+
+- **Ready**: `pip install goygram`. Python 3.8 and newer, with wheels for Linux, Windows and macOS.
+- **Two transports**: Bot API and MTProto in one app. Switch per call with `via="api"` or `via="mtproto"`, and a reply goes back the way the original message arrived.
+- **Fast to start**: 77 ms to import, about 11 MB of memory. Telethon takes 342 ms and 48 MB for the same job.
+- **Rust core**: AES-256-IGE for MTProto packets, AES-256-GCM for vaults, with AES-NI used when the CPU has it.
+- **No generated wrappers**: any Bot API method works right away, in snake_case or camelCase. MTProto methods go through the `mt_` prefix. A method Telegram adds tomorrow works without a new release of GoyGram.
+- **One event object**: `MsgObj`, `CbObj`, `PollObj`, `MemberObj` and `InlineObj` are aliases of a single dynamic `Obj`. Fields are read on demand, so you only pay for the ones you touch.
+- **Sessions in one place**: a `Session` is your in-memory state, the `.vault` file and a portable encrypted string at once. No separate MemorySession, StringSession and SQLiteSession classes to keep in sync.
+- **OpSec**: the vault key comes out of PBKDF2-SHA256 at 600,000 rounds over your machine id. Memory is zeroized on shutdown, and a wrong key raises instead of quietly falling back to plaintext.
+- **Light**: `aiohttp`, `rich`, `qrcode` and `typing_extensions`. That is the whole dependency list.
+- **Bots over MTProto**: pass `bot_token` together with `api_id` and `api_hash`, and the bot speaks raw MTProto instead of HTTP.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+### Benchmarks
+
+Cold import, memory footprint and MTProto crypto, measured against telethon, pyrogram, aiogram and python-telegram-bot.
 
 | | goygram | telethon | pyrogram | aiogram | python-telegram-bot |
 |---|---|---|---|---|---|
@@ -50,306 +120,136 @@ Cold import, memory footprint, and MTProto crypto (AES-256-IGE) measured against
 | loads `message` (ops/s) | **577,821** | — | — | — | — |
 | loads `updateNewMessage` (ops/s) | **225,347** | — | — | — | — |
 
-The crypto runs in Rust with AES-NI intrinsics selected at runtime (built in, no separate C extension; tgcrypto 1.2.5 measures 204.3 MB/s on the same box), GoyGram starts ~39× faster than aiogram, and uses ~14× less memory. Realistic `updateNewMessage` loads latency: p50 3.8 µs, p99 8.9 µs.
+There is no C extension to install separately, the crypto is already in the package. For scale, tgcrypto reaches 204.3 MB/s on the same hardware. Parsing a realistic `updateNewMessage` costs 3.8 µs at p50 and 8.9 µs at p99. How the numbers were taken is written up in [`benchmarks/`](./benchmarks).
 
-## Installation
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- GETTING STARTED -->
+## Getting started
+
+### Prerequisites
+
+Python 3.8 or newer. The prebuilt wheels pull nothing else in, and Rust is only needed when you build from source.
+
+A bot needs a token from [@BotFather](https://t.me/BotFather). A user account needs an `api_id` and an `api_hash` from [my.telegram.org](https://my.telegram.org).
+
+### Installation
+
 ```bash
 pip install goygram
 ```
 
-Requires Python 3.8+. PyPI wheels use `cp38-abi3`, so the same native wheel works on CPython 3.8 and newer. Pre-built wheels ship for Linux, Windows, and macOS. Termux users install from source because Android wheels are not interchangeable with manylinux wheels. Rust is not required when a compatible wheel is available. Installs `aiohttp`, `rich`, `qrcode`, and `typing_extensions` as dependencies.
-
-### Termux
-
-Termux users should build locally from the source distribution. On a real Termux device, install the toolchain first:
+The wheels carry the `cp38-abi3` tag, so one native build serves CPython 3.8 and everything newer, on Linux, Windows and macOS. To build from source when your platform has no wheel, Rust has to be on the machine:
 
 ```bash
-pkg update
-pkg install python rust clang
+git clone https://github.com/GoyGram/GoyGram
+cd GoyGram
 python -m pip install --no-build-isolation .
 ```
 
-## Quick Start
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-### 1) Bot API (token)
-```python
-import asyncio
-from goygram import GoyGram, filters
+<!-- USAGE EXAMPLES -->
+## Usage
 
-app = GoyGram(bot_token="123456:ABC_TOKEN")
+A user account talks MTProto, so it needs an `api_id` and an `api_hash`:
 
-@app.on_msg(filt=filters.text)
-async def echo(msg):
-    await msg.reply("Hello from Bot API")
-
-asyncio.run(app.run())
-```
-
-### 2) MTProto (no bot token, requires API ID + API Hash)
 ```python
 import asyncio
 from goygram import GoyGram
 
-app = GoyGram(api_id=123456, api_hash="0123456789abcdef0123456789abcdef")  # auto-fetches Telegram DC endpoint at startup
+app = GoyGram(api_id=123456, api_hash="0123456789abcdef0123456789abcdef")
 
 @app.on_cmd("ping")
 async def ping(msg):
-    await msg.reply("pong from MTProto (api_id/api_hash)")
+    await msg.reply("pong")
 
 asyncio.run(app.run())
 ```
 
-
-### 3) Named MTProto sessions (multi-session in one folder)
-```python
-import asyncio
-from goygram import GoyGram
-
-app = GoyGram(
-    api_id=123456,
-    api_hash="0123456789abcdef0123456789abcdef",
-    session_name="farm_worker_1",
-)
-
-asyncio.run(app.run())
-```
-
-- By default, session data is stored in `default.vault`.
-- With `session_name="farm_worker_1"`, session data is stored in `farm_worker_1.vault`.
-- If `farm_worker_1.session` exists, it is migrated to `farm_worker_1.vault` during bootstrap (securely zeroized after).
-
-### 4) Bot over MTProto (auth.importBotAuthorization)
-
-A bot can run over raw MTProto instead of the Bot API HTTP transport. Pass `bot_token` together with `api_id`/`api_hash` and GoyGram authorizes the bot through `auth.importBotAuthorization` — the MTProto equivalent of the Bot API token handshake (with automatic `USER_MIGRATE_N` DC migration):
+The first run opens a login screen in the terminal. Pick a QR code or a phone number, and give the 2FA password if the account has one. The session lands in `default.vault`, encrypted with AES-256-GCM.
 
 ```python
-import asyncio
-from goygram import GoyGram
+# several accounts out of one process
+app = GoyGram(api_id=..., api_hash=..., session_name="farm_worker_1")
 
-app = GoyGram(
-    bot_token="123456:ABC_TOKEN",
-    api_id=123456,
-    api_hash="0123456789abcdef0123456789abcdef",
-    default_transport="mtproto",   # prefer MTProto for outgoing calls
-)
-
-@app.on_cmd("ping")
-async def ping(msg):
-    await msg.reply("pong via MTProto")
-
-asyncio.run(app.run())
-```
-
-Both transports stay available in one runtime. Switch per call with `via="api"` (Bot API) or `via="mtproto"` (MTProto):
-
-```python
+# one message through Bot API, the next through MTProto
 await app.send_msg("123456789", "via Bot API", via="api")
 await app.send_msg("123456789", "via MTProto", via="mtproto")
 ```
 
-`default_transport` sets the default when `via` is omitted: `"api"`, `"mtproto"`, or `"auto"` (Bot API if a token is present, else MTProto).
+> [!WARNING]
+> Leave `GOYGRAM_VAULT_KEY` unset and the vault key is derived from the host machine id. Whoever holds both the vault file and that machine id can open it. Set `GOYGRAM_VAULT_KEY` to 32 random bytes whenever the vault has to stay closed on a host that could be compromised or copied.
 
-## Dynamic API & Methods
-GoyGram can route Bot API method names dynamically, including methods that are not hardcoded as convenience methods:
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-- Call Bot API methods directly even if they are not explicitly hardcoded:
-  - `await app.sendDocument(chat_id=..., document=...)`
-  - `await app.getChat(chat_id=...)`
-  - `await app.getUpdates(timeout=30)`
-- Snake-case also works and is converted to Bot API method names:
-  - `await app.send_document(chat_id=..., document=...)` -> `sendDocument`
-- MTProto actions (authorized with API ID/API Hash) are available with `mt_` prefix:
-  - `await app.mt_get_dialogs(limit=50)`
-  - `await app.mt_get_chat_full(chat_id=...)`
+<!-- DOCUMENTATION -->
+## Documentation
 
-This behavior is implemented through dynamic method resolution in the client core (`__getattr__`) and transport-aware request routing.
+The rest of the library has its own pages:
 
-For Bot API files, `await app.download_file(file_id, destination)` downloads a Telegram file to memory or atomically to a local path. MTProto exposes the same low-level chunk control through `app.core.mt.upload_file(...)` and `app.core.mt.download_file(...)`.
+- [Documentation site](https://goygram.github.io/docs), the full guide in English and Russian
+- [Quick start, Bot API](https://github.com/GoyGram/GoyGram/wiki/Quick-Start-Bot-API)
+- [Quick start, MTProto userbot](https://github.com/GoyGram/GoyGram/wiki/Quick-Start-MTProto-Userbot)
+- [Sessions and authentication](https://github.com/GoyGram/GoyGram/wiki/Sessions-and-Authentication)
+- [Bot API calls](https://github.com/GoyGram/GoyGram/wiki/Bot-API-Calls) and [MTProto calls](https://github.com/GoyGram/GoyGram/wiki/MTProto-Calls)
+- [Architecture and runtime behaviour](https://github.com/GoyGram/GoyGram/wiki/Architecture-and-Runtime-Behavior)
+- [Benchmarks](https://github.com/GoyGram/GoyGram/wiki/Benchmarks)
 
-## Authentication & Security
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-### Interactive Login
-On first run with MTProto, GoyGram launches a Rich-powered TUI:
+<!-- CONTRIBUTING -->
+## Contributing
 
-```
-GoyGram Interactive Login
+Bug reports and pull requests are welcome.
 
-? Choose login method:
-  > QR Code Login
-    Phone Number Login
-```
+CI is strict about two things: the type check has to pass, and commits have to be signed (`git commit -S`).
 
-Choose QR code (scan with any Telegram client) or phone number (SMS code). 2FA password is handled automatically via SRP proofs. The resulting session is stored as `default.vault` — AES-256-GCM encrypted, keyed to your machine.
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-### Vault Encryption
-- **Algorithm**: AES-256-GCM (authenticated encryption via Rust's `aes-gcm` crate)
-- **Key derivation**: PBKDF2-HMAC-SHA256, 600,000 iterations, key material = `{machine-id}:{session_name}`
-- **Override**: `GOYGRAM_VAULT_KEY` env var (base64-encoded 32 bytes) bypasses PBKDF2 entirely
-The vault does not fall back to silently accepting plaintext after a failed decryption.
-
-Without `GOYGRAM_VAULT_KEY` the key is derived from the host's machine-id and a salt stored in the vault file, so it is an at-rest binding to the host, not a secret: anyone who obtains both the vault file and the machine-id can decrypt it. Set `GOYGRAM_VAULT_KEY` to a random 32-byte value when the vault must stay unreadable on a compromised or copied host.
-
-### Session Migration
-Telethon and Pyrogram `.session` files are auto-detected, read from SQLite (columns are introspected, so both schemas work), migrated to `.vault`, and securely zeroized (overwrite + fsync + unlink).
-
-## Session: memory, file, and portable string
-
-Every app exposes `app.session` — a single `Session` object that is the session in **memory**, in a **file** (`.vault`), and as a **portable encrypted string** at the same time. No separate `MemorySession` / `StringSession` / `SQLiteSession` classes and no painful conversions.
-
-```python
-from goygram import GoyGram, Session
-
-app = GoyGram(api_id=123456, api_hash="0123456789abcdef0123456789abcdef")
-
-# after authorization, read the account id and name the file by it (rename-safe):
-await app.session.save(f"{app.session.self_id}.vault")
-
-# or keep it as an encrypted, portable string (not plaintext like Telethon/Pyrogram):
-token = app.session.export_string()   # AES-256-GCM encrypted, machine-locked
-sess = Session.from_string(token)     # one call to restore
-```
-
-- **Rename-safe vaults**: the encryption key no longer depends on the file name, so you can log in first and name/rename the session file afterwards (e.g. by `self_id`).
-- **Encrypted string sessions**: `export_string()` / `from_string()` carry the session as an authenticated, machine-locked blob — unlike Telethon's and Pyrogram's plaintext `StringSession`.
-- **One object, three forms**: `session.data`, `session.save(path)`, `session.load(path)`, `session.export_string()`, `session.from_string(s)`. `self_id`, `is_bot`, `auth_key`, `server_salt`, and `dc` are exposed as properties.
-- **Backward compatible**: legacy vaults (and `.session` migrations) still decrypt; new vaults are written with a `GGV2` header that the reader auto-detects.
-
-Pass an existing session explicitly:
-
-```python
-app = GoyGram(api_id=..., api_hash=..., session=Session.from_string(token))
-app = GoyGram(api_id=..., api_hash=..., session=Session(name="worker_1"))
-```
-
-The constructor still accepts `session_name="..."` for the plain file-backed case.
-
-## Developer Tools (Help)
-Use built-in introspection tools:
-
-```python
-app.help()            # pretty DX overview in console
-print(dir(app))       # inspect available shortcuts + dynamic entries
-```
-
-or:
-
-```python
-from goygram.utils import print_methods
-print_methods(app)
-```
-
-For exact IDE autocomplete across the dynamic Bot API and MTProto dispatch surface, generate local stubs after installation:
-
-```bash
-python -m goygram.stubgen
-```
-
-The command writes `client.pyi` and `telegram.py` beside the installed package. Editors then complete every current method alias, show its keyword arguments, type `mt_req()` and `bot_req()` from the method-name literal, and reject unknown keywords. Runtime dispatch remains dynamic; regenerate after Telegram adds methods or after upgrading GoyGram. The generator and generated stubs are verified on Python 3.8.
-
-## Filters
-`goygram.filters` supports composable boolean operators:
-
-```python
-from goygram import filters
-
-smart_filter = filters.text & ~filters.me
-another = filters.text | filters.me
-
-@app.on_msg(filt=smart_filter)
-async def handler(msg):
-    await msg.reply("Filtered")
-```
-
-Built-in filters: `filters.text` (message has text), `filters.me` (message from current account/bot). Compose with `&`, `|`, `~`. Custom filters: `Filter(lambda e: ...)`.
-
-## Transport Routing
-
-Messages can be routed explicitly by transport:
-
-```python
-# Force Bot API
-await app.send_msg("bot:123456789", "via api", via="api")
-
-# Force MTProto
-await app.send_msg("mt:123456789", "via mtproto", via="mtproto")
-```
-
-`via="api"` is an alias for the Bot API transport and `via="mtproto"` for MTProto (the short forms `via="bot"` / `via="mt"` still work). Chat ID prefixes (`bot:` / `mt:`) are auto-resolved. When replying, the transport source is preserved automatically — reply to a Bot API message, it goes back via Bot API.
-
-## FSM Persistence
-
-The default FSM remains in memory:
-
-```python
-app = GoyGram(bot_token="123456:ABC_TOKEN")
-```
-
-For an external store, pass an object with `load()` and `save(snapshot)` methods:
-
-```python
-class RedisFSM:
-    def __init__(self, redis):
-        self.redis = redis
-
-    def load(self):
-        return self.redis.json().get("goygram:fsm") or []
-
-    def save(self, snapshot):
-        self.redis.json().set("goygram:fsm", ".", snapshot)
-
-app = GoyGram(bot_token="123456:ABC_TOKEN", fsm_backend=RedisFSM(redis))
-```
-
-For complete control, use `fsm_on_change`. It receives a JSON-compatible snapshot after every state change and can write it to Redis, PostgreSQL, a file, or another service:
-
-```python
-def persist_fsm(snapshot):
-    external_store.write(snapshot)
-
-app = GoyGram(bot_token="123456:ABC_TOKEN", fsm_on_change=persist_fsm)
-```
-
-The active core object is also available as `app.fsm`. It exposes `snapshot()` and `restore(snapshot)` for explicit checkpoints and migrations. Existing `set_state`, `get_state`, `get_state_data`, and `clear_state` behavior is unchanged.
-
-## Event Pipeline
-
-```
-BotNet.spin() ──→ bus.push("bot", data)
-                                          ──→ Disp.consume() → your handlers
-MTNet.spin() ──→ bus.push("mt", data)
-```
-
-Single `asyncio.Queue` → dynamic event objects (`MsgObj`/`CbObj`/`PollObj`/`MemberObj`/`InlineObj`, aliases of one `Obj`) → handler lists in registration order. Per-handler error isolation — one crashing handler never takes down the dispatcher.
-
-## Logging
-
-```bash
-GOYGRAM_LOG=DEBUG python app.py   # verbose (raw MTProto packet dumps)
-GOYGRAM_LOG=INFO python app.py    # default (startup, errors)
-GOYGRAM_LOG=WARNING python app.py # quiet
-```
-
-Logger hierarchy: `goygram.app`, `goygram.botapi`, `goygram.mtproto`, `goygram.disp`, `goygram.security`, `goygram.dc`.
-
-## Architecture at a Glance
-
-```
-┌─────────────────────────────────────────────┐
-│             GoyGram (Public API)             │  ← User-facing facade
-├─────────────────────────────────────────────┤
-│        AppCore (Internal Engine)             │  ← Config, hooks, routing
-├──────────────────┬──────────────────────────┤
-│ BotNet (aiohttp) │   MTNet (TCP/MTProto)    │  ← Independent transports
-├──────────────────┴──────────────────────────┤
-│          Bus → Disp (Event Pipeline)         │  ← asyncio.Queue + dispatcher
-├─────────────────────────────────────────────┤
-│  goygram.ext (Rust .so) — AES-IGE/AES-GCM   │  ← Native crypto (LTO, opt=3)
-└─────────────────────────────────────────────┘
-```
-
-## Wiki
-> 📚 **Official documentation and Wiki.** There are separate pages for using the client, Bot API, MTProto, events, bytes and TL data.
-> 👉 **[Open GoyGram Pages](https://goygram.github.io/docs)** · **[Open GitHub Wiki](https://github.com/GoyGram/GoyGram/wiki)**
-
+<!-- LICENSE -->
 ## License
-See [LICENSE](./LICENSE).
+
+GoyGram is released under the GNU Affero General Public License v3.0. The full text is in [`LICENSE`](./LICENSE).
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- CONTACT -->
+## Contact
+
+Questions and bug reports go to [GitHub issues](https://github.com/GoyGram/GoyGram/issues).
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- MARKDOWN LINKS & IMAGES -->
+[python-shield]: https://img.shields.io/badge/python-3.8+-blue.svg?style=for-the-badge&logo=python
+[python-url]: https://www.python.org
+[rust-shield]: https://img.shields.io/badge/Rust_Core-Native-orange.svg?style=for-the-badge&logo=rust
+[rust-url]: https://www.rust-lang.org/
+[pypi-shield]: https://img.shields.io/pypi/v/goygram.svg?style=for-the-badge&logo=pypi&color=3775A9
+[pypi-url]: https://pypi.org/project/goygram/
+[downloads-shield]: https://img.shields.io/pypi/dm/goygram.svg?style=for-the-badge&logo=pypi&color=3775A9
+[license-shield]: https://img.shields.io/badge/License-AGPL_v3-red.svg?style=for-the-badge
+[license-url]: https://www.gnu.org/licenses/agpl-3.0
+[strict-shield]: https://img.shields.io/github/actions/workflow/status/GoyGram/GoyGram/strict.yml?style=for-the-badge&label=strict
+[strict-url]: https://github.com/GoyGram/GoyGram/actions
+[pub-shield]: https://img.shields.io/github/actions/workflow/status/GoyGram/GoyGram/pub.yml?style=for-the-badge&label=publish
+[pub-url]: https://github.com/GoyGram/GoyGram/actions
+[telegram-shield]: https://img.shields.io/badge/Telegram-MTProto_%7C_BotAPI-2CA5E0.svg?style=for-the-badge&logo=telegram
+[telegram-url]: https://telegram.org
+[mtproto-shield]: https://img.shields.io/badge/Platforms-Linux_%7C_macOS_%7C_Windows-4B4B4B.svg?style=for-the-badge&logo=linux&logoColor=white
+[mtproto-url]: https://pypi.org/project/goygram/
+[opsec-shield]: https://img.shields.io/badge/OpSec-Vault_Encrypted-black.svg?style=for-the-badge
+[opsec-url]: https://github.com/GoyGram/GoyGram
+[docs-shield]: https://img.shields.io/badge/Docs-Read_the_Wiki-blue.svg?style=for-the-badge&logo=readthedocs
+[docs-url]: https://goygram.github.io/docs
+[wiki-shield]: https://img.shields.io/badge/Wiki-GitHub-blue.svg?style=for-the-badge&logo=github
+[wiki-url]: https://github.com/GoyGram/GoyGram/wiki
+[commit-shield]: https://img.shields.io/github/last-commit/GoyGram/GoyGram?style=for-the-badge
+[commit-url]: https://github.com/GoyGram/GoyGram/commits
+[stars-shield]: https://img.shields.io/github/stars/GoyGram/GoyGram?style=for-the-badge
+[stars-url]: https://github.com/GoyGram/GoyGram/stargazers
+[forks-shield]: https://img.shields.io/github/forks/GoyGram/GoyGram?style=for-the-badge
+[forks-url]: https://github.com/GoyGram/GoyGram/network/members
+[issues-shield]: https://img.shields.io/github/issues/GoyGram/GoyGram?style=for-the-badge
+[issues-url]: https://github.com/GoyGram/GoyGram/issues
