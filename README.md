@@ -40,7 +40,7 @@
 [![Strict CI][strict-shield]][strict-url]
 [![Publish][pub-shield]][pub-url]
 [![Telegram][telegram-shield]][telegram-url]
-[![MTProto][mtproto-shield]][mtproto-url]
+[![Platforms][mtproto-shield]][mtproto-url]
 [![OpSec][opsec-shield]][opsec-url]
 [![Docs][docs-shield]][docs-url]
 [![Wiki][wiki-shield]][wiki-url]
@@ -139,7 +139,22 @@ A bot needs a token from [@BotFather](https://t.me/BotFather). A user account ne
 pip install goygram
 ```
 
-The wheels are built against the stable ABI and carry the `cp38-abi3` tag, so one native build loads on CPython 3.13 and everything newer, on Linux, Windows and macOS. To build from source when your platform has no wheel, Rust has to be on the machine:
+The wheels are built against the stable ABI and carry the `cp38-abi3` tag, so one native build loads on CPython 3.13 and everything newer, on Linux, Windows, macOS and Termux.
+
+On Termux pip resolves a prebuilt wheel the same way it does anywhere else, because the CPython that Termux ships reports Android platform tags:
+
+```bash
+pkg install python-pip
+pip install goygram
+```
+
+Phones (`arm64_v8a`) and emulator or Chromebook builds (`x86_64`) are both covered, built against Android API level 24. The one dependency with no Android wheel on PyPI is `aiohttp`; Termux packages it, so take that one from the repository and pip will find it instead of compiling it:
+
+```bash
+pkg install python-aiohttp
+```
+
+To build from source when your platform has no wheel, Rust has to be on the machine:
 
 ```bash
 git clone https://github.com/GoyGram/GoyGram
@@ -237,7 +252,7 @@ Questions and bug reports go to [GitHub issues](https://github.com/GoyGram/GoyGr
 [pub-url]: https://github.com/GoyGram/GoyGram/actions
 [telegram-shield]: https://img.shields.io/badge/Telegram-MTProto_%7C_BotAPI-2CA5E0.svg?style=for-the-badge&logo=telegram
 [telegram-url]: https://telegram.org
-[mtproto-shield]: https://img.shields.io/badge/Platforms-Linux_%7C_macOS_%7C_Windows-4B4B4B.svg?style=for-the-badge&logo=linux&logoColor=white
+[mtproto-shield]: https://img.shields.io/badge/Platforms-Linux_%7C_macOS_%7C_Windows_%7C_Android-4B4B4B.svg?style=for-the-badge&logo=linux&logoColor=white
 [mtproto-url]: https://pypi.org/project/goygram/
 [opsec-shield]: https://img.shields.io/badge/OpSec-Vault_Encrypted-black.svg?style=for-the-badge
 [opsec-url]: https://github.com/GoyGram/GoyGram
