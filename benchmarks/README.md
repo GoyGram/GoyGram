@@ -40,7 +40,7 @@ A single VPS (AMD Ryzen 9 5950X, 6 vCPU). Every table below was rerun on 0.8.4; 
 
 ![AES-256-IGE throughput](03-aes-ige-throughput.png)
 
-GoyGram dispatches to AES-NI at runtime. tgcrypto 1.2.5 is table-based software AES. Network RTT still dominates a real client.
+GoyGram dispatches to the CPU's own AES instructions at runtime, AES-NI on x86 and ARMv8 crypto on ARM. tgcrypto 1.2.5 is table-based software AES. Network RTT still dominates a real client.
 
 Per-message latency at 256 B (lower is better): goygram 0.6 µs, tgcrypto 1.6 µs, pyrogram 1.7 µs, telethon 29.4 µs.
 
@@ -106,7 +106,7 @@ loads latency (µs): p50 3.8, p95 6.4, p99 8.9, p99.9 20.7.
 ## Honest notes
 
 - **No live Telegram.** A mock MTProto DC, 10k sessions, and hour-long leak runs are not in this folder.
-- **tgcrypto loses on raw AES-IGE now.** tgcrypto 1.2.5 is table-based software AES; GoyGram dispatches to AES-NI. Network RTT still dominates a real client.
+- **tgcrypto loses on raw AES-IGE now.** tgcrypto 1.2.5 is table-based software AES; GoyGram runs on the CPU's AES instructions. Network RTT still dominates a real client.
 - **Telethon's default IGE path is slow** because it drives OpenSSL through ctypes. `cryptg` is optional.
 - **aiogram import/RSS** are pydantic v2.
 - **Schema load** (layer 229, 823 methods, 1698 constructors) is once per process. Warm `loads` is a few microseconds.

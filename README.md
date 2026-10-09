@@ -98,7 +98,7 @@ asyncio.run(app.run())
 - **Ready**: `pip install goygram`. Python 3.13 and newer, with wheels for Linux, Windows, macOS and Android.
 - **Two transports**: Bot API and MTProto in one app. Switch per call with `via="api"` or `via="mtproto"`, and a reply goes back the way the original message arrived.
 - **Fast to start**: 77 ms to import, about 11 MB of memory. Telethon takes 342 ms and 48 MB for the same job.
-- **Rust core**: AES-256-IGE for MTProto packets, AES-256-GCM for vaults, with AES-NI used when the CPU has it.
+- **Rust core**: AES-256-IGE for MTProto packets, AES-256-GCM for vaults, using the CPU's own AES instructions, picked at runtime (AES-NI on x86, ARMv8 crypto on ARM).
 - **No generated wrappers**: any Bot API method works right away, in snake_case or camelCase. MTProto methods go through the `mt_` prefix. A method Telegram adds tomorrow works without a new release of GoyGram.
 - **One event object**: `MsgObj`, `CbObj`, `PollObj`, `MemberObj` and `InlineObj` are aliases of a single dynamic `Obj`. Fields are read on demand, so you only pay for the ones you touch.
 - **Sessions in one place**: a `Session` is your in-memory state, the `.vault` file and a portable encrypted string at once. No separate MemorySession, StringSession and SQLiteSession classes to keep in sync.
