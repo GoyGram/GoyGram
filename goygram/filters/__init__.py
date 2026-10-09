@@ -6,7 +6,8 @@ import re as _re
 import time as _time
 from dataclasses import dataclass, field
 from importlib import import_module
-from typing import Any, Callable, Dict, Hashable, Iterable, Protocol, Type, cast
+from collections.abc import Callable, Hashable, Iterable
+from typing import Any, Protocol, cast
 
 from goygram.types.obj import Obj
 from goygram.utils import utf16_slice
@@ -138,7 +139,7 @@ def _rget(e: Obj, *keys: str) -> Any:
         return None
     value: Any = e
     for key in keys:
-        t = cast(Type[object], type(value))
+        t = cast(type[object], type(value))
         if t is dict:
             value = value.get(key)
         else:
@@ -154,12 +155,12 @@ def _rget(e: Obj, *keys: str) -> Any:
 
 def _ct(e: Obj) -> str | None:
     chat = _rget(e, "chat")
-    if isinstance(chat, dict) and cast(Dict[str, Any], chat).get("type"):
-        return str(cast(Dict[str, Any], chat)["type"])
+    if isinstance(chat, dict) and cast(dict[str, Any], chat).get("type"):
+        return str(cast(dict[str, Any], chat)["type"])
     raw: dict[str, Any] | None = getattr(e, "raw", None)
     if isinstance(raw, dict):
         for src in (raw, raw.get("message") or {}, raw.get("edited_message") or {}, raw.get("callback_query", {}).get("message") or {}):
-            c: dict[str, str] | None = cast(Dict[str, Any], src).get("chat") if isinstance(src, dict) else None
+            c: dict[str, str] | None = cast(dict[str, Any], src).get("chat") if isinstance(src, dict) else None
             if isinstance(c, dict) and c.get("type"):
                 return c["type"]
     cid = getattr(e, "chat_id", None)
@@ -538,7 +539,7 @@ class _mentioned(Filter):
                     if ent.get("type") == "text_mention" or "textMention" in str(ent.get("_", "")):
                         if self._uid is None:
                             return True
-                        uid = ent.get("user_id") or cast(Dict[str, int], ent.get("user") or {}).get("id")
+                        uid = ent.get("user_id") or cast(dict[str, int], ent.get("user") or {}).get("id")
                         if uid and int(uid) == int(self._uid):
                             return True
                     if ent.get("type") == "mention" or "Mention" in str(ent.get("_", "")):
@@ -901,11 +902,11 @@ via_bot = Filter(lambda e: bool(_rget(e, "via_bot")), name="via_bot")
 is_topic_message = Filter(lambda e: bool(_rget(e, "is_topic_message") or _rget(e, "message_thread_id")), name="is_topic_message")
 has_markup = Filter(lambda e: bool(_rget(e, "reply_markup")), name="has_markup")
 has_inline_kbd = Filter(
-    lambda e: bool(cast(Dict[str, object], _rget(e, "reply_markup") or {}).get("inline_keyboard")),
+    lambda e: bool(cast(dict[str, object], _rget(e, "reply_markup") or {}).get("inline_keyboard")),
     name="has_inline_kbd"
 )
 has_reply_kbd = Filter(
-    lambda e: bool(cast(Dict[str, object], _rget(e, "reply_markup") or {}).get("keyboard")),
+    lambda e: bool(cast(dict[str, object], _rget(e, "reply_markup") or {}).get("keyboard")),
     name="has_reply_kbd"
 )
 silent = Filter(lambda e: bool(_rget(e, "disable_notification")), name="silent")
@@ -1088,7 +1089,7 @@ class cb_json(Filter):
             if not isinstance(obj, dict):
                 return False
             if self._val is not None:
-                ok = cast(Dict[str, object], obj).get(self._key) == self._val
+                ok = cast(dict[str, object], obj).get(self._key) == self._val
             else:
                 ok = self._key in obj
             if ok:

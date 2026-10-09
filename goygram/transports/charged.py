@@ -1,8 +1,8 @@
 # parallel transfer technique adapted from mautrix-telegram's parallel_file_transfer.py (AGPL-3.0, Tulir Asokan)
 from __future__ import annotations
-import asyncio, hashlib, math, os, re as _re, secrets, tempfile
+import asyncio, hashlib, inspect, math, os, re as _re, secrets, tempfile
 from pathlib import Path
-from typing import Any, Dict, cast
+from typing import Any, cast
 
 from goygram.errors import FileReferenceExpiredError, GoyGramError
 from goygram.transports.mtproto import MTNet
@@ -85,7 +85,7 @@ class _DownloadLane:
         response = await self.conn.call("upload.getFile", location=self.location, offset=self.offset, limit=self.limit)
         self.remaining -= 1
         self.offset += self.stride
-        body = cast(Dict[str, Any], response.get("result")) if isinstance(response.get("result"), dict) else response
+        body = cast(dict[str, Any], response.get("result")) if isinstance(response.get("result"), dict) else response
         payload = body.get("bytes")
         if isinstance(payload, str):
             try:
@@ -136,7 +136,7 @@ async def _file_dc_senders(mtnet: MTNet, count: int, dc_id: int) -> list[Charged
             salt = cached.get("salt") or b"\x00" * 8
         else:
             export = await mtnet.call("auth.exportAuthorization", dc_id=int(dc_id))
-            body = cast(Dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
+            body = cast(dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
             export_id = body.get("id")
             export_bytes = body.get("bytes")
             if isinstance(export_bytes, str):
@@ -208,7 +208,7 @@ async def charged_upload(mtnet: MTNet, source: Any, *, file_name: str | None = N
             await lanes[ticker].push(chunk)
             sent += len(chunk)
             if progress is not None:
-                if asyncio.iscoroutinefunction(progress):
+                if inspect.iscoroutinefunction(progress):
                     await progress(sent, size or sent)
                 else:
                     progress(sent, size or sent)
@@ -301,7 +301,7 @@ async def charged_download(mtnet: MTNet, location: Any, destination: Any, *, siz
                         if not data or len(data) < lane.limit:
                             active.remove(lane)
                     if progress is not None:
-                        if asyncio.iscoroutinefunction(progress):
+                        if inspect.iscoroutinefunction(progress):
                             await progress(total, size)
                         else:
                             progress(total, size)

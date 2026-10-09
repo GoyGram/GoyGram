@@ -1,6 +1,6 @@
 {
   "include": ["goygram"],
   "typeCheckingMode": "strict",
-  "pythonVersion": "3.8",
+  "pythonVersion": "3.13",
   "pythonPlatform": "All"
 }

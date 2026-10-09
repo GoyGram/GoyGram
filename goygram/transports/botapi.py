@@ -9,7 +9,8 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Sequence, Tuple, Type, cast
+from collections.abc import Sequence
+from typing import Any, cast
 
 from goygram.logging import get_logger
 from goygram.errors import FloodWaitError
@@ -224,7 +225,7 @@ class BotNet:
                 retry_after = parameters.get("retry_after", 1) if isinstance(parameters, dict) else 1
                 raise FloodWaitError(429, "BOT_API_RATE_LIMIT", max(1, int(retry_after)))
             raise RuntimeError(f"botapi {m} http {r.status}: {raw}")
-        raw = cast(Dict[str, Any], raw)
+        raw = cast(dict[str, Any], raw)
         if not raw.get("ok"):
             raise RuntimeError(f"botapi {m} fail: {raw}")
         return raw["result"]
@@ -264,7 +265,7 @@ class BotNet:
 
         def attach(value: Any) -> Any:
             if isinstance(value, (bytes, bytearray, memoryview)) or (
-                isinstance(value, tuple) and len(cast(Tuple[object, ...], value)) >= 2
+                isinstance(value, tuple) and len(cast(tuple[object, ...], value)) >= 2
                 and isinstance(value[1], (bytes, bytearray, memoryview))
             ):
                 name = "file" + str(len(attachments))
@@ -273,7 +274,7 @@ class BotNet:
                 attachments[name] = value
                 return "attach://" + name
             if isinstance(value, dict):
-                return {k: attach(v) for k, v in cast(Dict[str, Any], value).items()}
+                return {k: attach(v) for k, v in cast(dict[str, Any], value).items()}
             if isinstance(value, (list, tuple)):
                 return [attach(v) for v in cast(Sequence[object], value)]
             return dump(value)
@@ -287,23 +288,23 @@ class BotNet:
     def has_file(self, v: Any) -> bool:
         if isinstance(v, (bytes, bytearray, memoryview)):
             return True
-        if isinstance(v, tuple) and len(cast(Tuple[object, ...], v)) >= 2 and isinstance(v[1], (bytes, bytearray, memoryview)):
+        if isinstance(v, tuple) and len(cast(tuple[object, ...], v)) >= 2 and isinstance(v[1], (bytes, bytearray, memoryview)):
             return True
         if isinstance(v, list):
             return any(self.has_file(x) for x in cast(Sequence[object], v))
         if isinstance(v, dict):
-            return any(self.has_file(x) for x in cast(Dict[object, object], v).values())
+            return any(self.has_file(x) for x in cast(dict[object, object], v).values())
         return False
 
     def add_form(self, form: Any, k: str, v: Any) -> None:
         if v is None:
             return
-        fn = getattr(cast(Type[object], type(v)), "to_dict", None)
+        fn = getattr(cast(type[object], type(v)), "to_dict", None)
         if fn is not None:
             self.add_form(form, k, fn(v))
             return
-        if isinstance(v, tuple) and len(cast(Tuple[object, ...], v)) >= 2 and isinstance(v[1], (bytes, bytearray, memoryview)):
-            parts = cast(Tuple[object, ...], v)
+        if isinstance(v, tuple) and len(cast(tuple[object, ...], v)) >= 2 and isinstance(v[1], (bytes, bytearray, memoryview)):
+            parts = cast(tuple[object, ...], v)
             name = str(parts[0])
             data = bytes(cast(Sequence[int], v[1]))
             ct = parts[2] if len(parts) > 2 else "application/octet-stream"

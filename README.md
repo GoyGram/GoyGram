@@ -32,7 +32,7 @@
 <!-- Reference style links are declared at the bottom of this file. -->
 <div align="center">
 
-[![Python 3.8+][python-shield]][python-url]
+[![Python 3.13+][python-shield]][python-url]
 [![Rust core][rust-shield]][rust-url]
 [![PyPI version][pypi-shield]][pypi-url]
 [![PyPI downloads][downloads-shield]][pypi-url]
@@ -95,7 +95,7 @@ asyncio.run(app.run())
 
 ### Key features
 
-- **Ready**: `pip install goygram`. Python 3.8 and newer, with wheels for Linux, Windows and macOS.
+- **Ready**: `pip install goygram`. Python 3.13 and newer, with wheels for Linux, Windows and macOS.
 - **Two transports**: Bot API and MTProto in one app. Switch per call with `via="api"` or `via="mtproto"`, and a reply goes back the way the original message arrived.
 - **Fast to start**: 77 ms to import, about 11 MB of memory. Telethon takes 342 ms and 48 MB for the same job.
 - **Rust core**: AES-256-IGE for MTProto packets, AES-256-GCM for vaults, with AES-NI used when the CPU has it.
@@ -103,7 +103,7 @@ asyncio.run(app.run())
 - **One event object**: `MsgObj`, `CbObj`, `PollObj`, `MemberObj` and `InlineObj` are aliases of a single dynamic `Obj`. Fields are read on demand, so you only pay for the ones you touch.
 - **Sessions in one place**: a `Session` is your in-memory state, the `.vault` file and a portable encrypted string at once. No separate MemorySession, StringSession and SQLiteSession classes to keep in sync.
 - **OpSec**: the vault key comes out of PBKDF2-SHA256 at 600,000 rounds over your machine id. Memory is zeroized on shutdown, and a wrong key raises instead of quietly falling back to plaintext.
-- **Light**: `aiohttp`, `rich`, `qrcode` and `typing_extensions`. That is the whole dependency list.
+- **Light**: `aiohttp`, `rich` and `qrcode`. That is the whole dependency list.
 - **Bots over MTProto**: pass `bot_token` together with `api_id` and `api_hash`, and the bot speaks raw MTProto instead of HTTP.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
@@ -129,7 +129,7 @@ There is no C extension to install separately, the crypto is already in the pack
 
 ### Prerequisites
 
-Python 3.8 or newer. The prebuilt wheels pull nothing else in, and Rust is only needed when you build from source.
+Python 3.13 or newer. The prebuilt wheels pull nothing else in, and Rust is only needed when you build from source.
 
 A bot needs a token from [@BotFather](https://t.me/BotFather). A user account needs an `api_id` and an `api_hash` from [my.telegram.org](https://my.telegram.org).
 
@@ -139,7 +139,7 @@ A bot needs a token from [@BotFather](https://t.me/BotFather). A user account ne
 pip install goygram
 ```
 
-The wheels carry the `cp38-abi3` tag, so one native build serves CPython 3.8 and everything newer, on Linux, Windows and macOS. To build from source when your platform has no wheel, Rust has to be on the machine:
+The wheels are built against the stable ABI and carry the `cp38-abi3` tag, so one native build loads on CPython 3.13 and everything newer, on Linux, Windows and macOS. To build from source when your platform has no wheel, Rust has to be on the machine:
 
 ```bash
 git clone https://github.com/GoyGram/GoyGram
@@ -222,7 +222,7 @@ Questions and bug reports go to [GitHub issues](https://github.com/GoyGram/GoyGr
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- MARKDOWN LINKS & IMAGES -->
-[python-shield]: https://img.shields.io/badge/python-3.8+-blue.svg?style=for-the-badge&logo=python
+[python-shield]: https://img.shields.io/badge/python-3.13+-blue.svg?style=for-the-badge&logo=python
 [python-url]: https://www.python.org
 [rust-shield]: https://img.shields.io/badge/Rust_Core-Native-orange.svg?style=for-the-badge&logo=rust
 [rust-url]: https://www.rust-lang.org/

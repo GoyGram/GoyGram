@@ -1,10 +1,11 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
-import asyncio, hashlib, json, os, secrets, struct, tempfile, time, urllib.parse, logging
+import asyncio, hashlib, inspect, json, os, secrets, struct, tempfile, time, urllib.parse, logging
 from contextlib import suppress
 from hashlib import sha1, sha256
 from pathlib import Path
-from typing import Any, Dict, Literal, Protocol, Sequence, Tuple, TypedDict, TYPE_CHECKING, Union, cast
+from collections.abc import Sequence
+from typing import Any, Literal, Protocol, TYPE_CHECKING, TypedDict, cast
 from goygram.errors import ChannelNotFoundError, ConnectionClosedError, FileReferenceExpiredError, FloodWaitError, GoyGramError, RPCError
 from goygram.api.types import mtname
 import re as _re
@@ -14,7 +15,7 @@ log = logging.getLogger("goygram.mtproto")
 
 def _inline_dc(obj: Any) -> int | None:
     if isinstance(obj, dict):
-        obj = cast(Dict[str, Any], obj)
+        obj = cast(dict[str, Any], obj)
         if "InlineMessageID" in str(obj.get("_") or "") and isinstance(obj.get("dc_id"), int):
             return int(obj["dc_id"])
         for value in obj.values():
@@ -74,13 +75,10 @@ class _PendingContainer(TypedDict):
 
 
 if TYPE_CHECKING:
-    _RpcFuture = asyncio.Future[Dict[str, Any]]
-    _PendingRequest = Union[
-        Tuple[_RpcFuture, Dict[str, Any]],
-        Tuple[_RpcFuture, Dict[str, Any], Union[int, str, None], Union[str, None]],
-    ]
-    _PendingEntry = Union[_PendingRequest, _PendingContainer]
-    _Cursor = Dict[str, Union[int, Dict[int, int]]]
+    _RpcFuture = asyncio.Future[dict[str, Any]]
+    _PendingRequest = tuple[_RpcFuture, dict[str, Any]] | tuple[_RpcFuture, dict[str, Any], int | str | None, str | None]
+    _PendingEntry = _PendingRequest | _PendingContainer
+    _Cursor = dict[str, int | dict[int, int]]
 else:
     _RpcFuture = object
     _PendingRequest = object
@@ -392,10 +390,10 @@ class MTNet:
             try:
                 loaded = json.loads(self.cursor_path.read_text())
                 if isinstance(loaded, dict):
-                    self.cursor = {key: int(value) for key, value in cast(Dict[str, int], loaded).items() if key in {"pts", "qts", "date", "seq"}}
-                    channels = cast(Dict[str, Any], loaded).get("channels")
+                    self.cursor = {key: int(value) for key, value in cast(dict[str, int], loaded).items() if key in {"pts", "qts", "date", "seq"}}
+                    channels = cast(dict[str, Any], loaded).get("channels")
                     if isinstance(channels, dict):
-                        self.cursor["channels"] = {int(key): int(value) for key, value in cast(Dict[str, int], channels).items()}
+                        self.cursor["channels"] = {int(key): int(value) for key, value in cast(dict[str, int], channels).items()}
             except (OSError, TypeError, ValueError):
                 self.cursor = {}
         self.auth_ready=asyncio.Event()
@@ -433,7 +431,7 @@ class MTNet:
         if isinstance(incoming, dict):
             current_channels = self.cursor.get("channels")
             channels = dict(current_channels) if isinstance(current_channels, dict) else {}
-            for channel_id, pts in cast(Dict[Union[int, str], Any], incoming).items():
+            for channel_id, pts in cast(dict[int | str, Any], incoming).items():
                 channel_id = int(channel_id)
                 if isinstance(pts, int) and pts > channels.get(channel_id, 0):
                     channels[channel_id] = pts
@@ -738,7 +736,7 @@ class MTNet:
     def _dispatch_update(self, update: Any) -> None:
         if not isinstance(update, dict):
             return
-        update = cast(Dict[str, Any], update)
+        update = cast(dict[str, Any], update)
         peer: dict[str, Any] | None
         update_type = str(update.get("_", "unknown"))
         if update_type == "updateChannelTooLong":
@@ -1009,7 +1007,7 @@ class MTNet:
                 "kind": "update",
                 "src": "mt",
                 "update_type": update_type,
-                "user_id": update.get("user_id") or update.get("user") if not isinstance(update.get("user"), dict) else cast(Dict[str, object], update.get("user") or {}).get("id"),
+                "user_id": update.get("user_id") or update.get("user") if not isinstance(update.get("user"), dict) else cast(dict[str, object], update.get("user") or {}).get("id"),
                 "status": update.get("status"),
                 "raw_update": update,
             }
@@ -1046,7 +1044,7 @@ class MTNet:
     def _dispatch_updates(self, result: Any) -> None:
         if not isinstance(result, dict):
             return
-        result = cast(Dict[str, Any], result)
+        result = cast(dict[str, Any], result)
         self.update_cursor(result)
         state: dict[str, Any] | None = result.get("state")
         if isinstance(state, dict):
@@ -1146,7 +1144,7 @@ class MTNet:
             peer = await self.resolve_peer(-1000000000000 - int(channel_id))
         except Exception:
             pass
-        if not isinstance(peer, dict) or cast(Dict[str, object], peer).get("_") != "inputPeerChannel":
+        if not isinstance(peer, dict) or cast(dict[str, object], peer).get("_") != "inputPeerChannel":
             return
         pts = self._channel_pts(channel_id)
         if pts <= 0:
@@ -1792,7 +1790,7 @@ class MTNet:
     async def resolve_peer(self, value: Any) -> bytes:
         if isinstance(value, (bytes, bytearray, memoryview)):
             return bytes(cast(Sequence[int], value))
-        obj = cast(Dict[str, Any], value) if isinstance(value, dict) else {"chat_id": value}
+        obj = cast(dict[str, Any], value) if isinstance(value, dict) else {"chat_id": value}
         chat_id = obj.get("chat_id") or obj.get("peer")
         if isinstance(chat_id, str) and not chat_id.lstrip("-").isdigit() and chat_id not in {"self", "me"}:
             username = chat_id.lstrip("@").casefold()
@@ -1832,7 +1830,7 @@ class MTNet:
         body = result.get("result", result)
         if not isinstance(body, dict):
             return False
-        self._ingest_entities(cast(Dict[str, Any], body))
+        self._ingest_entities(cast(dict[str, Any], body))
         entity = self.entities.get(("chat", channel_id))
         return bool(isinstance(entity, dict) and entity.get("access_hash"))
 
@@ -1886,7 +1884,7 @@ class MTNet:
         if isinstance(v, (list, tuple)):
             return [self._takeout_encode(item) for item in cast(Sequence[object], v)]
         if isinstance(v, dict):
-            return {k: self._takeout_encode(x) for k, x in cast(Dict[str, object], v).items()}
+            return {k: self._takeout_encode(x) for k, x in cast(dict[str, object], v).items()}
         if isinstance(v, memoryview):
             return bytes(cast(Sequence[int], v))
         return v
@@ -1899,7 +1897,7 @@ class MTNet:
             if isinstance(v, (list, tuple)):
                 return [_resolve_val(item) for item in cast(Sequence[object], v)]
             if isinstance(v, dict):
-                return {k: _resolve_val(x) for k, x in cast(Dict[str, object], v).items()}
+                return {k: _resolve_val(x) for k, x in cast(dict[str, object], v).items()}
             if isinstance(v, memoryview):
                 return bytes(cast(Sequence[int], v))
             return v
@@ -1920,7 +1918,7 @@ class MTNet:
                 return None
             kind = decoded.get("_")
             if kind in {"updateNewMessage", "updateNewChannelMessage", "updateEditMessage", "updateEditChannelMessage"}:
-                decoded = cast(Dict[str, Any], decoded.get("message", {}))
+                decoded = cast(dict[str, Any], decoded.get("message", {}))
                 kind = decoded.get("_")
             is_out = bool(decoded.get("out"))
             self_id = getattr(self, "self_id", 0) or 0
@@ -1978,7 +1976,7 @@ class MTNet:
             return
         if not isinstance(value, dict):
             return
-        value = cast(Dict[str, Any], value)
+        value = cast(dict[str, Any], value)
         if value.get("_") == "updateShortSentMessage":
             if chat_id is not None:
                 value["chat_id"] = chat_id
@@ -2021,7 +2019,7 @@ class MTNet:
                 parts += 1
                 sent += len(chunk)
                 if progress is not None:
-                    if asyncio.iscoroutinefunction(progress):
+                    if inspect.iscoroutinefunction(progress):
                         await progress(sent, total_size or sent)
                     else:
                         progress(sent, total_size or sent)
@@ -2033,16 +2031,16 @@ class MTNet:
     async def refresh_file_reference(self, source: Any, location: dict[str, Any]) -> dict[str, Any]:
         document: dict[str, Any] | None = None
         if isinstance(source, dict):
-            source = cast(Dict[str, Any], source)
+            source = cast(dict[str, Any], source)
             document = source.get("document") if isinstance(source.get("document"), dict) else source
             if document is not None and document.get("_") != "document":
                 media: dict[str, Any] | None = source.get("media")
                 document = media.get("document") if isinstance(media, dict) else None
         if not isinstance(document, dict) or not isinstance(document.get("id"), int):
             raise FileReferenceExpiredError(400, "file reference expired and source is unknown")
-        src_value: Dict[str, Any] = cast(Dict[str, Any], source) if isinstance(source, dict) else {}
+        src_value: dict[str, Any] = cast(dict[str, Any], source) if isinstance(source, dict) else {}
         origin_value = src_value.get("message")
-        origin: Dict[str, Any] | None = cast(Dict[str, Any], origin_value) if isinstance(origin_value, dict) else None
+        origin: dict[str, Any] | None = cast(dict[str, Any], origin_value) if isinstance(origin_value, dict) else None
         if origin is None or origin.get("msg_id") is None:
             raise FileReferenceExpiredError(400, "file reference refresh requires the message origin")
         peer = await self.resolve_peer(origin.get("peer"))
@@ -2052,13 +2050,13 @@ class MTNet:
             result = await self.call("channels.getMessages", channel={**decoded, "_": "inputChannel"}, id=ids)
         else:
             result = await self.call("messages.getMessages", id=ids)
-        body: dict[str, Any] = cast(Dict[str, Any], result.get("result")) if isinstance(result.get("result"), dict) else result
+        body: dict[str, Any] = cast(dict[str, Any], result.get("result")) if isinstance(result.get("result"), dict) else result
         messages: list[dict[str, Any] | None] | None = body.get("messages")
         fresh: dict[str, Any] | None = messages[0] if isinstance(messages, list) and messages else None
         fresh_media_value = fresh.get("media") if isinstance(fresh, dict) else None
-        fresh_media: Dict[str, Any] | None = cast(Dict[str, Any], fresh_media_value) if isinstance(fresh_media_value, dict) else None
+        fresh_media: dict[str, Any] | None = cast(dict[str, Any], fresh_media_value) if isinstance(fresh_media_value, dict) else None
         fresh_doc_value = fresh_media.get("document") if isinstance(fresh_media, dict) else None
-        doc: Dict[str, Any] | None = cast(Dict[str, Any], fresh_doc_value) if isinstance(fresh_doc_value, dict) else None
+        doc: dict[str, Any] | None = cast(dict[str, Any], fresh_doc_value) if isinstance(fresh_doc_value, dict) else None
         if doc is not None and doc.get("id") == document.get("id") and isinstance(doc.get("file_reference"), (bytes, bytearray)):
             self._ingest_entities(body)
             updated = dict(location)
@@ -2093,7 +2091,7 @@ class MTNet:
                     reference_refresh_attempted = True
                     location = await self.refresh_file_reference(refresh_source, location)
                     continue
-                body: dict[str, Any] = cast(Dict[str, Any], response.get("result")) if isinstance(response.get("result"), dict) else response
+                body: dict[str, Any] = cast(dict[str, Any], response.get("result")) if isinstance(response.get("result"), dict) else response
                 payload = body.get("bytes")
                 if isinstance(payload, str):
                     try:
@@ -2108,7 +2106,7 @@ class MTNet:
                 handle.write(chunk)
                 total += len(chunk)
                 if progress is not None:
-                    if asyncio.iscoroutinefunction(progress):
+                    if inspect.iscoroutinefunction(progress):
                         await progress(total, 0)
                     else:
                         progress(total, 0)
@@ -2386,7 +2384,7 @@ class MTNet:
             if isinstance(cached, dict) and cached.get("key"):
                 return sender
             export = await self.call("auth.exportAuthorization", dc_id=int(dc_id), _on_dc=True)
-            body: dict[str, Any] = cast(Dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
+            body: dict[str, Any] = cast(dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
             export_id = body.get("id")
             export_bytes = body.get("bytes")
             if isinstance(export_bytes, str):

@@ -1,7 +1,7 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 
-from typing import Any, Dict, cast
+from typing import Any, cast
 
 
 class KbdBuilder:
@@ -109,7 +109,7 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
         if b.get("switch_inline_query_current_chat") is not None:
             return {"_": "inlineButtonTypeSwitchInline", "query": str(b["switch_inline_query_current_chat"]), "same_peer": True}
         if b.get("copy_text") is not None:
-            return {"_": "inlineButtonTypeCopy", "copy_text": str(cast(Dict[str, Any], b["copy_text"]).get("text", "") if isinstance(b["copy_text"], dict) else b["copy_text"])}
+            return {"_": "inlineButtonTypeCopy", "copy_text": str(cast(dict[str, Any], b["copy_text"]).get("text", "") if isinstance(b["copy_text"], dict) else b["copy_text"])}
         return {"_": "inlineButtonTypeCallback", "data": as_bytes(b.get("callback_data") or "noop")}
 
     def button_style(b: dict[str, Any]) -> dict[str, Any]:
@@ -128,7 +128,7 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
 
     def btn(b: object) -> dict[str, Any]:
         if isinstance(b, dict):
-            d = cast(Dict[str, Any], b)
+            d = cast(dict[str, Any], b)
             if d.get("_") == "keyboardInlineButton":
                 return d
         else:
@@ -152,7 +152,7 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
         kbd = kbd.build()
     if not isinstance(kbd, dict):
         return None
-    kbd = cast(Dict[str, Any], kbd)
+    kbd = cast(dict[str, Any], kbd)
     if kbd.get("_") in {"replyInlineMarkup", "replyKeyboardMarkup", "replyKeyboardHide", "replyKeyboardForceReply"}:
         return kbd
     if kbd.get("remove_keyboard"):
@@ -170,7 +170,7 @@ def kbd_to_tl(kbd: Any) -> dict[str, Any] | None:
                 {
                     "_": "keyboardButtonRow",
                     "buttons": [
-                        b if isinstance(b, dict) and cast(Dict[str, object], b).get("_") else reply_btn(dict(cast(Dict[str, Any], b)) if isinstance(b, dict) else {"text": str(b)})
+                        b if isinstance(b, dict) and cast(dict[str, object], b).get("_") else reply_btn(dict(cast(dict[str, Any], b)) if isinstance(b, dict) else {"text": str(b)})
                         for b in row
                     ],
                 }

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import secrets
-from typing import Any, List, cast
+from typing import Any, cast
 from goygram.api.types import dump
 from goygram.utils import utf16_slice
 
@@ -226,7 +226,7 @@ class Obj:
         if isinstance(a, str):
             return a.split() if a else []
         if isinstance(a, list):
-            return [str(x) for x in cast(List[object], a)]
+            return [str(x) for x in cast(list[object], a)]
         return []
 
     @property

@@ -1,7 +1,7 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 import struct
-from typing import Any, Type, cast
+from typing import Any, cast
 
 def pad4(n: int) -> int:
     return (4 - (n % 4)) % 4
@@ -53,7 +53,7 @@ def enc_val(tp: str, v: Any) -> bytes:
         return enc_vec(tp[7:-1], list(v))
     if tp.startswith("!") and isinstance(v, bytes):
         return v
-    cls = cast(Type[object], type(v))
+    cls = cast(type[object], type(v))
     fn = getattr(cls, "to_bytes", None)
     if fn is not None:
         return fn(v)

@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import os
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Sequence, Tuple, overload, cast, TYPE_CHECKING
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from typing import Any, TYPE_CHECKING, cast, overload
 
 from goygram.api.methods import BotAPI
 from goygram.api.types import dump, camel, mtname
@@ -67,7 +69,7 @@ def _guess_mime(source: Any, kind: str) -> str:
     if isinstance(source, (str, Path)):
         name = str(source)
     elif isinstance(source, dict):
-        name = str(cast(Dict[str, object], source).get("name", ""))
+        name = str(cast(dict[str, object], source).get("name", ""))
     elif hasattr(source, "name"):
         name = str(source.name)
     dot = name.rfind(".")
@@ -82,7 +84,7 @@ def _guess_mime(source: Any, kind: str) -> str:
 
 def _find_ctor(payload: Any, ctor: str) -> dict[str, Any] | None:
     if isinstance(payload, dict):
-        payload = cast(Dict[str, Any], payload)
+        payload = cast(dict[str, Any], payload)
         if payload.get("_") == ctor:
             return payload
         for v in payload.values():
@@ -99,7 +101,7 @@ def _find_ctor(payload: Any, ctor: str) -> dict[str, Any] | None:
 
 async def _call(fn: Callable[..., Any], *args: Any, **kw: Any) -> Any:
     out = fn(*args, **kw)
-    if asyncio.iscoroutinefunction(fn) or asyncio.iscoroutine(out):
+    if inspect.iscoroutinefunction(fn) or asyncio.iscoroutine(out):
         return await out
     return out
 
@@ -362,7 +364,7 @@ class _DialogIter:
                 if target is not None:
                     self._offset_peer = await app.mt.resolve_peer(target)
                 self._offset_id = int(last.get("top_message") or 0)
-                for message in cast(Sequence[Dict[str, Any]], res.get("messages") or []):
+                for message in cast(Sequence[dict[str, Any]], res.get("messages") or []):
                     if message.get("id") == self._offset_id and message.get("peer_id") == peer:
                         self._offset_date = int(message.get("date") or 0)
                         break
@@ -1016,7 +1018,7 @@ class AppCore:
     def _media_location(self, media: Any) -> dict[str, Any] | None:
         if not isinstance(media, dict):
             return None
-        media = cast(Dict[str, Any], media)
+        media = cast(dict[str, Any], media)
         doc: dict[str, Any] | None = media.get("document") if isinstance(media.get("document"), dict) else None
         photo: dict[str, Any] | None = media.get("photo") if isinstance(media.get("photo"), dict) else None
         if doc is None and media.get("_") == "document":
@@ -1045,11 +1047,11 @@ class AppCore:
         media: dict[str, Any] | None = None
         src_kind = None
         origin: dict[str, Any] | None = None
-        if isinstance(source, tuple) and len(cast(Tuple[object, ...], source)) == 2 and isinstance(source[0], (int, str)) and isinstance(source[1], int):
+        if isinstance(source, tuple) and len(cast(tuple[object, ...], source)) == 2 and isinstance(source[0], (int, str)) and isinstance(source[1], int):
             origin = {"peer": source[0], "msg_id": int(source[1])}
             source = await self.get_msg(source[0], source[1], via=via)
         if isinstance(source, dict):
-            source = cast(Dict[str, Any], source)
+            source = cast(dict[str, Any], source)
             src_kind = source.get("src")
             media = source.get("media") if isinstance(source.get("media"), dict) else source
             if origin is None and isinstance(source.get("msg_id"), int) and source.get("chat_id") is not None:
@@ -1080,7 +1082,7 @@ class AppCore:
                 size = int(doc.get("size") or 0)
             wrap_total = size
 
-            if asyncio.iscoroutinefunction(progress):
+            if inspect.iscoroutinefunction(progress):
                 async def async_progress_cb(done: int, _t: int) -> Any:
                     return await progress(done, wrap_total or done)
                 progress_cb = async_progress_cb
@@ -1249,7 +1251,7 @@ class AppCore:
                 media = {"_": "inputMediaUploadedDocument", "file": file_obj, "mime_type": _guess_mime(source, kind), "attributes": attrs}
             media_raw = media
         else:
-            media_raw = cast(Dict[str, Any], source)
+            media_raw = cast(dict[str, Any], source)
         data = dict(kw)
         if caption is not None:
             data["message"] = caption
@@ -1333,7 +1335,7 @@ class AppCore:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
         from goygram import ext
-        decoded = cast(Dict[str, Any], ext.deserialize_constructor(peer))
+        decoded = cast(dict[str, Any], ext.deserialize_constructor(peer))
         if decoded.get("_") == "inputPeerChannel":
             return await self.mt_req("channels.deleteMessages", channel=await self._typed_peer(peer, "channel"), id=ids)
         return await self.mt_req("messages.deleteMessages", id=ids, revoke=revoke)
@@ -1359,7 +1361,7 @@ class AppCore:
         if self.mt is None:
             raise RuntimeError("mt net is not configured")
         from goygram import ext
-        peer = cast(Dict[str, Any], ext.deserialize_constructor(await self.mt.resolve_peer(target)))
+        peer = cast(dict[str, Any], ext.deserialize_constructor(await self.mt.resolve_peer(target)))
         ctor = peer.get("_")
         if kind == "user" and ctor == "inputPeerSelf":
             return {"_": "inputUserSelf"}
@@ -1419,7 +1421,7 @@ class AppCore:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
         from goygram import ext
-        decoded = cast(Dict[str, Any], ext.deserialize_constructor(peer))
+        decoded = cast(dict[str, Any], ext.deserialize_constructor(peer))
         if decoded.get("_") == "inputPeerChannel":
             return await self.mt_req("channels.readHistory", channel=await self._typed_peer(peer, "channel"), max_id=int(max_id or 0))
         return await self.mt_req("messages.readHistory", peer=peer, max_id=int(max_id or 0))
@@ -1479,7 +1481,7 @@ class AppCore:
             raise RuntimeError("mt net is not configured")
         peer = await self.mt.resolve_peer(target)
         from goygram import ext
-        decoded = cast(Dict[str, Any], ext.deserialize_constructor(peer))
+        decoded = cast(dict[str, Any], ext.deserialize_constructor(peer))
         ids = [{"_": "inputMessageID", "id": int(msg_id)}]
         if decoded.get("_") == "inputPeerChannel":
             res = await self.mt_req("channels.getMessages", channel=await self._typed_peer(peer, "channel"), id=ids)
@@ -1487,7 +1489,7 @@ class AppCore:
             res = await self.mt_req("messages.getMessages", id=ids)
         msgs: list[object] = res.get("messages", [])
         if not msgs:
-            inner = cast(Dict[str, Any], res.get("result")) if isinstance(res.get("result"), dict) else {}
+            inner = cast(dict[str, Any], res.get("result")) if isinstance(res.get("result"), dict) else {}
             msgs = inner.get("messages", [])
         return msgs[0] if msgs else None
 
@@ -1498,10 +1500,10 @@ class AppCore:
             group: list[dict[str, object]] = []
             for m in media:
                 if isinstance(m, dict):
-                    group.append(dict(cast(Dict[str, Any], m)))
+                    group.append(dict(cast(dict[str, Any], m)))
                     continue
                 if isinstance(m, tuple):
-                    m = cast(Tuple[str, object, str], m)
+                    m = cast(tuple[str, object, str], m)
                     kind, src = m[0], m[1]
                     cap = m[2] if len(m) > 2 else None
                 else:
@@ -1521,7 +1523,7 @@ class AppCore:
         singles: list[dict[str, object]] = []
         for m in media:
             if isinstance(m, tuple):
-                m = cast(Tuple[str, object, str], m)
+                m = cast(tuple[str, object, str], m)
                 kind, src = m[0], m[1]
                 cap = m[2] if len(m) > 2 else None
             else:
@@ -2132,8 +2134,8 @@ class AppCore:
         return await self.mt_req("stories.getPeerStories", peer=peer)
 
     async def _story_media(self, source: Any) -> dict[str, Any]:
-        if isinstance(source, dict) and str(cast(Dict[str, Any], source).get("_", "")).startswith("inputMedia"):
-            return cast(Dict[str, Any], source)
+        if isinstance(source, dict) and str(cast(dict[str, Any], source).get("_", "")).startswith("inputMedia"):
+            return cast(dict[str, Any], source)
         upload = await self.upload_file(source)
         file = {"_": "inputFileBig" if upload.get("big") else "inputFile", "id": upload["id"], "parts": upload["parts"], "name": upload["name"], "md5_checksum": upload.get("md5", "")}
         mime = _guess_mime(source, "photo")

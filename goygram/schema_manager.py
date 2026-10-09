@@ -9,7 +9,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Mapping, Optional, Protocol
+from collections.abc import Callable, Mapping
+from typing import Protocol
 
 log = logging.getLogger("goygram.schema_manager")
 
@@ -144,8 +145,8 @@ def _load_schema(ext_module: SchemaExtension, api_text: str, mtproto_text: str |
 def init_schema(
     ext_module: SchemaExtension,
     bundled_api_tl_path: str | None = None,
-    on_layer: Optional[Callable[[int], None]] = None,
-    can_reload: Optional[Callable[[], bool]] = None,
+    on_layer: Callable[[int], None] | None = None,
+    can_reload: Callable[[], bool] | None = None,
 ) -> int:
     try:
         info = ext_module.schema_info()
@@ -169,8 +170,8 @@ def init_schema(
 
 def _background_update(
     ext_module: SchemaExtension,
-    on_layer: Optional[Callable[[int], None]] = None,
-    can_reload: Optional[Callable[[], bool]] = None,
+    on_layer: Callable[[int], None] | None = None,
+    can_reload: Callable[[], bool] | None = None,
 ) -> None:
     while True:
         time.sleep(REFRESH_INTERVAL)

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time as _time
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from goygram.logging import get_logger
 
@@ -81,7 +83,7 @@ class Disp:
             for fn in handlers:
                 try:
                     out = fn(evt, e)
-                    if asyncio.iscoroutine(out) or asyncio.iscoroutinefunction(fn):
+                    if asyncio.iscoroutine(out) or inspect.iscoroutinefunction(fn):
                         await out
                 except Exception as nested:
                     self.log.error("Error handler failure: %r", nested)

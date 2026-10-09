@@ -13,7 +13,8 @@ import sqlite3
 import tempfile
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Protocol, Sequence, TypeVar, cast
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Protocol, TypeVar, cast
 
 import hashlib
 import secrets as _secrets
@@ -381,7 +382,7 @@ def _extract_user(obj: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(obj, dict):
         return None
-    obj = cast(Dict[str, Any], obj)
+    obj = cast(dict[str, Any], obj)
     for key in ("result", "users"):
         nested = obj.get(key)
         if isinstance(nested, (dict, list, tuple)):

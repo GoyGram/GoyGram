@@ -1,7 +1,8 @@
 # CopyLeft 2026 github.com/sepiol026-wq | telegram:@samsepi0l_ovf. Licensed under AGPLv3.
 from __future__ import annotations
 from functools import lru_cache
-from typing import Any, Sequence, cast
+from collections.abc import Sequence
+from typing import Any, cast
 
 _ATOM = {type(None), bool, int, float, str, bytes, bytearray, memoryview}
 
