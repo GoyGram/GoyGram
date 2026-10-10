@@ -30,5 +30,3 @@ tests/
 live.vault*
 observatory/
 uv.lock
-goygram/telegram.py
-goygram/client.pyi
