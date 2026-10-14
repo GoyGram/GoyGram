@@ -373,6 +373,7 @@ class MTNet:
         self.transport=IntermediateTransport(); self.msg_ids=MsgIdGen(); self.wrote_tag=False
         self.auth_key:bytes|None=None; self.server_salt:bytes=b'\x00'*8; self.session_id=secrets.token_bytes(8)
         self._seen_server_msg_ids: set[int] = set()
+        self._pending_acks: set[int] = set()
         self.entities: dict[tuple[str, int], dict[str, Any]] = {}
         self.entity_usernames: dict[str, dict[str, Any]] = {}
         self.dc_auth_keys: dict[int, dict[str, bytes]] = {}
@@ -1366,17 +1367,19 @@ class MTNet:
         if sid != self.session_id:
             log.warning("MTProto packet rejected: session id mismatch")
             return
-        if msg_id in self._seen_server_msg_ids:
-            return
-        self._seen_server_msg_ids.add(msg_id)
-        if len(self._seen_server_msg_ids) > 4096:
-            self._seen_server_msg_ids = set(list(self._seen_server_msg_ids)[-2048:])
-
-        def _consume(inner: bytes) -> None:
+        def _consume(inner: bytes, inner_id: int | None = None, seq: int = 0) -> None:
             if len(inner) < 4:
                 return
             rm = Reader(inner)
             cid = rm.u32()
+            if inner_id is not None:
+                if seq & 1:
+                    self._pending_acks.add(inner_id)
+                if inner_id in self._seen_server_msg_ids and cid != 0x73f1f8dc:
+                    return
+                self._seen_server_msg_ids.add(inner_id)
+                if len(self._seen_server_msg_ids) > 4096:
+                    self._seen_server_msg_ids = set(list(self._seen_server_msg_ids)[-2048:])
             if b'\x91\xe6\x4f\x56' in inner:
                 self.qr_update_ev.set()
             if cid == 0xf35c6d01:
@@ -1436,7 +1439,7 @@ class MTNet:
                         chunk = rm.take(mlen)
                     except Exception:
                         return
-                    _consume(chunk)
+                    _consume(chunk, _m_id, _seqno)
                 return
             if cid in {0x313bc7f8, 0x4d6deea5, 0x9015e101}:
                 try:
@@ -1596,7 +1599,7 @@ class MTNet:
             log.debug("Unhandled update cid=0x%08x", cid)
             return
 
-        _consume(msg)
+        _consume(msg, msg_id, _seq)
 
     def _parse_auth_result(self, result:bytes)->dict[str,Any]|None:
         if len(result) < 8:
@@ -2249,12 +2252,16 @@ class MTNet:
         api_id = obj.get('api_id') or self.api_id
         if api_id is not None:
             self.api_id = int(api_id)
-        body = self._build_body(act, obj)
-        if not self._init_done and self.api_id:
+        is_ack = act == "msgs_ack"
+        body = bytes(_require_rx().serialize_constructor("msgs_ack", {"msg_ids": obj["msg_ids"]})) if is_ack else self._build_body(act, obj)
+        if not is_ack and not self._init_done and self.api_id:
             body = self._wrap_init_query(self.api_id, body)
             self._init_done = True
         msg_id=req_msg_id if req_msg_id is not None else self.msg_ids.next()
-        self.seq += 1; seq_no = self.seq * 2 - 1
+        seq_no = self.seq * 2
+        if not is_ack:
+            seq_no += 1
+            self.seq += 1
         auth_key = self.auth_key
         writer = self.wr
         if auth_key is None or writer is None:
@@ -2287,6 +2294,7 @@ class MTNet:
         writer = self.wr
         self.wr = None; self.rd = None
         self.buf.clear()
+        self._pending_acks.clear()
         self.auth_ready.clear()
         for entry in self.pending.values():
             if isinstance(entry, tuple):
@@ -2565,9 +2573,13 @@ class MTNet:
             try:
                 pkt = await self.read_packet()
                 self._handle_encrypted_packet(pkt)
+                while self._pending_acks:
+                    msg_ids = list(self._pending_acks)[:8192]
+                    await self.send({"act": "msgs_ack", "msg_ids": msg_ids})
+                    self._pending_acks.difference_update(msg_ids)
                 backoff = 1.0
-            except ConnectionError:
-                log.error("MTProto connection lost, reconnecting in %.1fs", backoff)
+            except ConnectionError as exc:
+                log.error("MTProto connection lost (%s, buffered=%d, pending=%d), reconnecting in %.1fs", type(exc).__name__, len(self.buf), len(self.pending), backoff)
                 for entry in self.pending.values():
                     if isinstance(entry, tuple):
                         fut = entry[0]
