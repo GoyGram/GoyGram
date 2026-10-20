@@ -22,10 +22,6 @@ MTPROTO_SCHEMA_URL = (
     "https://raw.githubusercontent.com/telegramdesktop/tdesktop/dev/"
     "Telegram/SourceFiles/mtproto/scheme/mtproto.tl"
 )
-TDLIB_VERSION_URL = (
-    "https://raw.githubusercontent.com/tdlib/td/master/"
-    "td/telegram/Version.h"
-)
 CURRENT_LAYER_FLOOR = 229
 REFRESH_INTERVAL = 6 * 3600
 
@@ -66,13 +62,10 @@ def _http_get(url: str, etag: str | None = None) -> tuple[str | None, str | None
 
 
 def _latest_layer() -> int:
-    body, _ = _http_get(TDLIB_VERSION_URL)
-    if body is None:
+    body, _ = _http_get(SCHEMA_URL)
+    layer = _schema_layer(body) if body is not None else None
+    if layer is None:
         return cached_schema_layer() or CURRENT_LAYER_FLOOR
-    match = re.search(r"MTPROTO_LAYER\s*=\s*(\d+)", body)
-    if match is None:
-        return cached_schema_layer() or CURRENT_LAYER_FLOOR
-    layer = int(match.group(1))
     return max(layer, CURRENT_LAYER_FLOOR)
 
 
@@ -154,11 +147,11 @@ def init_schema(
     except Exception:
         log.warning("No bootstrap schema available, schema_manager may fail")
 
+    latest_layer = _latest_layer()
     cached_layer = cached_schema_layer()
     api_text = CACHE_SCHEMA_PATH.read_text() if CACHE_SCHEMA_PATH.exists() else None
     mtproto_text = CACHE_MTPROTO_PATH.read_text() if CACHE_MTPROTO_PATH.exists() else None
-    if api_text is None or mtproto_text is None or cached_layer is None:
-        latest_layer = _latest_layer()
+    if api_text is None or mtproto_text is None or cached_layer is None or cached_layer < latest_layer:
         api_text, mtproto_text = _fetch_and_cache_schema(latest_layer)
         cached_layer = latest_layer
     if api_text is None or mtproto_text is None:

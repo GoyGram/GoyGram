@@ -5068,6 +5068,14 @@ class inputThemeSlug(TypedDict, total=False):
     slug: str
 
 
+class inputTonConnectOauthSession(TypedDict, total=False):
+    _: Literal["inputTonConnectOauthSession"]
+    session_id: int
+    challenge_answer: bytes | str
+    body: bytes | str
+    proof: Any
+
+
 class inputUser(TypedDict, total=False):
     _: Literal["inputUser"]
     user_id: int
@@ -12200,6 +12208,7 @@ class urlAuthResultRequest(TypedDict, total=False):
     request_phone_number: bool
     match_codes_first: bool
     is_app: bool
+    request_wallet: bool
     bot: Any
     domain: str
     browser: str
@@ -12209,6 +12218,8 @@ class urlAuthResultRequest(TypedDict, total=False):
     match_codes: list[str]
     user_id_hint: int
     verified_app_name: str
+    tc_session_id: int
+    tc_client_id: str
 
 
 class user(TypedDict, total=False):
@@ -16210,6 +16221,7 @@ class messages_acceptUrlAuth(TypedDict, total=False):
     button_id: int
     url: str
     match_code: str
+    tonconnect_session: Any
 
 
 messages_accept_url_auth = messages_acceptUrlAuth
