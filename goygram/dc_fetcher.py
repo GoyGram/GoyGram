@@ -29,7 +29,39 @@ def pick_dc_endpoint(dc_map: dict[int, list[DcEndpoint]], preferred_dc: int | No
         return dc_map[preferred_dc][0]
     if 0 in dc_map and dc_map[0]:
         return dc_map[0][0]
-    for dc_id in (2, 1, 4, 5, 3):
+    for dc_id in (4, 2, 1, 5, 3):
         if dc_id in dc_map and dc_map[dc_id]:
             return dc_map[dc_id][0]
     raise RuntimeError("No available endpoint in DC map")
+
+
+def probe_dc_endpoint(endpoint: DcEndpoint, timeout: float = 2.0) -> bool:
+    # ponytail: sync TCP probe; good enough for a one-shot login-time health check,
+    # upgrade to async if it ever runs in a hot path
+    import socket as _socket
+    s = _socket.socket()
+    s.settimeout(timeout)
+    try:
+        s.connect((endpoint.host, endpoint.port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def pick_reachable_dc(dc_map: dict[int, list[DcEndpoint]], preferred_dc: int | None = None) -> DcEndpoint:
+    # Some Telegram edge frontends answer SYN with a SYN-ACK whose echoed TCP timestamp
+    # is lower than the client's own TS; Linux PAWS then silently drops it and every
+    # connect times out. Probe a few endpoints and return the first that completes a
+    # TCP handshake instead of hard-failing on the preferred one.
+    order: list[int] = []
+    if preferred_dc is not None and preferred_dc in dc_map and dc_map[preferred_dc]:
+        order.append(preferred_dc)
+    order += [dc for dc in (4, 2, 1, 5, 3) if dc not in order]
+    for dc_id in order:
+        endpoints = dc_map.get(dc_id) or []
+        for ep in endpoints:
+            if probe_dc_endpoint(ep):
+                return ep
+    return dc_map[preferred_dc or 4][0] if (preferred_dc or 4) in dc_map else dc_map[4][0]

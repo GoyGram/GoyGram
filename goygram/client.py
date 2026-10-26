@@ -19,7 +19,7 @@ from goygram.core.fsm import FSMEngine
 from goygram.types.obj import Obj
 from goygram.logging import get_logger
 from goygram.security import bootstrap_session
-from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint, pick_reachable_dc
 from goygram.utils import print_methods
 
 if TYPE_CHECKING:
@@ -552,7 +552,7 @@ class AppCore:
     def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any, session: Any | None = None) -> None:
         from pathlib import Path
         from goygram.security import _read_vault, _extract_auth_blob
-        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint, pick_reachable_dc
         session_path = getattr(session, "path", None)
         vault = Path(session_path) if session_path is not None else Path(f"{session_name}.vault")
         if not vault.exists() or vault.stat().st_size == 0:
@@ -2363,12 +2363,12 @@ class GoyGram:
         if resolved_host is None and (bot is None or api_id is not None or api_hash is not None):
             try:
                 dc_map = get_dynamic_dc_config()
-                selected = pick_dc_endpoint(dc_map, preferred_dc=2)
+                selected = pick_reachable_dc(dc_map, preferred_dc=2)
                 resolved_host, resolved_port = selected.host, selected.port
                 log.info("Dynamic DC routing selected dc%s %s:%s", selected.dc_id, selected.host, selected.port)
             except Exception as e:
                 log.error("Dynamic DC routing failed: %r", e)
-                resolved_host, resolved_port = "149.154.167.50", 443
+                resolved_host, resolved_port = "149.154.167.91", 443
                 log.warning("Using fallback MT endpoint %s:%s", resolved_host, resolved_port)
 
         mt = MtCfg(host=resolved_host, port=resolved_port, key=mt_key, iv=mt_iv) if resolved_host is not None and resolved_port is not None else None
