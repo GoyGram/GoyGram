@@ -19,7 +19,7 @@ from goygram.core.fsm import FSMEngine
 from goygram.types.obj import Obj
 from goygram.logging import get_logger
 from goygram.security import bootstrap_session
-from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint, pick_reachable_dc
+from goygram.dc_fetcher import get_dynamic_dc_config, pick_reachable_dc
 from goygram.utils import print_methods
 
 if TYPE_CHECKING:
@@ -552,7 +552,7 @@ class AppCore:
     def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any, session: Any | None = None) -> None:
         from pathlib import Path
         from goygram.security import _read_vault, _extract_auth_blob
-        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint, pick_reachable_dc
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
         session_path = getattr(session, "path", None)
         vault = Path(session_path) if session_path is not None else Path(f"{session_name}.vault")
         if not vault.exists() or vault.stat().st_size == 0:
