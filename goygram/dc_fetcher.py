@@ -15,9 +15,9 @@ def get_dynamic_dc_config(timeout: int = 6) -> dict[int, list[DcEndpoint]]:
     _ = timeout
     by_dc: dict[int, list[DcEndpoint]] = {
         1: [DcEndpoint(dc_id=1, host="149.154.175.53", port=443)],
-        2: [DcEndpoint(dc_id=2, host="149.154.167.50", port=443)],
+        2: [DcEndpoint(dc_id=2, host="149.154.167.50", port=443), DcEndpoint(dc_id=2, host="149.154.167.51", port=443)],
         3: [DcEndpoint(dc_id=3, host="149.154.175.100", port=443)],
-        4: [DcEndpoint(dc_id=4, host="149.154.167.91", port=443)],
+        4: [DcEndpoint(dc_id=4, host="149.154.167.90", port=443), DcEndpoint(dc_id=4, host="149.154.167.91", port=443), DcEndpoint(dc_id=4, host="149.154.167.92", port=443)],
         5: [DcEndpoint(dc_id=5, host="91.108.56.130", port=443)],
     }
     by_dc[0] = by_dc[2]

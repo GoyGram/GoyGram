@@ -2422,9 +2422,9 @@ class MTNet:
         return sender
 
     async def call_dc(self, dc_id: int, act: str, **kw: Any) -> dict[str, Any]:
-        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_reachable_dc
         dc_id = int(dc_id)
-        endpoint = pick_dc_endpoint(get_dynamic_dc_config(), preferred_dc=dc_id)
+        endpoint = pick_reachable_dc(get_dynamic_dc_config(), preferred_dc=dc_id)
         if endpoint.host == self.host and endpoint.port == self.port:
             return await self.call(act, _on_dc=True, **kw)
         if not hasattr(self, "_dc_senders"):
@@ -2453,8 +2453,8 @@ class MTNet:
         return await sender.call(act, _on_dc=True, **kw)
 
     async def _switch_home_dc(self, dc_id: int) -> None:
-        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
-        endpoint = pick_dc_endpoint(get_dynamic_dc_config(), preferred_dc=int(dc_id))
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_reachable_dc
+        endpoint = pick_reachable_dc(get_dynamic_dc_config(), preferred_dc=int(dc_id))
         if endpoint.host == self.host and endpoint.port == self.port:
             return
         await self.close()
@@ -2540,11 +2540,11 @@ class MTNet:
                 return await self.call_dc(kind[1], act, **kw)
 
     async def _connect(self) -> None:
-        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_reachable_dc
         if self._preferred_dc is not None:
             try:
                 dc_map = get_dynamic_dc_config()
-                selected = pick_dc_endpoint(dc_map, preferred_dc=self._preferred_dc)
+                selected = pick_reachable_dc(dc_map, preferred_dc=self._preferred_dc)
                 self.host, self.port = selected.host, selected.port
             except Exception:
                 pass

@@ -19,7 +19,7 @@ from typing import Any, Protocol, TypeVar, cast
 import hashlib
 import secrets as _secrets
 
-from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint, pick_reachable_dc
 from goygram.errors import GoyGramError
 from goygram.logging import get_logger
 
@@ -472,7 +472,10 @@ async def _mt_req_with_migrate(app: Any, act: str, **kw: Any) -> dict[str, Any]:
             if dc_id is None:
                 return res
         dc_map = get_dynamic_dc_config()
-        endpoint = pick_dc_endpoint(dc_map, preferred_dc=dc_id)
+        try:
+            endpoint = pick_reachable_dc(dc_map, preferred_dc=dc_id)
+        except Exception:
+            endpoint = pick_dc_endpoint(dc_map, preferred_dc=dc_id)
         await app.mt.close()
         app.mt.stop_ev.clear()
         app.mt.host = endpoint.host
@@ -648,7 +651,7 @@ async def _mt_qr_auth_flow(app: Any, vault: Path, session_name: str, api_id: int
                     dc_id = poll_res["dc_id"]
                     token_m = poll_res["token"]
                     dc_map = get_dynamic_dc_config()
-                    endpoint = pick_dc_endpoint(dc_map, preferred_dc=dc_id)
+                    endpoint = pick_reachable_dc(dc_map, preferred_dc=dc_id)
                     await app.mt.close()
                     app.mt.stop_ev.clear()
                     app.mt.host = endpoint.host
@@ -1010,9 +1013,18 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                     app.mt.host = str(dc)
                 else:
                     dc_map = get_dynamic_dc_config()
-                    endpoint = pick_dc_endpoint(dc_map, preferred_dc=int(dc))
+                    preferred = int(dc)
+                    try:
+                        endpoint = pick_reachable_dc(dc_map, preferred_dc=preferred)
+                    except Exception:
+                        endpoint = pick_dc_endpoint(dc_map, preferred_dc=preferred)
+                    if app.mt.auth_key is not None and endpoint.dc_id != preferred and data.get("auth_key"):
+                        app.mt.auth_key = None
+                    app.mt._preferred_dc = endpoint.dc_id
                     app.mt.host = endpoint.host
                     app.mt.port = endpoint.port
+                    if endpoint.dc_id != preferred:
+                        log.info("DC %s unreachable, re-homing session to reachable dc%s %s:%s", preferred, endpoint.dc_id, endpoint.host, endpoint.port)
             await app.mt.ensure_auth_key()
             user_data: dict[str, int] | None = data.get("user")
             uid = user_data.get("id", 0) if isinstance(user_data, dict) else 0

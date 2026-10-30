@@ -552,7 +552,7 @@ class AppCore:
     def _load_vault_from_disk(self, session_name: str, api_id: Any, api_hash: Any, session: Any | None = None) -> None:
         from pathlib import Path
         from goygram.security import _read_vault, _extract_auth_blob
-        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint
+        from goygram.dc_fetcher import get_dynamic_dc_config, pick_dc_endpoint, pick_reachable_dc
         session_path = getattr(session, "path", None)
         vault = Path(session_path) if session_path is not None else Path(f"{session_name}.vault")
         if not vault.exists() or vault.stat().st_size == 0:
@@ -576,7 +576,14 @@ class AppCore:
             dc = data.get("dc")
             if dc is not None and self.mt is not None:
                 dc_map = get_dynamic_dc_config()
-                endpoint = pick_dc_endpoint(dc_map, preferred_dc=int(dc))
+                preferred = int(dc)
+                try:
+                    endpoint = pick_reachable_dc(dc_map, preferred_dc=preferred)
+                except Exception:
+                    endpoint = pick_dc_endpoint(dc_map, preferred_dc=preferred)
+                if self.mt.auth_key is not None and endpoint.dc_id != preferred and auth_key:
+                    self.mt.auth_key = None
+                self.mt._preferred_dc = endpoint.dc_id
                 self.mt.host = endpoint.host
                 self.mt.port = endpoint.port
             user_data: dict[str, int] | None = data.get("user", {})
