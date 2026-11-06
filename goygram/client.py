@@ -583,7 +583,7 @@ class AppCore:
                     endpoint = pick_dc_endpoint(dc_map, preferred_dc=preferred)
                 if self.mt.auth_key is not None and endpoint.dc_id != preferred and auth_key:
                     self.mt.auth_key = None
-                self.mt._preferred_dc = endpoint.dc_id
+                setattr(self.mt, "_preferred_dc", endpoint.dc_id)
                 self.mt.host = endpoint.host
                 self.mt.port = endpoint.port
             user_data: dict[str, int] | None = data.get("user", {})

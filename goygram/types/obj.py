@@ -207,7 +207,33 @@ class Obj:
 
     @property
     def is_reply(self) -> bool:
-        return bool(self._value("reply_to_message"))
+        return bool(self._value("reply_to_message") or self.reply_to_msg_id)
+
+    @property
+    def reply_to_msg_id(self) -> int | None:
+        r_val = self._value("reply_to_message")
+        if isinstance(r_val, dict):
+            r = cast(dict[str, Any], r_val)
+            mid = r.get("message_id") or r.get("id")
+            if isinstance(mid, int):
+                return mid
+        header_val = self._value("reply_to")
+        if isinstance(header_val, dict):
+            header = cast(dict[str, Any], header_val)
+            val = header.get("reply_to_msg_id") or header.get("reply_to_id")
+            if isinstance(val, int):
+                return val
+        return None
+
+    async def get_reply(self) -> "Obj | None":
+        if self.reply_msg is not None:
+            return self.reply_msg
+        mid = self.reply_to_msg_id
+        if mid is not None and self.chat_id is not None and self.app is not None and hasattr(self.app, "get_msg"):
+            raw = await self.app.get_msg(self.chat_id, mid)
+            if isinstance(raw, dict):
+                return Obj(self.src, cast(dict[str, Any], raw), self.app)
+        return None
 
     @property
     def reply_msg(self) -> "Obj | None":
@@ -376,6 +402,10 @@ class Obj:
             return await self.app.bot_req("answerInlineQuery", **data)
         if self.id is None:
             return None
+        if text is not None:
+            import re
+            import html
+            text = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", str(text))))
         if self.src == "mt" or self.app.bot is None:
             if self.app.mt is None:
                 raise RuntimeError("mt net is not configured")
