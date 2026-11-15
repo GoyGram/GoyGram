@@ -2395,10 +2395,14 @@ class MTNet:
             lang_pack=self.lang_pack,
             lang_code=self.lang_code,
         )
-        sender.api_id = self.api_id
-        sender.api_hash = getattr(self, "api_hash", None)
-        sender.bot_token = getattr(self, "bot_token", None)
-        sender.session = getattr(self, "session", None)
+        session = getattr(self, "session", None)
+        session_data = getattr(session, "data", {}) if isinstance(getattr(session, "data", None), dict) else {}
+        api_id = getattr(self, "api_id", None) or session_data.get("api_id")
+        if api_id is not None:
+            sender.api_id = int(api_id)
+        sender.api_hash = getattr(self, "api_hash", None) or session_data.get("api_hash")
+        sender.bot_token = getattr(self, "bot_token", None) or session_data.get("bot_token")
+        sender.session = session
         sender.layer = self.layer
         if isinstance(cached, dict) and cached.get("key"):
             sender.auth_key = cached["key"]
@@ -2408,38 +2412,18 @@ class MTNet:
             await sender.ensure_reader()
             if isinstance(cached, dict) and cached.get("key"):
                 return sender
-            session = getattr(self, "session", None)
-            session_data = getattr(session, "data", {}) if isinstance(getattr(session, "data", None), dict) else {}
-            if self._check_is_bot():
-                api_id = getattr(self, "api_id", None) or session_data.get("api_id")
-                api_hash = getattr(self, "api_hash", None) or session_data.get("api_hash")
-                bot_token = getattr(self, "bot_token", None) or session_data.get("bot_token")
-                if not api_id or not api_hash or not bot_token:
-                    raise RuntimeError("bot authorization requires api_id, api_hash, and bot_token")
-                sender.api_id = int(api_id)
-                sender.api_hash = str(api_hash)
-                sender.bot_token = str(bot_token)
-                await sender.call(
-                    "auth.importBotAuthorization",
-                    flags=0,
-                    api_id=int(api_id),
-                    api_hash=str(api_hash),
-                    bot_auth_token=str(bot_token),
-                    _on_dc=True,
-                )
-            else:
-                export = await self.call("auth.exportAuthorization", dc_id=int(dc_id), _on_dc=True)
-                body: dict[str, Any] = cast(dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
-                export_id = body.get("id")
-                export_bytes = body.get("bytes")
-                if isinstance(export_bytes, str):
-                    try:
-                        export_bytes = bytes.fromhex(export_bytes)
-                    except ValueError:
-                        export_bytes = None
-                if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
-                    raise RuntimeError("auth.exportAuthorization returned no usable payload")
-                await sender.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes), _on_dc=True)
+            export = await self.call("auth.exportAuthorization", dc_id=int(dc_id), _on_dc=True)
+            body: dict[str, Any] = cast(dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
+            export_id = body.get("id")
+            export_bytes = body.get("bytes")
+            if isinstance(export_bytes, str):
+                try:
+                    export_bytes = bytes.fromhex(export_bytes)
+                except ValueError:
+                    export_bytes = None
+            if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
+                raise RuntimeError("auth.exportAuthorization returned no usable payload")
+            await sender.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes), _on_dc=True)
             if not getattr(self, "dc_auth_keys", None):
                 self.dc_auth_keys = {}
             auth_key = sender.auth_key
@@ -2497,7 +2481,7 @@ class MTNet:
                         await self._switch_home_dc(kind[1])
                         return await self.call(act, _on_dc=True, **kw)
                     return await self.call_dc(kind[1], act, **kw)
-                if not isinstance(exc, RPCError) or exc.code != 401 or exc.message not in ("SESSION_REVOKED", "AUTH_KEY_UNREGISTERED", "USER_DEACTIVATED") or attempt >= 1:
+                if not isinstance(exc, RPCError) or exc.code != 401 or attempt >= 1:
                     raise
             async with lock:
                 if self._dc_senders.get(dc_id) is sender:
@@ -2563,7 +2547,7 @@ class MTNet:
         on_dc = bool(kw.pop("_on_dc", False))
         target_dc = kw.pop("_dc", None)
         if not on_dc:
-            if target_dc is None and not self._check_is_bot():
+            if target_dc is None:
                 target_dc = _inline_dc(kw)
             if target_dc is not None:
                 return await self.call_dc(int(target_dc), act, **kw)
