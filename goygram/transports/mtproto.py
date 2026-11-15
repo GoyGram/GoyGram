@@ -2368,6 +2368,17 @@ class MTNet:
         srp = u32(0xd27ff082) + i64(srp_id) + tl_bytes(a_pub) + tl_bytes(m1)
         return await self._rpc_call('auth.checkPassword', password=srp)
 
+    def _check_is_bot(self) -> bool:
+        session = getattr(self, "session", None)
+        session_data = getattr(session, "data", {}) if isinstance(getattr(session, "data", None), dict) else {}
+        if session is not None and getattr(session, "is_bot", False):
+            return True
+        if getattr(self, "is_bot", False):
+            return True
+        if bool(session_data.get("is_bot")) or bool(session_data.get("bot_token")) or bool(getattr(self, "bot_token", None)):
+            return True
+        return False
+
     async def _open_dc(self, dc_id: int, endpoint: Any) -> "MTNet":
         cached = (self.dc_auth_keys or {}).get(int(dc_id))
         sender = _AuxSender(
@@ -2399,14 +2410,7 @@ class MTNet:
                 return sender
             session = getattr(self, "session", None)
             session_data = getattr(session, "data", {}) if isinstance(getattr(session, "data", None), dict) else {}
-            is_bot = False
-            if session is not None and getattr(session, "is_bot", False):
-                is_bot = True
-            elif getattr(self, "is_bot", False):
-                is_bot = True
-            elif bool(session_data.get("is_bot")) or bool(session_data.get("bot_token")):
-                is_bot = True
-            if is_bot:
+            if self._check_is_bot():
                 api_id = getattr(self, "api_id", None) or session_data.get("api_id")
                 api_hash = getattr(self, "api_hash", None) or session_data.get("api_hash")
                 bot_token = getattr(self, "bot_token", None) or session_data.get("bot_token")
@@ -2465,33 +2469,49 @@ class MTNet:
             self._dc_senders: dict[int, MTNet] = {}
             self._dc_locks: dict[int, asyncio.Lock] = {}
         lock = self._dc_locks.setdefault(dc_id, asyncio.Lock())
-        async with lock:
-            sender = self._dc_senders.get(dc_id)
-            if sender is None or getattr(sender, "wr", None) is None:
-                sender = await self._open_dc(dc_id, endpoint)
-                self._dc_senders[dc_id] = sender
-        try:
-            return await sender.call(act, _on_dc=True, **kw)
-        except RPCError as exc:
-            if exc.code != 401 or exc.message not in ("SESSION_REVOKED", "AUTH_KEY_UNREGISTERED", "USER_DEACTIVATED"):
-                raise
-        async with lock:
-            if self._dc_senders.get(dc_id) is sender:
-                self._dc_senders.pop(dc_id, None)
-                self.dc_auth_keys.pop(dc_id, None)
-                self.entity_cache_dirty = True
-                hook = getattr(self, "entity_flush_hook", None)
-                if callable(hook):
+        for attempt in range(2):
+            async with lock:
+                sender = self._dc_senders.get(dc_id)
+                if sender is None or getattr(sender, "wr", None) is None:
                     try:
-                        hook()
-                    except Exception:
-                        pass
-                await sender.close()
-            sender = self._dc_senders.get(dc_id)
-            if sender is None or getattr(sender, "wr", None) is None:
-                sender = await self._open_dc(dc_id, endpoint)
-                self._dc_senders[dc_id] = sender
-        return await sender.call(act, _on_dc=True, **kw)
+                        sender = await self._open_dc(dc_id, endpoint)
+                        self._dc_senders[dc_id] = sender
+                    except GoyGramError as exc:
+                        kind = _parse_migrate(exc)
+                        if kind is not None:
+                            if kind[0] == "home" and (kind[1] == self._preferred_dc or (endpoint.host == self.host and endpoint.port == self.port)):
+                                return await self.call(act, _on_dc=True, **kw)
+                            if kind[0] == "home" and self._check_is_bot():
+                                await self._switch_home_dc(kind[1])
+                                return await self.call(act, _on_dc=True, **kw)
+                            return await self.call_dc(kind[1], act, **kw)
+                        raise
+            try:
+                return await sender.call(act, _on_dc=True, **kw)
+            except GoyGramError as exc:
+                kind = _parse_migrate(exc)
+                if kind is not None:
+                    if kind[0] == "home" and (kind[1] == self._preferred_dc or (endpoint.host == self.host and endpoint.port == self.port)):
+                        return await self.call(act, _on_dc=True, **kw)
+                    if kind[0] == "home" and self._check_is_bot():
+                        await self._switch_home_dc(kind[1])
+                        return await self.call(act, _on_dc=True, **kw)
+                    return await self.call_dc(kind[1], act, **kw)
+                if not isinstance(exc, RPCError) or exc.code != 401 or exc.message not in ("SESSION_REVOKED", "AUTH_KEY_UNREGISTERED", "USER_DEACTIVATED") or attempt >= 1:
+                    raise
+            async with lock:
+                if self._dc_senders.get(dc_id) is sender:
+                    self._dc_senders.pop(dc_id, None)
+                    self.dc_auth_keys.pop(dc_id, None)
+                    self.entity_cache_dirty = True
+                    hook = getattr(self, "entity_flush_hook", None)
+                    if callable(hook):
+                        try:
+                            hook()
+                        except Exception:
+                            pass
+                    await sender.close()
+        raise RuntimeError("call_dc failed after retries")
 
     async def _switch_home_dc(self, dc_id: int) -> None:
         from goygram.dc_fetcher import get_dynamic_dc_config, pick_reachable_dc
@@ -2509,13 +2529,41 @@ class MTNet:
         await self.boot()
         await self.ensure_auth_key()
         await self.ensure_reader()
+        if self._check_is_bot():
+            session = getattr(self, "session", None)
+            session_data = getattr(session, "data", {}) if isinstance(getattr(session, "data", None), dict) else {}
+            api_id = getattr(self, "api_id", None) or session_data.get("api_id")
+            api_hash = getattr(self, "api_hash", None) or session_data.get("api_hash")
+            bot_token = getattr(self, "bot_token", None) or session_data.get("bot_token")
+            if api_id and api_hash and bot_token:
+                await self.call(
+                    "auth.importBotAuthorization",
+                    flags=0,
+                    api_id=int(api_id),
+                    api_hash=str(api_hash),
+                    bot_auth_token=str(bot_token),
+                    _on_dc=True,
+                )
+        session = getattr(self, "session", None)
+        if session is not None and isinstance(getattr(session, "data", None), dict):
+            session.data["dc"] = int(dc_id)
+            if self.auth_key:
+                session.data["auth_key"] = self.auth_key.hex() if isinstance(self.auth_key, (bytes, bytearray)) else self.auth_key
+            if self.server_salt:
+                session.data["server_salt"] = self.server_salt.hex() if isinstance(self.server_salt, (bytes, bytearray)) else self.server_salt
+        hook = getattr(self, "entity_flush_hook", None)
+        if callable(hook):
+            try:
+                hook()
+            except Exception:
+                pass
 
     async def call(self, act:str, **kw:Any)->dict[str,Any]:
         normalized = self._norm_act(act)
         on_dc = bool(kw.pop("_on_dc", False))
         target_dc = kw.pop("_dc", None)
         if not on_dc:
-            if target_dc is None:
+            if target_dc is None and not self._check_is_bot():
                 target_dc = _inline_dc(kw)
             if target_dc is not None:
                 return await self.call_dc(int(target_dc), act, **kw)
