@@ -475,31 +475,6 @@ class AppCore:
                 offset_path=cfg.bot.offset_path,
             )
             self.api = BotAPI(self.bot)
-        if cfg.mt:
-            from goygram.transports.mtproto import MTNet
-
-            self.mt = MTNet(
-                cfg.mt.host,
-                cfg.mt.port,
-                self.bus,
-                cfg.mt.key,
-                cfg.mt.iv,
-                proxy=proxy,
-                app_name=app_name,
-                app_version=app_version,
-                device_model=device_model,
-                system_version=system_version,
-                system_lang_code=system_lang_code,
-                lang_pack=lang_pack,
-                lang_code=lang_code,
-                cursor_path=Path.home() / ".goygram" / "cursors" / f"{hashlib.sha256(session_name.encode()).hexdigest()[:24]}.json",
-            )
-            self._mt_rpc = self.mt.call
-            if api_id is not None:
-                self.mt.api_id = int(api_id)
-            self._init_tl_schema()
-            self._load_vault_from_disk(session_name, api_id, api_hash, session)
-            self.mt.entity_flush_hook = self._entity_cache_schedule
         self.fsm = FSMEngine(backend=fsm_backend, on_change=fsm_on_change)
         self.disp = Disp(self, self.bus)
         self._conv: dict[tuple[int | str, int | str | None], tuple[asyncio.Future[Obj], Filter | None]] = {}
@@ -532,6 +507,36 @@ class AppCore:
             else:
                 self.session = Session(name=name)
         self.intake = str(intake)
+        if cfg.mt:
+            from goygram.transports.mtproto import MTNet
+
+            self.mt = MTNet(
+                cfg.mt.host,
+                cfg.mt.port,
+                self.bus,
+                cfg.mt.key,
+                cfg.mt.iv,
+                proxy=proxy,
+                app_name=app_name,
+                app_version=app_version,
+                device_model=device_model,
+                system_version=system_version,
+                system_lang_code=system_lang_code,
+                lang_pack=lang_pack,
+                lang_code=lang_code,
+                cursor_path=Path.home() / ".goygram" / "cursors" / f"{hashlib.sha256(session_name.encode()).hexdigest()[:24]}.json",
+            )
+            self.mt.session = self.session
+            if api_id is not None:
+                self.mt.api_id = int(api_id)
+            if api_hash is not None:
+                self.mt.api_hash = str(api_hash)
+            if self.bot_token is not None:
+                self.mt.bot_token = str(self.bot_token)
+            self._mt_rpc = self.mt.call
+            self._init_tl_schema()
+            self._load_vault_from_disk(session_name, api_id, api_hash, self.session)
+            self.mt.entity_flush_hook = self._entity_cache_schedule
 
     def _init_tl_schema(self) -> None:
         from goygram.schema_manager import init_schema, CURRENT_LAYER_FLOOR
@@ -592,6 +597,12 @@ class AppCore:
                 self.self_id = uid
                 setattr(self.mt, "self_id", uid)
             if self.mt is not None:
+                if getattr(self.mt, "api_id", None) is None and data.get("api_id"):
+                    self.mt.api_id = int(data["api_id"])
+                if getattr(self.mt, "api_hash", None) is None and data.get("api_hash"):
+                    self.mt.api_hash = str(data["api_hash"])
+                if getattr(self.mt, "bot_token", None) is None and data.get("bot_token"):
+                    self.mt.bot_token = str(data["bot_token"])
                 self.mt.restore_entity_cache(data.get("entities") or {})
                 dc_keys: dict[str, dict[str, str] | None] | None = data.get("dc_auth_keys")
                 if isinstance(dc_keys, dict):

@@ -975,6 +975,12 @@ async def _mt_bot_auth_flow(app: Any, vault: Path, session_name: str, api_id: in
     target_session = getattr(app, "session", None)
     if target_session is not None:
         target_session.data = payload
+    if getattr(app, "mt", None) is not None:
+        if target_session is not None:
+            app.mt.session = target_session
+        app.mt.api_id = api_id
+        app.mt.api_hash = api_hash
+        app.mt.bot_token = bot_token
     if uid and uid != 0:
         app.self_id = uid
         app.mt.self_id = uid
@@ -1095,6 +1101,14 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
                 })
                 _write_vault(vault, data, name)
             session.data = data
+            if getattr(app, "mt", None) is not None:
+                app.mt.session = session
+                if not getattr(app.mt, "api_id", None) and data.get("api_id"):
+                    app.mt.api_id = int(data["api_id"])
+                if not getattr(app.mt, "api_hash", None) and data.get("api_hash"):
+                    app.mt.api_hash = str(data["api_hash"])
+                if not getattr(app.mt, "bot_token", None) and data.get("bot_token"):
+                    app.mt.bot_token = str(data["bot_token"])
             log.info("Vault %s detected. Session restored from vault into MT runtime.", vault.name)
             return {"source": "vault"}
         except Exception as e:
@@ -1133,4 +1147,18 @@ async def bootstrap_session(app: Any | None = None, api_id: int | str | None = N
             session.data = _read_vault(vault, Path(name).name) or session.data
         except Exception:
             pass
+    if getattr(app, "mt", None) is not None:
+        app.mt.session = session
+        if api_id is not None:
+            app.mt.api_id = int(str(api_id).strip())
+        elif isinstance(session.data, dict) and session.data.get("api_id"):
+            app.mt.api_id = int(str(session.data["api_id"]).strip())
+        if api_hash is not None:
+            app.mt.api_hash = str(api_hash).strip()
+        elif isinstance(session.data, dict) and session.data.get("api_hash"):
+            app.mt.api_hash = str(session.data["api_hash"]).strip()
+        if bot_token is not None:
+            app.mt.bot_token = str(bot_token).strip()
+        elif isinstance(session.data, dict) and session.data.get("bot_token"):
+            app.mt.bot_token = str(session.data["bot_token"]).strip()
     return result

@@ -135,22 +135,41 @@ async def _file_dc_senders(mtnet: MTNet, count: int, dc_id: int) -> list[Charged
             auth_key = cached["key"]
             salt = cached.get("salt") or b"\x00" * 8
         else:
-            export = await mtnet.call("auth.exportAuthorization", dc_id=int(dc_id))
-            body = cast(dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
-            export_id = body.get("id")
-            export_bytes = body.get("bytes")
-            if isinstance(export_bytes, str):
-                export_bytes = bytes.fromhex(export_bytes)
-            if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
-                raise RuntimeError("auth.exportAuthorization returned no usable payload")
+            session = getattr(mtnet, "session", None)
+            session_data = getattr(session, "data", {}) if isinstance(getattr(session, "data", None), dict) else {}
+            is_bot = False
+            if session is not None and getattr(session, "is_bot", False):
+                is_bot = True
+            elif getattr(mtnet, "is_bot", False):
+                is_bot = True
+            elif bool(session_data.get("is_bot")) or bool(session_data.get("bot_token")):
+                is_bot = True
             first = await _spawn_sender(mtnet, endpoint.host, endpoint.port, None, b"\x00" * 8)
             senders.append(first)
-            await first.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes))
+            if is_bot:
+                api_id = getattr(mtnet, "api_id", None) or session_data.get("api_id")
+                api_hash = getattr(mtnet, "api_hash", None) or session_data.get("api_hash")
+                bot_token = getattr(mtnet, "bot_token", None) or session_data.get("bot_token")
+                if not api_id or not api_hash or not bot_token:
+                    raise RuntimeError("bot authorization requires api_id, api_hash, and bot_token")
+                first.api_id = int(api_id)
+                await first.call("auth.importBotAuthorization", flags=0, api_id=int(api_id), api_hash=str(api_hash), bot_auth_token=str(bot_token))
+            else:
+                export = await mtnet.call("auth.exportAuthorization", dc_id=int(dc_id))
+                body = cast(dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
+                export_id = body.get("id")
+                export_bytes = body.get("bytes")
+                if isinstance(export_bytes, str):
+                    export_bytes = bytes.fromhex(export_bytes)
+                if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
+                    raise RuntimeError("auth.exportAuthorization returned no usable payload")
+                await first.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes))
             auth_key = first.auth_key
             if auth_key is None:
                 raise RuntimeError("file DC authorization produced no auth key")
             salt = first.server_salt
             mtnet.dc_auth_keys[int(dc_id)] = {"key": auth_key, "salt": salt}
+            mtnet.entity_cache_dirty = True
             hook = getattr(mtnet, "entity_flush_hook", None)
             if callable(hook):
                 try:

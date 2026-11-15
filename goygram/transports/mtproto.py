@@ -401,6 +401,9 @@ class MTNet:
         self.qr_update_ev=asyncio.Event()
         self._init_done=False
         self.api_id:int|None=None
+        self.api_hash:str|None=None
+        self.bot_token:str|None=None
+        self.session:Any|None=None
         try:
             from goygram.schema_manager import cached_schema_layer, CURRENT_LAYER_FLOOR
             self.layer = cached_schema_layer() or CURRENT_LAYER_FLOOR
@@ -2382,6 +2385,9 @@ class MTNet:
             lang_code=self.lang_code,
         )
         sender.api_id = self.api_id
+        sender.api_hash = getattr(self, "api_hash", None)
+        sender.bot_token = getattr(self, "bot_token", None)
+        sender.session = getattr(self, "session", None)
         sender.layer = self.layer
         if isinstance(cached, dict) and cached.get("key"):
             sender.auth_key = cached["key"]
@@ -2391,24 +2397,52 @@ class MTNet:
             await sender.ensure_reader()
             if isinstance(cached, dict) and cached.get("key"):
                 return sender
-            export = await self.call("auth.exportAuthorization", dc_id=int(dc_id), _on_dc=True)
-            body: dict[str, Any] = cast(dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
-            export_id = body.get("id")
-            export_bytes = body.get("bytes")
-            if isinstance(export_bytes, str):
-                try:
-                    export_bytes = bytes.fromhex(export_bytes)
-                except ValueError:
-                    export_bytes = None
-            if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
-                raise RuntimeError("auth.exportAuthorization returned no usable payload")
-            await sender.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes), _on_dc=True)
+            session = getattr(self, "session", None)
+            session_data = getattr(session, "data", {}) if isinstance(getattr(session, "data", None), dict) else {}
+            is_bot = False
+            if session is not None and getattr(session, "is_bot", False):
+                is_bot = True
+            elif getattr(self, "is_bot", False):
+                is_bot = True
+            elif bool(session_data.get("is_bot")) or bool(session_data.get("bot_token")):
+                is_bot = True
+            if is_bot:
+                api_id = getattr(self, "api_id", None) or session_data.get("api_id")
+                api_hash = getattr(self, "api_hash", None) or session_data.get("api_hash")
+                bot_token = getattr(self, "bot_token", None) or session_data.get("bot_token")
+                if not api_id or not api_hash or not bot_token:
+                    raise RuntimeError("bot authorization requires api_id, api_hash, and bot_token")
+                sender.api_id = int(api_id)
+                sender.api_hash = str(api_hash)
+                sender.bot_token = str(bot_token)
+                await sender.call(
+                    "auth.importBotAuthorization",
+                    flags=0,
+                    api_id=int(api_id),
+                    api_hash=str(api_hash),
+                    bot_auth_token=str(bot_token),
+                    _on_dc=True,
+                )
+            else:
+                export = await self.call("auth.exportAuthorization", dc_id=int(dc_id), _on_dc=True)
+                body: dict[str, Any] = cast(dict[str, Any], export.get("result")) if isinstance(export.get("result"), dict) else export
+                export_id = body.get("id")
+                export_bytes = body.get("bytes")
+                if isinstance(export_bytes, str):
+                    try:
+                        export_bytes = bytes.fromhex(export_bytes)
+                    except ValueError:
+                        export_bytes = None
+                if not isinstance(export_id, int) or not isinstance(export_bytes, (bytes, bytearray)):
+                    raise RuntimeError("auth.exportAuthorization returned no usable payload")
+                await sender.call("auth.importAuthorization", id=int(export_id), bytes=bytes(export_bytes), _on_dc=True)
             if not getattr(self, "dc_auth_keys", None):
                 self.dc_auth_keys = {}
             auth_key = sender.auth_key
             if auth_key is None:
-                raise RuntimeError("exported DC authorization produced no auth key")
+                raise RuntimeError("DC authorization produced no auth key")
             self.dc_auth_keys[int(dc_id)] = {"key": auth_key, "salt": sender.server_salt}
+            self.entity_cache_dirty = True
         except BaseException:
             with suppress(Exception):
                 await sender.close()
@@ -2439,12 +2473,19 @@ class MTNet:
         try:
             return await sender.call(act, _on_dc=True, **kw)
         except RPCError as exc:
-            if exc.code != 401 or exc.message not in ("SESSION_REVOKED", "AUTH_KEY_UNREGISTERED"):
+            if exc.code != 401 or exc.message not in ("SESSION_REVOKED", "AUTH_KEY_UNREGISTERED", "USER_DEACTIVATED"):
                 raise
         async with lock:
             if self._dc_senders.get(dc_id) is sender:
-                self._dc_senders.pop(dc_id)
+                self._dc_senders.pop(dc_id, None)
                 self.dc_auth_keys.pop(dc_id, None)
+                self.entity_cache_dirty = True
+                hook = getattr(self, "entity_flush_hook", None)
+                if callable(hook):
+                    try:
+                        hook()
+                    except Exception:
+                        pass
                 await sender.close()
             sender = self._dc_senders.get(dc_id)
             if sender is None or getattr(sender, "wr", None) is None:
